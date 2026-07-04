@@ -119,13 +119,16 @@
 
 | 组件 | 当前选型 | Plan B | 切换触发条件 |
 |------|----------|--------|--------------|
-| 国内发布 | 自写 Playwright adapter（参考 social-auto-upload 源码） | AiToEarn 自部署（Docker，有 API/MCP，支持 13 平台） | 自维护选择器成本 > 每周 2h 时 |
+| 国内发布 | M0-0 评估决定（候选：AiToEarn API / xhs-toolkit MCP / 自写 Playwright 参考 social-auto-upload） | 候选间互为备选 | 主选方案连续 1 周失败率 > 30% |
+| 公众号图文 | M0-0 评估 TrendPublish（3k⭐，同构流水线，含质量审稿+矩阵） | 自研 lane + 公众号官方 API 草稿箱 | TrendPublish 质量审稿不达标 |
 | 海外发布 | X 官方 API | Postiz 自托管（一次接入 YouTube/TikTok/IG 等） | 扩到 ≥ 3 个海外平台时直接上 Postiz |
-| 视频生成 | MoneyPrinterTurbo | NarratoAI（解说类）/ 直接 ffmpeg + edge-tts 自拼 | MPT 停更或质量不满意 |
+| 视频生成（量产） | MoneyPrinterTurbo | NarratoAI（解说类）/ 直接 ffmpeg + edge-tts 自拼 | MPT 停更或质量不满意 |
+| 视频生成（精品） | OpenMontage（M5-3 评估，headless agent 驱动） | 人工 + Remotion | 无人值守驱动不可行 |
+| 数字人 | AIGCPanel（M5-3 评估） | HeyGen 等商业 API | 本地部署质量/性能不达标 |
 | 热点源 | RSS + DailyHotApi 自部署 | newsnow 自部署 | DailyHotApi 接口挂 |
 | 图像生成 | 不用（模板渲染兜底） | Gemini/OpenAI 图像 API | 模板卡片视觉疲劳、数据表明配图影响点击 |
 
-> AiToEarn（`aitoearn-exploration/AiToEarn`，本地已下载）值得在 M4 前花 2 小时评估：如果其自部署版发布 API 稳定，可以省掉整个 §2 的苦活。评估任务已列入 TASKS.md M4-0。
+> 巨人肩膀原则：每个垂直环节动工前先查本表和 opensource-survey.md——**默认假设已有人造过这个轮子**。发现新的成熟项目 → 更新调研文档并在对应任务下记录，宁可多花 2 小时评估也不自写 2 周。
 
 ---
 

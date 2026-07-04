@@ -179,11 +179,11 @@
 
 ## M4 — 发布通道（预计 4-6 天，最脆弱部分）
 
-### M4-0 AiToEarn 评估（2 小时时间盒，可能省掉一半 M4 工作）
-- [ ] **目标**：决定国内发布走自写 Playwright 还是 AiToEarn 自部署
-- **步骤**：本地 `aitoearn-exploration/AiToEarn` Docker 起自部署版，测试其 API/MCP 发布头条+小红书是否稳定；评估其登录态管理
-- **验收**：在本任务下写结论：`DECISION: <选择> 因为 <理由>`；若选 AiToEarn，M4-2/M4-3 改为写 AiToEarn API 客户端（接口契约 PublisherAdapter 不变）
-- **参考**：HARD_PARTS §7
+### M4-0 发布通道决策复核（30 分钟）
+- [ ] **目标**：复核 M0-0 的国内发布决策是否仍然成立（距评估已过数周，开源项目变化快）
+- **步骤**：检查 M0-0 DECISION 涉及项目的最近 commit/issue；有重大变化（停更/大改版）则重新评估
+- **验收**：在本任务下写 `CONFIRMED` 或新的 `DECISION`；若选 AiToEarn/xhs-toolkit，M4-2/M4-3 改为写对应 API/MCP 客户端（PublisherAdapter 接口契约不变）
+- **参考**：M0-0 的 evaluation-notes.md；HARD_PARTS §7
 
 ### M4-1 发布安全框架
 - [ ] **目标**：三重锁 + dry-run + publish 编排
@@ -232,9 +232,20 @@
 
 ### M5-2 视频发布（抖音）
 - [ ] **目标**：视频自动发布到抖音
-- **步骤**：按 M4-0 的 DECISION（AiToEarn 或 Playwright 参考 social-auto-upload 的 douyin_uploader）；AI 生成内容标识按平台要求勾选声明（PRD §3.4，不可省略）
+- **步骤**：按 M0-0 的 DECISION（AiToEarn 或 Playwright 参考 social-auto-upload 的 douyin_uploader）；AI 生成内容标识按平台要求勾选声明（PRD §3.4，不可省略）
 - **验收**：测试账号真实发布 3 条，AI 标识可见
 - **参考**：HARD_PARTS §2；PRD §3.4
+
+### M5-3 视频引擎扩展评估（OpenMontage + 数字人，时间盒 1 天）
+- [ ] **目标**：为 VideoEngine 增加第二、三引擎的可行性结论
+- **步骤**：
+  1. **OpenMontage**（32.9k⭐，AGPL）：本地 `make setup`，用 headless agent（`claude -p`）驱动一条 60s 解说视频，评估质量/成本/无人值守可行性 → 定位为头部内容精品化引擎（周更 1 条精品 vs MPT 日更量产）
+  2. **AIGCPanel**（5.2k⭐，数字人）：本地部署，用**自己的**形象/声音克隆生成一条口播样片 → 数字人 lane（好物分享/带货方向）可行性；确认平台数字人报备要求（抖音虚拟人注册/实名绑定）
+  3. 结论写入 `docs/research/evaluation-notes.md`，可行者在 Backlog 建实现任务（实现走 TECH_SPEC §5.6 VideoEngine 接口，不动编排层）
+- **验收**：两个引擎各产出一条样片 + DECISION 记录
+- **参考**：TECH_SPEC §5.6；docs/research/opensource-survey.md
+
+**🏁 M5 里程碑验收**：视频 lane 稳定日更（MPT 引擎），扩展引擎有明确 DECISION。
 
 ---
 
@@ -261,7 +272,9 @@
 
 ## 后续 Backlog（不排期）
 
-- 公众号 Publisher（官方 API 草稿箱 + 人工点发布，公众号自动群发风险高）
+- **数字人口播 lane**（AIGCPanel 引擎，走 VideoEngine 接口）：好物分享/带货方向；前提=M5-3 评估通过 + 账号过带货门槛 + 平台虚拟人报备完成
+- **OpenMontage 精品视频 lane**：周更 1 条高质量（Remotion 合成/词级字幕），前提=M5-3 评估通过
+- 公众号 Publisher（官方 API 草稿箱 + 人工点发布，公众号自动群发风险高；若 M0-0 决定采用 TrendPublish 则整体走它）
 - Postiz 部署接入 YouTube Shorts / TikTok
 - 表现数据反哺选题权重（metrics → topics 评分 prompt 动态调整）
 - 多账号矩阵（同平台第二账号 = 不同支柱人设）

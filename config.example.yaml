@@ -1,0 +1,115 @@
+# config.example.yaml — MediaForge 配置模板
+# 复制为 config.yaml 后按需修改。config.yaml 已 gitignore，不要提交。
+# 密钥不放这里：ANTHROPIC_API_KEY 等走环境变量；平台 cookie 放 secrets/。
+
+timezone: Asia/Shanghai
+
+# ── 内容支柱（选题白名单，评分 prompt 依据）────────────────
+pillars:
+  - id: ai_daily
+    name: AI/科技日报解读
+    description: 每日精选 AI 领域动态并给出解读与观点，要求信息增量与明确立场
+    scoring_hint: 时效性强、与 AI 工程实践相关、可给出独到判断的选题得高分
+  - id: oss_review
+    name: 开源项目测评
+    description: 值得关注的开源项目深度测评，工程师视角
+    scoring_hint: star 增速快、解决真实问题、可上手实测的项目得高分
+
+# ── 数据源 ────────────────────────────────────────────────
+sources:
+  - name: "rss:hn"
+    type: rss
+    url: https://hnrss.org/frontpage
+    enabled: true
+    max_items: 30
+  - name: "rss:github_trending"
+    type: rss
+    url: https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml
+    enabled: true
+    max_items: 25
+  - name: dailyhot
+    type: dailyhot            # 自部署 DailyHotApi
+    base_url: http://127.0.0.1:6688
+    boards: [zhihu, weibo, "36kr"]
+    enabled: false            # M1 冒烟通过后再开
+    max_items: 20
+
+# ── 选题 ─────────────────────────────────────────────────
+topics:
+  daily_quota: 5              # 每日晋升 selected 的上限
+  min_score: 6.0
+  expire_days: 3              # scored 超期未选中转 rejected
+
+# ── LLM ──────────────────────────────────────────────────
+llm:
+  tiers:
+    cheap: claude-haiku-4-5-20251001     # 选题初筛
+    creative: claude-sonnet-5            # 创作
+    critical: claude-sonnet-5            # 门禁批判与评分
+
+budget:
+  monthly_usd: 80.0           # 硬顶，超出后当日流水线停止（门禁调用除外）
+
+# ── 质量门禁 ──────────────────────────────────────────────
+gate:
+  threshold_total: 24         # 三维总分 < 24 丢弃
+  threshold_each: 6           # 任一单维 < 6 丢弃
+  max_rewrites: 1
+
+# ── 人审 ─────────────────────────────────────────────────
+review:
+  policy: manual              # manual | auto_above:27（运营 1 个月后才允许改）
+
+# ── 渲染 ─────────────────────────────────────────────────
+render:
+  engine: template            # template（默认，Jinja2+Playwright 截图）| claude_skills（可选增强）
+
+image_gen:
+  provider: none              # none | gemini | openai（none 时图卡纯模板文字排版）
+
+# ── 视频 ─────────────────────────────────────────────────
+video:
+  engine: mpt                 # mpt | openmontage | aigcpanel（后两者 M5-3 评估后启用）
+  mpt:
+    base_url: http://127.0.0.1:8080
+    voice: zh-CN-YunxiNeural
+    poll_interval_s: 30
+    timeout_s: 1200
+
+# ── 发布（默认关！M4 验收前不得打开）──────────────────────
+publish:
+  enabled: false
+  allowed_platforms: []       # 白名单，如 [x, toutiao, xiaohongshu]
+  min_gap_hours: 4            # 同平台同账号最小间隔
+  max_daily_per_account: 3
+  cross_platform_gap_minutes: 30
+
+platforms:
+  x:
+    kind: api
+    windows: ["09:00-11:00", "21:00-23:00"]   # 本地时区黄金时段
+    accounts:
+      - id: main
+        credentials: secrets/x_main.json
+  toutiao:
+    kind: playwright
+    windows: ["07:00-09:00", "18:00-20:00"]
+    accounts:
+      - id: main
+        cookies: secrets/cookies/toutiao_main.json
+  xiaohongshu:
+    kind: playwright
+    windows: ["12:00-14:00", "19:00-22:00"]
+    accounts:
+      - id: main
+        cookies: secrets/cookies/xiaohongshu_main.json
+
+# ── Web 控制台 ────────────────────────────────────────────
+webui:
+  host: 127.0.0.1
+  port: 8787
+  auth: null                  # 部署到非本机时改为 {user: ..., password_env: WEBUI_PASSWORD}
+
+# ── 通知 ─────────────────────────────────────────────────
+notify:
+  webhook_url: null           # 飞书/TG bot webhook，null 则跳过通知
