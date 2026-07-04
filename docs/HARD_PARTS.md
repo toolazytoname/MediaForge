@@ -119,12 +119,13 @@
 
 | 组件 | 当前选型 | Plan B | 切换触发条件 |
 |------|----------|--------|--------------|
-| 国内发布 | M0-0 评估决定（候选：AiToEarn API / xhs-toolkit MCP / 自写 Playwright 参考 social-auto-upload） | 候选间互为备选 | 主选方案连续 1 周失败率 > 30% |
-| 公众号图文 | M0-0 评估 TrendPublish（3k⭐，同构流水线，含质量审稿+矩阵） | 自研 lane + 公众号官方 API 草稿箱 | TrendPublish 质量审稿不达标 |
+| 国内发布（小红书） | XiaohongshuSkills（M0-0 决策，subprocess 集成，pin commit） | 自写 Playwright（patchright，参考 social-auto-upload 新版 uploader + AiToEarn electron 遗留代码） | mac 冒烟不通过，或连续 1 周失败率 > 30%，或项目停更 |
+| 国内发布（头条/其他） | 自写 Playwright（M0-0 决策；AiToEarn/xhs-toolkit 已评估放弃） | AiToEarn 仅海外平台重评 | — |
+| 公众号图文 | 自研 lane + 官方 API 草稿箱（M0-0 决策：不部署 TrendPublish，移植其审稿协议/微信排版/防幻觉条款） | TrendPublish CLI dry-run 作对照产线 | 自研排版质量不达标 |
 | 海外发布 | X 官方 API | Postiz 自托管（一次接入 YouTube/TikTok/IG 等） | 扩到 ≥ 3 个海外平台时直接上 Postiz |
 | 视频生成（量产） | MoneyPrinterTurbo | NarratoAI（解说类）/ 直接 ffmpeg + edge-tts 自拼 | MPT 停更或质量不满意 |
-| 视频生成（精品） | OpenMontage（M5-3 评估，headless agent 驱动） | 人工 + Remotion | 无人值守驱动不可行 |
-| 数字人 | AIGCPanel（M5-3 评估） | HeyGen 等商业 API | 本地部署质量/性能不达标 |
+| 视频生成（精品/AI 生成类） | Pixelle-Video（M0-0 决策，VideoEngine 第二引擎，mode=fixed 注入我方脚本） | OpenMontage（远期观察）/ 人工 + Remotion | 生图成本失控或项目停更 |
+| 数字人 | AIGCPanel（M5-3 缩减为速评） | HeyGen 等商业 API | 本地部署质量/性能不达标 |
 | 热点源 | RSS + DailyHotApi 自部署 | newsnow 自部署 | DailyHotApi 接口挂 |
 | 图像生成 | 不用（模板渲染兜底） | Gemini/OpenAI 图像 API | 模板卡片视觉疲劳、数据表明配图影响点击 |
 

@@ -10,13 +10,16 @@
 ## M0 — 项目地基（预计 1-2 天）
 
 ### M0-0 站在巨人肩膀上：同类项目深度评估（1 天时间盒，先于一切编码）
-- [ ] **目标**：确认"借用哪些轮子"，输出决策记录，避免重复造轮子
+- [x] **目标**：确认"借用哪些轮子"，输出决策记录，避免重复造轮子
 - **步骤**（每项 2 小时时间盒，输出写入 `docs/research/evaluation-notes.md`）：
   1. **TrendPublish**（`liyown/ai-trend-publish`，3k⭐）：本地跑通其 dry-run，评估其选题聚类/质量审稿/公众号排版是否达标 → 决定公众号 lane 是"直接部署它+API对接" 还是 "自研"
   2. **xhs-toolkit**（`aki66938/xhs-toolkit`，MCP）与 **XiaohongshuSkills**（3.1k⭐）：评估小红书发布稳定性 → 决定 M4-3 是集成还是自写 Playwright
   3. **AiToEarn** 自部署版：Docker 起服务，测其发布 API → 决定国内多平台发布是否整体走它（原 M4-0 提前到此）
+  4. **Pixelle-Video**（`ATH-MaaS/Pixelle-Video`，24k⭐，用户补充）：评估其作为视频产出引擎的角色
 - **验收**：evaluation-notes.md 中每项有 `DECISION: <采用/参考/放弃> 因为 <理由>`；TASKS.md 受影响任务（M4-2/M4-3/M2 部分）按决策更新描述
 - **参考**：docs/research/opensource-survey.md（必读"第二轮广撒网"节）
+
+  ✅ 完成于 2026-07-05，commit （见下一提交补记），备注：4 项 DECISION 已落 evaluation-notes.md——TrendPublish 参考（移植门禁修订协议/微信排版/防幻觉条款）；小红书采用 XiaohongshuSkills、放弃 xhs-toolkit（已停更）；AiToEarn 放弃（自部署无法无人值守）仅参考其 API 设计与 electron 遗留代码；Pixelle-Video 采用为 VideoEngine 第二引擎（M5-3 已改写）。评估以源码深读替代本地跑通（4 仓库全量 clone 深读，时间盒内完成）。
 
 ### M0-1 初始化工程与工具链
 - [ ] **目标**：可运行的空项目
@@ -96,7 +99,7 @@
 ### M2-1 canonical 创作管道
 - [ ] **目标**：selected topic → 深度长文 markdown
 - **步骤**：
-  1. `pipeline/creators/canonical.py`：两段式——先调 LLM 产出大纲+核心观点（强制回答"作者的一句话观点是什么"），再成文（1500-3000 字，创作 prompt 存 `pipeline/creators/prompts/canonical.md` 便于迭代）
+  1. `pipeline/creators/canonical.py`：两段式——先调 LLM 产出大纲+核心观点（强制回答"作者的一句话观点是什么"），再成文（1500-3000 字，创作 prompt 存 `pipeline/creators/prompts/canonical.md` 便于迭代）；prompt 移植 TrendPublish 防幻觉条款（商业状态/定价/参数只有来源明确写出才可表述，见 evaluation-notes §1 移植清单）
   2. 若 topic 有 url：httpx 抓原文正文（trafilatura 或简单提取，失败则只用 title+summary）作为素材
   3. 产出写 `output/YYYY-MM-DD/<content_id>.tmp/canonical.md` + `meta.json`，成功后 rename 去掉 `.tmp`（HARD_PARTS §5 模式）
   4. contents 表插入记录（status=draft），topic 转 consumed
@@ -107,7 +110,7 @@
 - [ ] **目标**：`python -m pipeline.run gate` 完整可用——本系统品质的最后防线
 - **步骤**：
   1. `pipeline/gate/anchors/` 准备 6 篇锚点样例（**此步需要用户参与**：请用户提供或确认 2 好/2 中/2 差样例，可先用占位并标记 `⚠️ 需用户校准`）
-  2. `pipeline/gate/critic.py`：批判轮（列三大问题）→ 触发重写（调 canonical 重写入口，带批判意见，最多 `max_rewrites` 次）
+  2. `pipeline/gate/critic.py`：批判轮（列三大问题）→ 触发重写（调 canonical 重写入口，带批判意见，最多 `max_rewrites` 次）；重写协议参考 TrendPublish：只许修表达/结构/排版类问题、禁碰事实类问题（事实问题 → 直接 discarded 或留人审），重写后强制复评、总分不降才采纳否则回滚（evaluation-notes §1）
   3. `pipeline/gate/scorer.py`：独立评分会话，锚点对比 + 强制 JSON 输出，按 config 阈值判定 gated/discarded
   4. critique.md 落盘；discarded 的文件保留
 - **验收**：HARD_PARTS §3 的验证法——10 篇质量参差样文，门禁排序与人工排序 Spearman > 0.6（此验收需用户参与打标）；分数写入 contents 表
@@ -200,14 +203,15 @@
 - **验收**：测试账号真实发一条 3 段 thread；dry-run 模式全流程日志正确
 - **参考**：TECH_SPEC §5.2
 
-### M4-3 头条 + 小红书 Publisher（Playwright）
-- [ ] **目标**：图文双平台自动发布
+### M4-3 头条 + 小红书 Publisher
+- [ ] **目标**：图文双平台自动发布（按 M0-0 DECISION：小红书集成 XiaohongshuSkills，头条自写 Playwright）
 - **步骤**：
   1. `pipeline/run.py login` 命令（HARD_PARTS §2 要点 1）
-  2. `publishers/toutiao.py` / `publishers/xiaohongshu.py`：参考 social-auto-upload 源码的选择器与流程（clone 到 `vendor/` 只读参考，不直接依赖）；选择器集中至 `_selectors.py`；stealth + 截图 + 频控全按 HARD_PARTS §2
-  3. cookie 失效检测先行
+  2. **小红书** `publishers/xiaohongshu.py`：subprocess 封装 XiaohongshuSkills（`white0dew/XiaohongshuSkills`）的 CLI 进 PublisherAdapter（接口契约不变）。四条护栏：① mac 冒烟测试先行（该项目 Windows 优先，跑不通降级 Plan B 自写）；② vendor 固定 commit（2026-05-21 fix(_click_tab) 之后），不追 HEAD；③ `dry_run=True` 在 adapter 层校验 bundle 即返回、不碰浏览器，其 `--preview` 仅作上线前人工验证档位；④ 频控全在我方编排层（它无内建限流，社区有封号案例）
+  3. **头条** `publishers/toutiao.py`：自写 Playwright，参考 social-auto-upload 源码 + AiToEarn electron 遗留代码（`project/aitoearn-electron/electron/plat/`，MIT，接口摸底资料）；选择器集中至 `_selectors.py`；stealth + 截图 + 频控全按 HARD_PARTS §2
+  4. cookie 失效检测先行
 - **验收**：HARD_PARTS §2 验证法——测试账号连发 3 天，无重复帖、失败有告警、截图完整
-- **参考**：HARD_PARTS §2（必读，全章）
+- **参考**：HARD_PARTS §2（必读，全章）；evaluation-notes §2 §3
 
 ### M4-4 Web 控制台 v2（发布日历 + 设置页）
 - [ ] **目标**：图形化管理发布排期
@@ -236,14 +240,17 @@
 - **验收**：测试账号真实发布 3 条，AI 标识可见
 - **参考**：HARD_PARTS §2；PRD §3.4
 
-### M5-3 视频引擎扩展评估（OpenMontage + 数字人，时间盒 1 天）
-- [ ] **目标**：为 VideoEngine 增加第二、三引擎的可行性结论
+### M5-3 Pixelle-Video 第二引擎接入（按 M0-0 DECISION 改写，原「OpenMontage+数字人评估」缩减进子项与 Backlog）
+- [ ] **目标**：`pixelle` 引擎接入 VideoEngine 体系，承接「AI 生成类内容」（知识科普/读书/情感类）；MPT 保持默认兜底（时效资讯量产）
 - **步骤**：
-  1. **OpenMontage**（32.9k⭐，AGPL）：本地 `make setup`，用 headless agent（`claude -p`）驱动一条 60s 解说视频，评估质量/成本/无人值守可行性 → 定位为头部内容精品化引擎（周更 1 条精品 vs MPT 日更量产）
-  2. **AIGCPanel**（5.2k⭐，数字人）：本地部署，用**自己的**形象/声音克隆生成一条口播样片 → 数字人 lane（好物分享/带货方向）可行性；确认平台数字人报备要求（抖音虚拟人注册/实名绑定）
-  3. 结论写入 `docs/research/evaluation-notes.md`，可行者在 Backlog 建实现任务（实现走 TECH_SPEC §5.6 VideoEngine 接口，不动编排层）
-- **验收**：两个引擎各产出一条样片 + DECISION 记录
-- **参考**：TECH_SPEC §5.6；docs/research/opensource-survey.md
+  1. Docker Compose 部署 Pixelle-Video（`ATH-MaaS/Pixelle-Video`，pin image tag）；生图供应商 key（DashScope/RunningHub 按量）入 `secrets/` 与 config
+  2. `creators/video/pixelle.py` 实现 VideoEngine：submit→`POST /api/video/generate/async`（**mode=fixed** 注入我方口播稿，文案主权在创作管道）、poll→`GET /api/tasks/{id}`、fetch→文件下载。适配要点：aspect→frame_template 尺寸目录；style→frame_template+prompt_prefix；duration_s 按语速预估校验；**轮询 404（其任务状态存内存，服务重启即丢）按 failed 处理+重提交**；脚本分段在我方预处理为段落（其 API 未暴露 split_mode）
+  3. 每条视频记录生成成本（约 ¥0.5-5/条）入 llm_calls 或独立审计
+  4. 引擎路由：config 按内容 pillar/类型选 `mpt` 或 `pixelle`
+  5. （时间盒 0.5 天，可选）AIGCPanel 数字人可行性速评，结论进 Backlog
+- **验收**：一条 gated content 经 pixelle 引擎端到端产出 mp4，视觉质量明显优于 MPT 同稿产出；pixelle 服务挂掉时 mpt 链路不受影响
+- **参考**：TECH_SPEC §5.6；evaluation-notes §4
+- 备注：OpenMontage 降级为远期观察（Backlog），Pixelle-Video 接管精品/差异化视觉定位
 
 **🏁 M5 里程碑验收**：视频 lane 稳定日更（MPT 引擎），扩展引擎有明确 DECISION。
 
@@ -273,8 +280,8 @@
 ## 后续 Backlog（不排期）
 
 - **数字人口播 lane**（AIGCPanel 引擎，走 VideoEngine 接口）：好物分享/带货方向；前提=M5-3 评估通过 + 账号过带货门槛 + 平台虚拟人报备完成
-- **OpenMontage 精品视频 lane**：周更 1 条高质量（Remotion 合成/词级字幕），前提=M5-3 评估通过
-- 公众号 Publisher（官方 API 草稿箱 + 人工点发布，公众号自动群发风险高；若 M0-0 决定采用 TrendPublish 则整体走它）
+- **OpenMontage 精品视频 lane**（远期观察，M0-0 决策降级：Pixelle-Video 已接管精品定位）：仅当 Pixelle-Video 质量不达预期时重评
+- 公众号 Publisher（官方 API 草稿箱 + 人工点发布，公众号自动群发风险高；M0-0 决策：不部署 TrendPublish，自研 lane 时移植其微信兼容 HTML 后处理器，见 evaluation-notes §1 移植清单）
 - Postiz 部署接入 YouTube Shorts / TikTok
 - 表现数据反哺选题权重（metrics → topics 评分 prompt 动态调整）
 - 多账号矩阵（同平台第二账号 = 不同支柱人设）

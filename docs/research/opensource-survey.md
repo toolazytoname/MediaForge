@@ -7,6 +7,7 @@
 | 项目 | Stars | 说明 | 活跃度 | 在本系统中的角色 |
 |------|-------|------|--------|-----------------|
 | [MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo) | 95.6k | 主题→短视频一键生成（文案/素材/TTS/字幕/BGM），FastAPI 有 HTTP API | 极活跃，MIT | **默认视频引擎**（无头、可 cron） |
+| [Pixelle-Video](https://github.com/ATH-MaaS/Pixelle-Video) | 24.1k | 文本→AI 生成媒体→HTML 模板渲染帧短视频引擎（阿里 AIDC-AI 出品，FastAPI 异步任务 API，mode=fixed 可注入外部脚本，素材全 AI 生成非库存混剪） | 极活跃（2025-11 建仓），Apache-2.0 | **第二引擎**（M0-0 用户补充评估，DECISION 采用，AI 生成类内容优先，见 evaluation-notes §4） |
 | [OpenMontage](https://github.com/calesthio/OpenMontage) | 32.9k | Agentic 视频制作系统：12 流水线/52 工具/500+ agent skills，Remotion/HyperFrames 合成，参考视频逆向，真实素材蒙太奇，成本 $0.15-1.5/条 | 极活跃，AGPL-3.0 | **高级视频引擎**（需 AI 编程助手驱动，见下方注意） |
 | [NarratoAI](https://github.com/linyqh/NarratoAI) | 10.1k | AI 解说+自动剪辑（影视解说赛道） | 活跃，MIT | 备选（解说类赛道才用） |
 | [MoneyPrinterPlus](https://github.com/ddean2009/MoneyPrinterPlus) | 6.6k | 批量混剪+发布 | ⚠️ 2025-03 停更 | 不采用 |
