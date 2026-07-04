@@ -1,0 +1,15 @@
+.venv/
+secrets/
+config.yaml
+state.db
+state.db-*
+logs/
+output/
+backups/
+locks/
+vendor/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+.DS_Store
