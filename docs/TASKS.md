@@ -176,13 +176,15 @@
 - **参考**：TECH_SPEC §5.4 §5.5；evaluation-notes §5
 
 ### M2-5 review 阶段：审核清单
-- [ ] **目标**：人每天 10 分钟完成审核
+- [x] **目标**：人每天 10 分钟完成审核
 - **步骤**：
   1. `pipeline/review/checklist.py`：为当日 gated 内容生成 `output/YYYY-MM-DD/REVIEW.md`——每条含：标题、门禁分、评语、canonical 路径链接、图卡缩略引用、`- [ ] approve` 复选框
   2. 读取逻辑：`[x]`→approved，`[-]`→rejected_by_human（打回原因写在行尾，落库）
   3. `--notify`：飞书/TG webhook 发"今日 N 篇待审"+ 链接（webhook 未配则跳过）
 - **验收**：生成→手工标记→再跑 review 命令→状态正确落库；重复运行无副作用
 - **参考**：ARCHITECTURE §3.5
+
+  ✅ 完成于 2026-07-05，commit da805dc，备注：review/{checklist,reader,notify,__init__}.py + cmd_review 替换占位 + 26 测试。checklist.py 按分数降序、tmp→rename 幂等、canonical/cover 路径相对 REVIEW.md。reader.py 关键防线：`- [-] reject:`（空理由）视为模板占位而非决策，避免 run_review 的"读旧-写新"roundtrip 把刚生成的清单自我否决；走 db.transition 状态机；幂等（已非 gated 跳过）；reject 时把理由写到 gate_verdict 字段（schema 复用，不增字段）。notify.py webhook 失败仅 warn 不阻断（§9 IM 失败不阻塞主流程）。run_review 编排顺序：先读旧落库 → 再写新 → 有内容才通知。**真实冒烟**：现有 c_smoke_deriv1 走完整 round-trip（标记 [x] approve → 重跑 review → status 翻为 approved，日志 "review: approved"）。全测 470 全绿（原 444 + 26）。**关键 bug 已修**：1) reader regex `[0-9a-z]` 不含下划线，c_smoke_deriv1 这种含多个 `_` 的 id 匹配不到——扩为 `[0-9a-z_]`；2) 模板占位行被 reader 当成决策误判全部 reject——要求 reject 必须有非空理由；3) `_REJECT_RE` 中 `reject:?` 冒号可选导致 `(.+?)` 吃尾冒号——改为必须含 `:`。
 
 **🏁 M2 里程碑验收**：`ingest → score → create → gate → review` 全链路真实跑 3 天，每天产出 ≥1 篇过门禁内容，其中你愿意署名发出的 ≥ 60%。**未达标不进 M3**——回头调 prompt/锚点（这比写代码重要）。
 
