@@ -362,3 +362,24 @@ def test_create_one_outline_parse_fail_raises(tmp_path) -> None:
             output_root=tmp_path / "output",
             now="2026-07-05T02:00:00+00:00",
         )
+
+
+def test_create_one_handles_json_code_fence(tmp_path) -> None:
+    """stage1 LLM 把 JSON 包在 ```json ... ``` 围栏里 → 仍能解析（实战）。"""
+    from pipeline.creators.canonical import _strip_code_fence
+
+    fenced = '```json\n{"viewpoint": "v", "outline": ["a", "b"]}\n```'
+    assert _strip_code_fence(fenced) == '{"viewpoint": "v", "outline": ["a", "b"]}'
+
+    conn = _open_db(tmp_path)
+    topic = _seed_topic(conn, id="t_aaaa9999", title="x")
+    set_provider(ScriptedProvider([
+        '```json\n{"viewpoint": "v", "outline": ["a", "b"]}\n```',
+        "essay",
+    ]))
+    content = create_one(
+        conn, topic, pillars=_pillars(),
+        output_root=tmp_path / "output",
+        now="2026-07-05T02:00:00+00:00",
+    )
+    assert content.status == ContentStatus.DRAFT.value

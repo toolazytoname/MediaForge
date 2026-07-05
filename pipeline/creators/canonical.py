@@ -88,9 +88,14 @@ def _render_essay_prompt(
 
 
 def _parse_outline(text: str) -> tuple[str, list[str]]:
-    """解析 stage1 JSON。失败抛 CreateError（由编排层捕获）。"""
+    """解析 stage1 JSON。失败抛 CreateError（由编排层捕获）。
+
+    容错：很多 LLM（即便 prompt 明确要求）会把 JSON 包在 ```json ... ```
+    代码块围栏里。先剥围栏再解析。
+    """
+    cleaned = _strip_code_fence(text)
     try:
-        obj = json.loads(text)
+        obj = json.loads(cleaned)
     except json.JSONDecodeError as e:
         raise CreateError(f"stage1 outline JSON parse failed: {e}") from e
     if not isinstance(obj, dict):
@@ -104,6 +109,22 @@ def _parse_outline(text: str) -> tuple[str, list[str]]:
     if not all(isinstance(x, str) for x in outline):
         raise CreateError(f"stage1 outline items not str: {outline!r}")
     return viewpoint, outline
+
+
+def _strip_code_fence(text: str) -> str:
+    """剥 ```json ... ``` 或 ``` ... ``` 围栏（防御性）。"""
+    s = text.strip()
+    if not s.startswith("```"):
+        return s
+    # 跳过首行 ```json / ```
+    first_nl = s.find("\n")
+    if first_nl == -1:
+        return s
+    body = s[first_nl + 1:]
+    # 去掉尾部 ```
+    if body.rstrip().endswith("```"):
+        body = body.rstrip()[:-3].rstrip()
+    return body
 
 
 # ── 文件写入（tmp-rename 模式）──────────────────────
