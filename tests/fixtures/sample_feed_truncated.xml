@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Summary only feed</title>
+    <link>https://example.com/</link>
+    <description>Items missing link/pubDate (edge cases)</description>
+    <item>
+      <title>Only title here</title>
+      <description>No link, no pubDate.</description>
+    </item>
+  </channel>
+</rss>
