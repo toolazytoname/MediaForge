@@ -245,13 +245,15 @@
   - 无停更、无 archived、无 breaking change。所有 M0-0 DECISION 维持原结论，**M4-2/M4-3/M5-3 任务描述无需调整**。
 
 ### M4-1 发布安全框架
-- [ ] **目标**：三重锁 + dry-run + publish 编排
+- [x] **目标**：三重锁 + dry-run + publish 编排
 - **步骤**：
   1. `pipeline/publishers/base.py` 按 TECH_SPEC §5.2
   2. publish 子命令编排：取到期 queued → 三重锁校验（ARCHITECTURE §6）→ 乐观锁抢占 → validate → 意图日志 → publish → 落库；HARD_PARTS §1 全部要点
   3. `publishing` 超时 30min 的记录 → failed + 告警
 - **验收**：TECH_SPEC §9 发布安全测试 + HARD_PARTS §1 并发验证；`publish.enabled=false` 时全路径不可达 publish 调用（测试断言 mock 未被调用）
 - **参考**：HARD_PARTS §1（必读）；ARCHITECTURE §6
+
+  ✅ 完成于 2026-07-06，commit cf10241，备注：pipeline/publishers/safe_publish.py + cmd_publish 接线 + 12 测试。M4-1 不实现具体平台 publisher（X/头条/小红书由 M4-2/3 接入），只做通用安全框架 + MockPublisherAdapter 验证。**三层防御**：① config 锁（publish.enabled + allowed_platforms + scheduled_at 检查）—— 任意一项不满足直接返回 SafePublishResult(published=False, reason=...)，未触 DB；② 乐观锁（UPDATE WHERE status='queued' rowcount==1）—— 抢锁失败意味着另一进程已并发；③ UNIQUE(content_id, platform, account_id) 兜底（db.py 已定义）。**INTENT 日志**：调 adapter.publish 前落 `INTENT publish p_xxx platform=x account=main dry_run=False`（logs/pipeline.log）；进程死在发布后落库前 → 重启时 timeout_publishings() 清理 30min 超时的 publishing 记录 → failed + 'manual check needed' 提示（绝不自动重试）。**异常处理**：PublishError → failed + error 字段；其他异常 → failed + 'unexpected:'（不被外层吞）。全测 521 全绿（原 509 + 12）。**关键 bug 修**：1) 'disabled' in reason 断言 vs 'enabled' 反向——改 reason 文本 'publish is disabled' 让关键字唯一；2) 测试 _mock_adapter 内 class Mock platform=platform 让 RHS 在 class body 解析失败——加 plat_value 中间变量。
 
 ### M4-2 X Publisher（官方 API，最简单，先跑通框架）
 - [ ] **目标**：thread 自动发布到 X
