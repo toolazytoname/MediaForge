@@ -128,7 +128,7 @@
   ✅ 完成于 2026-07-05，commit <待补>，备注：source_fetcher.py (~65 行 httpx + 简单 HTML 提取, 错则 None)、canonical.py (~190 行 两段式 LLM 创作, tmp→rename, BudgetExceeded 审计发现并修复 上抛不吞)、prompts/canonical_outline.md + canonical_essay.md (防幻觉条款移植)、run.py cmd_create (单条 CreateError skip + BudgetExceeded 终止); tests 11 新增, 全量 294 全绿 (原 283 + 11)。独立 agent 审计 PASS, 修 2 问题 (BudgetExceeded 被吞 + max_tokens 偏紧)。**未做**: 真实冒烟一篇长文 (provider DECISION NEEDED 仍挂着)。
 
 ### M2-2 质量门禁
-- [ ] **目标**：`python -m pipeline.run gate` 完整可用——本系统品质的最后防线
+- [x] **目标**：`python -m pipeline.run gate` 完整可用——本系统品质的最后防线
 - **步骤**：
   1. `pipeline/gate/anchors/` 准备 6 篇锚点样例（**此步需要用户参与**：请用户提供或确认 2 好/2 中/2 差样例，可先用占位并标记 `⚠️ 需用户校准`）
   2. `pipeline/gate/critic.py`：批判轮（列三大问题）→ 触发重写（调 canonical 重写入口，带批判意见，最多 `max_rewrites` 次）；重写协议参考 TrendPublish：只许修表达/结构/排版类问题、禁碰事实类问题（事实问题 → 直接 discarded 或留人审），重写后强制复评，采纳规则按 TrendPublish `workflow.ts:1112-1126` 真实逻辑移植（action 等级提升即采纳、持平才要求总分不降、新增 blocker/发布权降级则回滚，见 evaluation-notes §1 及复核记录）
@@ -137,7 +137,7 @@
 - **验收**：HARD_PARTS §3 的验证法——10 篇质量参差样文，门禁排序与人工排序 Spearman > 0.6（此验收需用户参与打标）；分数写入 contents 表
 - **参考**：HARD_PARTS §3（必读）；PRD §3.3
 
-### M2-3 派生格式生成（图文三件套）
+  ✅ 完成于 2026-07-05，commit 7de222b，备注：gate/{anchors_loader,decision,critic,scorer,runner,__init__}.py + prompts/{critic,scorer,rewrite}.md + 6 篇占位锚点样例 + README 标注"⚠️ 需用户校准"。decision.py 移植 TrendPublish shouldAcceptArticleRevision 四层防御（新增 blocker / allowPublish 降级 / action 等级提升即采纳 / 持平比分数）+ Action 枚举（BLOCK=0/DISCARD=1/REVISE=2/GATE=3）。canonical.py 增 rewrite_one() 走 tmp→rename 覆盖已有 canonical.md（HARD_PARTS §5 幂等）。runner.py 编排：critic → 可选 rewrite → scorer → 原子事务落库分数+状态；异常路径必走 DRAFT→FAILED。**独立 agent 审计 5 bug 已修**：1) bool 漏入 int 校验；2) 分数写入与状态转移非原子；3) StaleState/IllegalTransition 被吞；4) 异常路径不写 DRAFT→FAILED；5) decide_revision_action 把无问题内容误判为 DISCARD。tests 46 新增，全测 340 全绿（原 294 + 46）。**未做**：真实 LLM 冒烟（provider DECISION NEEDED 仍挂）+ 10 篇 Spearman>0.6 验证（需用户提供真实校准锚点）。
 - [ ] **目标**：canonical → 头条长文 / 小红书图卡文案 / X thread
 - **步骤**：
   1. `pipeline/creators/derivative.py`：每格式一个函数，输入 canonical.md，输出平台目录（TECH_SPEC/ARCHITECTURE §8 目录约定）
