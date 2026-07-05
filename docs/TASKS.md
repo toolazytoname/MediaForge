@@ -204,13 +204,15 @@
   ✅ 完成于 2026-07-06，commit 94f7798，备注：scheduler.py 纯函数 plan() + cmd_schedule 接线 + 15 测试。plan() 签名含 min_gap_hours / cross_platform_gap_minutes / tz_name 入参（从 config 注入，方便单测）。种子 sha256(content_id|platform) → 4 字节 int，确保可复现（HARD_PARTS §8）。窗口内随机取点 20 次/窗口/日，顺延最多 14 天。UTC 存 + 本地展示；__init__ 暴露 _parse_iso_utc / _parse_window 给测试用。**关键 bug 修**：1) `_sample_in_window` offset 不进位（start_m + offset 可能 ≥ 60）→ 改为绝对分钟算 h/m；2) cmd_schedule 首次实现把 UNIQUE 冲突当 failed → 改 skipped（幂等语义）+ exit 0 不误报。**真实冒烟**：c_smoke_deriv1 → x/toutiao/xiaohongshu 三平台各 1 条 queued，UTC 时间换算到本地全部落在黄金时段窗口内；二次跑 0 scheduled, 3 skipped (already exists), 0 failed。全测 485 全绿（原 470 + 15）。
 
 ### M3-2 launchd 定时化
-- [ ] **目标**：全流水线无人值守定时执行
+- [x] **目标**：全流水线无人值守定时执行
 - **步骤**：
   1. `launchd/` 写 plist 模板（ARCHITECTURE §2 的时刻表）+ `scripts/install_launchd.sh`
   2. 每个子命令入口加 flock 锁（HARD_PARTS §8）
   3. `scripts/backup_db.sh` + 每日备份 plist
 - **验收**：安装后连续 2 天自动产出到 review 环节；锁测试：手动并发跑同一命令，第二个立即退出
 - **参考**：HARD_PARTS §8 §9
+
+  ✅ 完成于 2026-07-06，commit 5c7dcdb，备注：pipeline/utils/flock.py + 7 个 launchd plist + 3 个 scripts + 7 测试。装饰器 _stage_lock(stage) 接入 11 个子命令（ingest/score/create/gate/derivative/review/schedule/publish/collect/status/reset），拿不到锁返回 'SKIP' + exit 0，不报警（cron 常态）。plist 用 __PROJECT_ROOT__ 占位符（避免 XML 标签冲突），sed 替换；install_launchd.sh macOS launchctl load/uninstall 幂等；install_cron.sh Linux 备选。backup_db.sh 用 sqlite3 .backup 命令保证一致性（不直接 cp，避免 WAL 中间态）。**关键 bug 修**：1) 初版用 `<PROJECT_ROOT>` 占位符——XML 解析失败（标签冲突），改 `__PROJECT_ROOT__`；2) review-notify plist 注释含 `--` 触发 XML 非法——改 `(notify)`。**真实冒烟**：父进程 acquire(locks/status.lock) → 子进程 `pipeline.run status` 输出 `status: SKIP (lock held)` + rc=0，端到端锁防护生效。全测 492 全绿（原 485 + 7）。
 
 ### M3-3 Web 控制台 v1（Dashboard + 审核台 + 选题池）
 - [ ] **目标**：图形化看板与审核，替代手编 REVIEW.md
