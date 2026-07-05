@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pipeline.utils.errors import BudgetExceeded
+from pipeline.utils.errors import BudgetExceeded, PipelineError
 
 
 # ── 价格表（USD / 百万 token）────────────────────────────
@@ -507,3 +507,75 @@ def _call_with_retry(
     # 用尽
     assert last_exc is not None
     raise last_exc
+
+
+def complete_json(
+    prompt: str,
+    *,
+    stage: str,
+    parse,
+    ref_id: str | None = None,
+    model_tier: str = "creative",
+    max_tokens: int = 4096,
+    conn: sqlite3.Connection | None = None,
+    max_retries: int = 1,
+) -> Any:
+    """调 LLM + 解析 JSON，失败时重试一次（拼 fixup prompt 反馈给模型）。
+
+    适用场景：LLM 输出应是 JSON 但偶尔产非 JSON（围栏、注释、结构错）。
+    与 `complete()` 的区别：complete 只重试 RetryableError（瞬时错误），
+    不重试结构性 JSON 失败——本函数补齐后者。
+
+    Args:
+        prompt: 原始 prompt（拼到 fixup 前）
+        stage: 编排阶段名（llm_calls 记录 + log 文件）
+        parse: callable(text: str) -> parsed_obj，失败抛
+               (json.JSONDecodeError, ValueError, PipelineError) 中任一类
+        ref_id: 关联记录 id
+        model_tier: cheap/creative/critical
+        max_tokens: 输出上限
+        conn: DB 连接
+        max_retries: 重试次数（默认 1）
+
+    Returns:
+        parse(text) 的返回值
+
+    Raises:
+        与 `complete()` 同；JSON 解析异常在 max_retries 用尽后透传最后一次的异常
+    """
+    text = complete(
+        prompt,
+        stage=stage,
+        ref_id=ref_id,
+        model_tier=model_tier,
+        max_tokens=max_tokens,
+        conn=conn,
+    )
+    try:
+        return parse(text)
+    except (json.JSONDecodeError, ValueError, PipelineError) as first_err:
+        if max_retries <= 0:
+            raise
+        first_exc = first_err
+
+    # 重试：把上次 malformed 输出 + 错误反馈给模型
+    fixup_prompt = (
+        f"{prompt}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"【系统提示】你上一次的输出无法解析为合法 JSON。\n"
+        f"错误类型：{type(first_exc).__name__}\n"
+        f"错误信息：{first_exc}\n\n"
+        f"原始输出（前 800 字）：\n"
+        f"```\n{text[:800]}\n```\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"请重新生成严格符合上面要求的 JSON 输出，禁止任何额外文本/前缀/后缀。"
+    )
+    text2 = complete(
+        fixup_prompt,
+        stage=f"{stage}_retry",
+        ref_id=ref_id,
+        model_tier=model_tier,
+        max_tokens=max_tokens,
+        conn=conn,
+    )
+    return parse(text2)  # 第二次失败透传最后一次异常

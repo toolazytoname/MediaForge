@@ -24,7 +24,7 @@ from pipeline import db
 from pipeline.config import Pillar
 from pipeline.creators import llm as llm_mod
 from pipeline.creators import source_fetcher
-from pipeline.creators.llm import complete
+from pipeline.creators.llm import complete, complete_json
 from pipeline.models import Content, ContentStatus, Topic, TopicStatus
 from pipeline.utils.errors import CreateError
 from pipeline.utils.ids import new_id
@@ -165,25 +165,25 @@ def create_one(
     # 1. 取素材（URL 失败不抛）
     source_text = source_fetcher.fetch_text(topic.url)
 
-    # 2. Stage 1: outline
+    # 2. Stage 1: outline（complete_json 自动重试一次 JSON 解析失败）
     outline_prompt = _render_outline_prompt(topic, source_text)
     try:
-        outline_text = complete(
+        viewpoint, outline = complete_json(
             outline_prompt,
             stage="create_outline",
             ref_id=topic.id,
             model_tier="creative",
             max_tokens=1024,
             conn=conn,
+            parse=_parse_outline,
+            max_retries=1,
         )
     except llm_mod.RetryableError as e:
         # 仅包裹瞬时网络/限流类失败 → 单条 skip
-        # BudgetExceeded / ValueError 等系统性错误必须原样上抛
+        # BudgetExceeded / CreateError 等系统性错误必须原样上抛
         raise CreateError(
             f"stage1 LLM retry exhausted for topic={topic.id}: {e}"
         ) from e
-
-    viewpoint, outline = _parse_outline(outline_text)
 
     # 3. Stage 2: essay
     essay_prompt = _render_essay_prompt(
