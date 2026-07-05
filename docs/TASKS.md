@@ -155,7 +155,7 @@
   ✅ 完成于 2026-07-05，commit 98a49de，备注：derivative.py 三平台派生（toutiao 3 候选标题+600-1200 字短文 / xiaohongshu 5-7 张 slide+50-500 字 caption+3-10 tags / x 5-10 条英文 thread）+ run_derivative 编排 + cmd_derivative 入 run.py；ARCHITECTURE §8 输出目录 `output/<date>/<content_id>/{toutiao.md,xiaohongshu/{slides.json,caption.md,tags.txt},x/thread.md}` 严格遵循；走 complete_json 自动重试 + tmp→rename 幂等；formats 字段合并语义（不覆盖已有平台）。**独立 agent 审计 4 bug 已修**：1) 围栏正则过严吞掉 ```json{...}\n``` 类格式；2) BudgetExceeded 被派生函数误吞；3) formats 重跑覆盖写；4) canonical.md 缺失 IO 故障扩散整批。tests 38 新增，全测 411 全绿（原 373 + 38）；hard limits 校准为平台真实上限（标题 36 / slide body 100 / caption 50-500 / tweet 280）。**真实冒烟**：seed 1 条 gated content → 3 平台文件齐全。**本次 session 同步**：补勾选+补缺标题（commit 文档尾部）。
 
 ### M2-4 模板渲染引擎（图卡出图）
-- [ ] **目标**：slides JSON → PNG 图卡，零外部服务
+- [x] **目标**：slides JSON → PNG 图卡，零外部服务
 - **步骤**：
   1. `playwright install chromium`
   2. `templates/xhs_card.html`：Jinja2 模板，1080×1440，简洁大字排版（衬线标题+高对比配色，先做一个耐看的，不求多）
@@ -163,6 +163,8 @@
   4. 中文字体：模板里用系统字体栈 `PingFang SC, Noto Sans CJK`，**验收时人眼检查无豆腐块**
 - **验收**：样例 slides 渲染出 PNG，1080×1440，文字清晰不溢出（截图入 repo `docs/samples/` 供对比）；同输入两次渲染输出字节级一致可不要求，视觉一致即可
 - **参考**：TECH_SPEC §5.4
+
+  ✅ 完成于 2026-07-05，commit <待补>，备注：render.py (~250 行 Jinja2 autoescape + Playwright sync API + 多路 chromium 探测 env/snap/playwright-bundled) + templates/xhs_card.html (cover/content/action 三种类型差异化排版，衬线标题+高对比配色，字体栈 PingFang SC → Noto Sans/Serif CJK SC → Microsoft YaHei → sans-serif 兜底) + tests/test_render.py 33 测试。Chromium 探测：本机 `playwright install` 网络挂死（azureedge 拉不下来），退而用 snap chromium `/snap/bin/chromium` 走 `executable_path` 注入——Mac/正常 Linux 走 playwright 内置，无需改代码。Pillow 入 requirements（PNG 尺寸校验用）。**视觉验收**：docs/samples/xhs_card_sample-{001..005}.png 5 张 1080×1440，cover 深蓝→红渐变+金色衬线大标题、content 米底+红色衬线+红线左 border、action 深蓝底+金标题，中文无豆腐块。tests 33 新增，全测 444 全绿（原 411 + 33）。**未做**：M2-4.5 baoyu-image-gen 集成（任务独立可选）。
 
 #### M2-4.5 配图 backend 扩展：baoyu-image-gen 集成（**M0-0 决策新增子任务，可选不阻塞 M2-4 主验收**）
 - **目标**：`pipeline/creators/render.py` 增加 `image_gen.provider == "baoyu"` 分支，subprocess 调 `JimLiu/baoyu-skills` 的 `baoyu-image-gen/scripts/main.ts`，provider 集合由 `gemini|openai` 扩为 12 家（含国内 DashScope/Z.AI/Jimeng/Seedream）
