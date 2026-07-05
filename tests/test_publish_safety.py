@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
+import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
@@ -462,3 +465,150 @@ class TestDryRun:
             (pub.id,),
         ).fetchone()
         assert row["platform_post_id"] == "dry-remote_123"
+
+
+# ── 跨进程并发真锁测试（HARD_PARTS §1 验证要求）────────
+
+
+class TestCrossProcessLock:
+    """HARD_PARTS §1 验证：「并发跑两个 publish 进程处理同一条 queued 记录，
+    断言只有一个成功抢占」。
+
+    SQLite 单连接无跨进程锁场景，必须用 subprocess 启动两个真 python 进程
+    各自打开 conn 模拟并发抢占。WAL 模式下 SQLite 跨进程仍有写锁，因此
+    两个进程的 UPDATE WHERE status='queued' 是串行的——第二个会拿到
+    rowcount=0（因为第一个已经把 status 改为 publishing）。
+    """
+
+    def test_two_processes_only_one_wins(
+        self, tmp_path: Path
+    ) -> None:
+        db_path = tmp_path / "state.db"
+        log_dir = tmp_path / "logs"
+
+        # 准备数据：1 条 queued publication
+        setup_code = f"""
+import sqlite3, json
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+import sys
+sys.path.insert(0, '{Path.cwd()}')
+from pipeline import db
+from pipeline.models import (
+    Topic, Content, Publication, TopicStatus, ContentStatus,
+    PublicationStatus,
+)
+
+conn = sqlite3.connect('{db_path}')
+conn.row_factory = sqlite3.Row
+db.init_db(conn)
+
+now = '2026-07-06T12:00:00+00:00'
+past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+t = Topic(id='t_conc0001', source='rss:test', title='T', url=None,
+    summary=None, content_hash='h-t_conc0001', pillar='ai_daily',
+    score=7.0, score_reason=None,
+    status=TopicStatus.CONSUMED.value,
+    created_at=now, updated_at=now)
+db.insert_topic(conn, t)
+c = Content(id='c_conc0001', topic_id='t_conc0001', pillar='ai_daily',
+    title='C', canonical_path='output/2026-07-06/c_conc0001/canonical.md',
+    formats='["x"]', gate_score_total=27.0,
+    gate_scores='{{"info":9,"fun":9,"view":9}}', gate_verdict='通过',
+    status=ContentStatus.APPROVED.value,
+    created_at=now, updated_at=now)
+db.insert_content(conn, c)
+p = Publication(id='p_conc0001', content_id='c_conc0001', platform='x',
+    account_id='main', scheduled_at=past,
+    published_at=None, platform_post_id=None, platform_url=None,
+    error=None, retry_count=0, status=PublicationStatus.QUEUED.value,
+    created_at=now, updated_at=now)
+db.insert_publication(conn, p)
+conn.close()
+print('SETUP_OK')
+"""
+        r = subprocess.run(
+            [sys.executable, "-c", setup_code],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert "SETUP_OK" in r.stdout, f"setup failed: {r.stderr}"
+
+        # 子进程脚本：safe_publish 同一条 publication
+        child_code = f"""
+import sys, json
+from pathlib import Path
+sys.path.insert(0, '{Path.cwd()}')
+from pipeline import db
+from pipeline.config import PublishConfig
+from pipeline.publishers.base import (
+    AccountConfig, PostBundle, PublishResult, PublisherAdapter,
+)
+from pipeline.publishers.safe_publish import safe_publish
+from pipeline.models import Publication
+
+class QuickMock(PublisherAdapter):
+    platform = 'x'
+    def validate(self, bundle): return []
+    def publish(self, bundle, account, dry_run=False):
+        return PublishResult('child_post_id', 'https://example.com/x', '{{}}')
+
+conn = db.connect('{db_path}')
+pub = db.get_publication(conn, 'p_conc0001')
+adapter = QuickMock()
+cfg = PublishConfig(enabled=True, allowed_platforms=['x'],
+    min_gap_hours=4, max_daily_per_account=3, cross_platform_gap_minutes=30)
+result = safe_publish(
+    conn, pub, adapter, config=cfg,
+    account=AccountConfig(id='main', credentials_path=Path('secrets/x.json')),
+    dry_run=False, now_iso='2026-07-06T12:00:00+00:00',
+    log_dir='{log_dir}',
+)
+print(json.dumps({{'published': result.published, 'reason': result.reason}}))
+"""
+
+        # 同时启动两个子进程（用 Popen 不等返回，并发跑）
+        proc1 = subprocess.Popen(
+            [sys.executable, "-c", child_code],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True,
+        )
+        proc2 = subprocess.Popen(
+            [sys.executable, "-c", child_code],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True,
+        )
+        out1, err1 = proc1.communicate(timeout=30)
+        out2, err2 = proc2.communicate(timeout=30)
+
+        # 解析两边的结果
+        r1 = json.loads(out1.strip().split("\n")[-1])
+        r2 = json.loads(out2.strip().split("\n")[-1])
+
+        # 断言：恰好一个 published=True，另一个 published=False（reason 含 'lock' / 'status'）
+        results = [r1, r2]
+        wins = [r for r in results if r["published"]]
+        losers = [r for r in results if not r["published"]]
+
+        assert len(wins) == 1, (
+            f"expected exactly 1 winner, got {len(wins)}; "
+            f"results={results}"
+        )
+        assert len(losers) == 1, (
+            f"expected exactly 1 loser, got {len(losers)}; "
+            f"results={results}"
+        )
+        # 输家的 reason 应指向锁/状态问题
+        assert (
+            "lock" in losers[0]["reason"].lower()
+            or "status" in losers[0]["reason"].lower()
+        ), f"loser reason unexpected: {losers[0]['reason']!r}"
+
+        # 最终 DB 状态：published（仅一次）
+        conn = db.connect(str(db_path))
+        row = conn.execute(
+            "SELECT status, platform_post_id FROM publications WHERE id='p_conc0001'"
+        ).fetchone()
+        assert row["status"] == PublicationStatus.PUBLISHED.value
+        assert row["platform_post_id"] == "child_post_id"
+        conn.close()
