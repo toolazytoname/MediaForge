@@ -34,7 +34,7 @@
   ✅ 完成于 2026-07-05，commit 23e7911，备注：pipeline/run.py 注册 12 个占位子命令（init-db/ingest/score/create/gate/review/schedule/publish/collect/status/reset/webui），status→exit 0；pytest 收集 0 用例 exit 5（pytest 标准"无测试"非异常）。前置状态：initial commit 已含 .gitignore/requirements.txt/config.example.yaml/pipeline/models.py/各 __init__.py 与 base.py 占位，本任务补齐 run.py 与 venv。
 
 ### M0-2 数据模型与状态机
-- [ ] **目标**：`models.py` + `db.py` + 状态机测试
+- [x] **目标**：`models.py` + `db.py` + 状态机测试
 - **步骤**：
   1. `pipeline/models.py`：按 TECH_SPEC §4 写四个 frozen dataclass + 三个 Status 枚举 + 转移表
   2. `pipeline/utils/ids.py`：`new_id(prefix)` → `<prefix>_<8hex>`
@@ -42,6 +42,8 @@
   4. 测试：合法转移成功；全部非法转移抛异常；乐观锁（状态已变时 transition 抛 `StaleState`）
 - **验收**：`python -m pipeline.run init-db` 生成 state.db 且幂等；`pytest tests/test_db.py -q` 全绿；覆盖所有非法转移路径
 - **参考**：TECH_SPEC §3 §4；HARD_PARTS §5
+
+  ✅ 完成于 2026-07-05，commit 3305151 + d735e50，备注：db.py 398 行（WAL+FK+5 表 DDL+transfer 集中强制），utils/errors.py 含 PipelineError 基类+IllegalTransition/StaleState（其余 SourceError/CreateError/GateError/PublishError/BudgetExceeded 留 M0-3），utils/ids.py new_id(prefix)→8hex。第一轮独立验收 D 项 FAIL（topics/contents/publications from_state 全部 outgoing 非法对未覆盖 36%），返工 commit d735e50 用 `_illegal_pairs()` 从契约表反推补齐：topics 20 + contents 43 + publications 20 = 83 矩阵测试 + contents 乐观锁，共 154 测试。第二轮复验 PASS。
 
 ### M0-3 配置加载与日志
 - [ ] **目标**：config.yaml 加载校验 + 结构化日志
