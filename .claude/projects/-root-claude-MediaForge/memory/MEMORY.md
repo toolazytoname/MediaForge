@@ -1,0 +1,6 @@
+- [M2-5 review 阶段实施心得](m2-5-review-stage.md) — 模板/解析/通知/编排的踩坑与设计要点（commit da805dc）
+- [M3-1 scheduler 排期器心得](m3-1-scheduler.md) — 纯函数 plan() 设计、offset 进位、UNIQUE 幂等、时区分层（commit 94f7798）
+- [M3-2 launchd + flock 心得](m3-2-launchd-flock.md) — 跨进程锁双层防御、plist XML 陷阱、cron 重叠防护语义（commit 5c7dcdb）
+- [M3-3 Web 控制台 v1 心得](m3-3-webui.md) — FastAPI TemplateResponse 新 API、Form vs JSON body、单文件 ≤400 行硬约束（commit ba7310b + 修复 3d353b4）
+- [M4-0 发布决策复核心得](m4-0-decision-audit.md) — 5 项目 GitHub API 复核快照与风险监控要点（commit 8537b76）
+- [M4-1 发布安全框架心得](m4-1-publish-safety.md) — safe_publish 三层防御、INTENT 日志、timeout 清理（commit cf10241）

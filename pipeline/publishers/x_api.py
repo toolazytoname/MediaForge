@@ -106,20 +106,95 @@ def _httpx_post(
     """默认实现：httpx POST → 解析 JSON 返回。
 
     仅在 import httpx 时按需调用；测试注入 fake_post 即可跳过。
-    401/403 → LoginExpired（让编排层停止该平台其他任务）。
+    401/403 → LoginExpired（让编排层停止该平台其他任务；HARD_PARTS §2）。
     其他 4xx/5xx → PublishError（含状态码 + body 摘要）。
+    网络层异常（ConnectError/Timeout/JSONDecodeError）→ PublishError。
     """
+    from pipeline.publishers.base import LoginExpired
     import httpx  # 局部 import：避免模块加载时强依赖
-    resp = httpx.post(url, headers=headers, json=body, timeout=timeout)
+    try:
+        resp = httpx.post(url, headers=headers, json=body, timeout=timeout)
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        raise PublishError(f"X API network error: {e!r}") from e
     sc = resp.status_code
     if sc in (401, 403):
-        raise PublishError(
-            f"X API auth failed ({sc}): login expired?"
+        raise LoginExpired(
+            f"X API auth failed ({sc}): bearer_token revoked/expired; "
+            f"stop all X tasks + alert"
         )
     if sc >= 400:
         snippet = resp.text[:300]
         raise PublishError(f"X API error {sc}: {snippet}")
-    return resp.json()
+    try:
+        return resp.json()
+    except (ValueError, Exception) as e:  # JSONDecodeError = ValueError
+        raise PublishError(
+            f"X API returned non-JSON (sc={sc}): "
+            f"{resp.text[:300]!r}"
+        ) from e
+
+
+# ── partial helpers（HARD_PARTS §1 决策 4） ─────────────────
+
+
+def _tweet_url(post_id: str) -> str:
+    return f"https://x.com/i/status/{post_id}"
+
+
+def _partial_msg(
+    failed_at: int,
+    total: int,
+    published: list[tuple[str, str]],
+    cause: BaseException,
+    *,
+    kind: str,
+) -> str:
+    """统一格式的 partial-published 错误信息，供编排层落 publications.error。
+
+    格式：`<kind> on tweet <i>/<N>: <cause>; partial_published=[
+    (id1, url1), (id2, url2)
+    ]; manual cleanup needed — visit each URL to delete the partial thread.`
+    """
+    if published:
+        pairs = ", ".join(f"({pid!r}, {url})" for pid, url in published)
+        partial = f"[{pairs}]"
+    else:
+        partial = "[]"
+    return (
+        f"{kind} on tweet {failed_at}/{total}: {cause}; "
+        f"partial_published={partial}; "
+        f"manual cleanup needed — visit each URL to delete the partial thread"
+    )
+
+
+def _parse_post_id(
+    resp: object,
+    i: int,
+    total: int,
+    published: list[tuple[str, str]],
+) -> tuple[str, str]:
+    """从 X API v2 返回解析 (post_id, url)；解析失败抛 partial PublishError。"""
+    if not isinstance(resp, dict):
+        raise PublishError(_partial_msg(
+            i, total, published,
+            ValueError(f"non-dict response: {resp!r}"),
+            kind="X API bad response shape",
+        ))
+    data = resp.get("data")
+    if not isinstance(data, dict):
+        raise PublishError(_partial_msg(
+            i, total, published,
+            ValueError(f"missing data dict: {resp!r}"),
+            kind="X API bad response shape",
+        ))
+    post_id = data.get("id")
+    if not isinstance(post_id, str) or not post_id:
+        raise PublishError(_partial_msg(
+            i, total, published,
+            ValueError(f"missing tweet id: {resp!r}"),
+            kind="X API bad response shape",
+        ))
+    return post_id, _tweet_url(post_id)
 
 
 # ── XApiPublisher ──────────────────────────────────────────
@@ -231,7 +306,7 @@ class XApiPublisher(PublisherAdapter):
             "Content-Type": "application/json",
         }
 
-        published_ids: list[str] = []
+        published: list[tuple[str, str]] = []  # [(id, url), ...]
         last_tweet_id: str | None = None
         for i, tweet in enumerate(tweets, 1):
             payload: dict = {"text": tweet}
@@ -240,30 +315,35 @@ class XApiPublisher(PublisherAdapter):
             try:
                 resp = self._post(self._api, headers=headers, body=payload, timeout=30.0)
             except PublishError as e:
-                # 业务异常：重新包一层，把已发 id 一并塞进 message（人工删重帖用）
-                partial = ",".join(published_ids) if published_ids else "(none)"
-                raise PublishError(
-                    f"X API failed on tweet {i}/{len(tweets)}: {e}; "
-                    f"partial_published_ids={partial}; manual cleanup needed"
-                ) from e
+                # LoginExpired 子类透传（不再包一层，否则丢失信号）
+                from pipeline.publishers.base import LoginExpired
+                if isinstance(e, LoginExpired):
+                    raise
+                raise PublishError(_partial_msg(
+                    i, len(tweets), published, e, kind="X API failed",
+                )) from e
             except Exception as e:
-                partial = ",".join(published_ids) if published_ids else "(none)"
-                raise PublishError(
-                    f"X API unexpected error on tweet {i}/{len(tweets)} "
-                    f"(published so far: {partial}): {e!r}"
-                ) from e
+                raise PublishError(_partial_msg(
+                    i, len(tweets), published, e,
+                    kind="X API unexpected error",
+                )) from e
 
-            data = resp.get("data") if isinstance(resp, dict) else None
-            post_id = (data or {}).get("id") if isinstance(data, dict) else None
-            if not post_id:
-                partial = ",".join(published_ids) if published_ids else "(none)"
-                raise PublishError(
-                    f"X API returned no tweet id on tweet {i}/{len(tweets)}; "
-                    f"partial_published_ids={partial}; "
-                    f"response={resp!r}"
-                )
-            published_ids.append(post_id)
+            post_id, post_url = _parse_post_id(resp, i, len(tweets), published)
+            published.append((post_id, post_url))
             last_tweet_id = post_id
+
+        # 全部成功
+        first_id, first_url = published[0]
+        return PublishResult(
+            platform_post_id=first_id,
+            url=first_url,
+            raw_response=json.dumps({
+                "platform": "x",
+                "account": account.id,
+                "thread": [(pid, purl) for pid, purl in published],
+                "tweet_count": len(tweets),
+            }, ensure_ascii=False),
+        )
 
         # 全部成功
         first_id = published_ids[0]
