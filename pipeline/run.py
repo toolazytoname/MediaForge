@@ -2,13 +2,45 @@
 
 所有 TECH_SPEC §2 子命令已注册；M0-2 已填充 init-db（建表幂等），
 其余子命令仍是占位，后续里程碑逐个填实现，argparse 形状不动。
+
+M3-2 新增：每个子命令包一层 stage_lock 装饰器（HARD_PARTS §8），
+防止 cron/launchd 重叠执行。
 """
 from __future__ import annotations
 
 import argparse
+import functools
 import sys
+from pathlib import Path
 
 from pipeline import db
+from pipeline.utils.flock import LockHeld, acquire, release
+
+
+_LOCKS_DIR = Path("locks")
+
+
+def _stage_lock(stage: str):
+    """装饰器：子命令入口加 flock（HARD_PARTS §8 cron 重叠防护）。
+
+    拿到锁 → 执行；拿不到 → 打印提示 + return 0（不报错，
+    让 cron 默默跳过；上一轮还没跑完是常态）。
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapped(args: argparse.Namespace) -> int:
+            lock_path = _LOCKS_DIR / f"{stage}.lock"
+            try:
+                acquire(lock_path)
+            except LockHeld as e:
+                print(f"{stage}: SKIP (lock held: {e})")
+                return 0
+            try:
+                return fn(args)
+            finally:
+                release(lock_path)
+        return wrapped
+    return deco
 
 
 def _not_implemented(name: str) -> int:
@@ -31,6 +63,7 @@ def cmd_init_db(args: argparse.Namespace) -> int:
     return 0
 
 
+@_stage_lock("ingest")
 def cmd_ingest(args: argparse.Namespace) -> int:
     """拉取所有启用的数据源 → 入库 → 去重（HARD_PARTS §5/§8）。
 
@@ -63,6 +96,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 1 if result.failed_sources else 0
 
 
+@_stage_lock("score")
 def cmd_score(args: argparse.Namespace) -> int:
     """给 raw topics 评分 + 选当日 selected。
 
@@ -97,6 +131,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 0
 
 
+@_stage_lock("create")
 def cmd_create(args: argparse.Namespace) -> int:
     """为 selected topics 生成 canonical 长文（M2-1）。
 
@@ -150,6 +185,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     return 0
 
 
+@_stage_lock("gate")
 def cmd_gate(args: argparse.Namespace) -> int:
     """质量门禁：draft → gated/discarded（M2-2）。
 
@@ -191,6 +227,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return 0
 
 
+@_stage_lock("review")
 def cmd_review(args: argparse.Namespace) -> int:
     """生成/读取审核清单（M2-5）。
 
@@ -228,6 +265,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+@_stage_lock("derivative")
 def cmd_derivative(args: argparse.Namespace) -> int:
     """派生平台格式（M2-3 一料多吃）。
 
@@ -276,6 +314,7 @@ def cmd_derivative(args: argparse.Namespace) -> int:
     return 0
 
 
+@_stage_lock("schedule")
 def cmd_schedule(args: argparse.Namespace) -> int:
     """为 approved 内容排期（M3-1）。
 
@@ -350,18 +389,22 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
+@_stage_lock("publish")
 def cmd_publish(args: argparse.Namespace) -> int:
     return _not_implemented("publish")
 
 
+@_stage_lock("collect")
 def cmd_collect(args: argparse.Namespace) -> int:
     return _not_implemented("collect")
 
 
+@_stage_lock("status")
 def cmd_status(args: argparse.Namespace) -> int:
     return _not_implemented("status")
 
 
+@_stage_lock("reset")
 def cmd_reset(args: argparse.Namespace) -> int:
     """reset 是唯一允许的逆向操作，需接收位置参数 id + target status。
     M0-1 仅占位，M1 起接 db.reset_state() 实现。"""

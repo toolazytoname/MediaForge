@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  M3-2 launchd plist — publish-due 每 30 分钟
+  ARCHITECTURE §2: */30 publish-due
+
+  StartInterval=1800（30 分钟）。launchd 没有 cron-like "每 N 分钟"原生支持，
+  用 StartInterval 替代；如需严格整点对齐可改 StartCalendarInterval 多条。
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mediaforge.publish-due</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROJECT_ROOT__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>pipeline.run</string>
+        <string>--config</string>
+        <string>__PROJECT_ROOT__/config.yaml</string>
+        <string>publish</string>
+        <string>--dry-run</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_ROOT__</string>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>StandardOutPath</key>
+    <string>__PROJECT_ROOT__/logs/launchd.publish-due.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_ROOT__/logs/launchd.publish-due.err.log</string>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>

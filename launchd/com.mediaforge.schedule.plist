@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  M3-2 launchd plist — schedule 10:00 每日
+  ARCHITECTURE §2: 10:00+ schedule
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mediaforge.schedule</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROJECT_ROOT__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>pipeline.run</string>
+        <string>--config</string>
+        <string>__PROJECT_ROOT__/config.yaml</string>
+        <string>schedule</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_ROOT__</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>10</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__PROJECT_ROOT__/logs/launchd.schedule.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_ROOT__/logs/launchd.schedule.err.log</string>
+</dict>
+</plist>

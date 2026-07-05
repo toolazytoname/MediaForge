@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  M3-2 launchd plist — ingest + score 06:00 每日
+  ARCHITECTURE §2: 06:00 ingest+score, 06:30 create+gate
+  安装：scripts/install_launchd.sh
+  路径替换：__PROJECT_ROOT__ → 实际项目根（脚本会做）
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mediaforge.ingest-score</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROJECT_ROOT__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>pipeline.run</string>
+        <string>--config</string>
+        <string>__PROJECT_ROOT__/config.yaml</string>
+        <string>ingest</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_ROOT__</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__PROJECT_ROOT__/logs/launchd.ingest-score.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_ROOT__/logs/launchd.ingest-score.err.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
