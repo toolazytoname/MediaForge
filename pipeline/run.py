@@ -277,7 +277,77 @@ def cmd_derivative(args: argparse.Namespace) -> int:
 
 
 def cmd_schedule(args: argparse.Namespace) -> int:
-    return _not_implemented("schedule")
+    """为 approved 内容排期（M3-1）。
+
+    流程（ARCHITECTURE §3.6 + HARD_PARTS §8）：
+      1. 读 approved 内容
+      2. 读已有 publications（含同平台已排期，约束新排期不冲突）
+      3. 调 scheduler.plan() 计算新增排期（纯函数）
+      4. db.insert_publication 落库（UNIQUE(content_id, platform, account_id) 防重）
+    """
+    import sys
+    from datetime import datetime, timezone
+
+    from pipeline.config import load_config
+    from pipeline.models import ContentStatus, PublicationStatus
+    from pipeline.scheduler import plan
+
+    cfg = load_config(args.config)
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        now = datetime.now(timezone.utc).isoformat()
+
+        approved = db.get_contents_by_status(conn, ContentStatus.APPROVED.value)
+        # 已有排期（含所有 status —— schedule 只新增，不改变已存在时间）
+        existing = []
+        for st in PublicationStatus:
+            existing.extend(
+                db.get_publications_by_status(conn, st.value)
+            )
+
+        # platforms 配置 dict：{"x": PlatformAPI, "toutiao": PlatformPlaywright, ...}
+        platforms_cfg = {
+            name: getattr(cfg.platforms, name)
+            for name in cfg.platforms.model_dump()
+        }
+
+        result = plan(
+            approved_contents=approved,
+            platform_configs=platforms_cfg,
+            existing_publications=existing,
+            now_iso=now,
+            min_gap_hours=cfg.publish.min_gap_hours,
+            cross_platform_gap_minutes=cfg.publish.cross_platform_gap_minutes,
+            tz_name=cfg.timezone,
+        )
+
+        # 落库（UNIQUE 约束兜底；幂等：已有排期 → skip，非阻断）
+        import sqlite3 as _sqlite3
+        scheduled = 0
+        skipped = 0
+        failed = 0
+        for pub in result.publications:
+            try:
+                db.insert_publication(conn, pub)
+                scheduled += 1
+            except _sqlite3.IntegrityError as e:
+                # UNIQUE(content_id, platform, account_id) 命中 → 幂等成功
+                skipped += 1
+            except Exception as e:
+                print(
+                    f"schedule: WARN insert failed pub={pub.id}: {e}",
+                    file=sys.stderr,
+                )
+                failed += 1
+    finally:
+        conn.close()
+
+    print(
+        f"schedule: {scheduled} scheduled, "
+        f"{skipped} skipped (already exists), {failed} failed"
+    )
+    return 0 if failed == 0 else 1
 
 
 def cmd_publish(args: argparse.Namespace) -> int:
