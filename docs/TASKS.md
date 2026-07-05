@@ -215,7 +215,7 @@
   ✅ 完成于 2026-07-06，commit 5c7dcdb，备注：pipeline/utils/flock.py + 7 个 launchd plist + 3 个 scripts + 7 测试。装饰器 _stage_lock(stage) 接入 11 个子命令（ingest/score/create/gate/derivative/review/schedule/publish/collect/status/reset），拿不到锁返回 'SKIP' + exit 0，不报警（cron 常态）。plist 用 __PROJECT_ROOT__ 占位符（避免 XML 标签冲突），sed 替换；install_launchd.sh macOS launchctl load/uninstall 幂等；install_cron.sh Linux 备选。backup_db.sh 用 sqlite3 .backup 命令保证一致性（不直接 cp，避免 WAL 中间态）。**关键 bug 修**：1) 初版用 `<PROJECT_ROOT>` 占位符——XML 解析失败（标签冲突），改 `__PROJECT_ROOT__`；2) review-notify plist 注释含 `--` 触发 XML 非法——改 `(notify)`。**真实冒烟**：父进程 acquire(locks/status.lock) → 子进程 `pipeline.run status` 输出 `status: SKIP (lock held)` + rc=0，端到端锁防护生效。全测 492 全绿（原 485 + 7）。
 
 ### M3-3 Web 控制台 v1（Dashboard + 审核台 + 选题池）
-- [ ] **目标**：图形化看板与审核，替代手编 REVIEW.md
+- [x] **目标**：图形化看板与审核，替代手编 REVIEW.md
 - **步骤**：
   1. `pipeline/webui/app.py`：FastAPI + Jinja2 + htmx，按 TECH_SPEC §7 路由契约实现 `/`、`/topics`（含 promote/reject）、`/review`、`/contents/{id}`、`/api/status`
   2. 审核台：卡片流展示 canonical 渲染预览 + 图卡缩略 + 门禁评分评语，approve/reject 按钮走 `transition()`
@@ -223,6 +223,8 @@
   4. UI 层测试：FastAPI TestClient 覆盖每个路由 + 状态机约束（对已 approved 的内容再点 approve 返回错误片段）
 - **验收**：浏览器完成一次完整审核流（看预览→通过 1 篇→打回 1 篇附原因），数据库状态正确；UI 进程关闭不影响 launchd 流水线运行
 - **参考**：TECH_SPEC §7；ARCHITECTURE §3.9
+
+  ✅ 完成于 2026-07-06，commit ba7310b，备注：pipeline/webui/{app.py, templates/*, static/pico.min.css} + 17 测试。FastAPI app factory create_app() + main() 入口（uvicorn）。TECH_SPEC §7 全部 11 路由齐全：Dashboard + /api/status + 选题池（promote/reject）+ 审核台（approve/reject + reason 写入 gate_verdict）+ 发布日历（reschedule/cancel/retry）+ 内容详情（canonical.md → HTML）+ settings（脱敏）。Pico.css v2 vendored（83KB）。htmx swap='outerHTML' + role=alert 错误片段。所有写操作走 db.transition 状态机（UI 受三重锁约束）。retry 路由只改状态不调真实 publish——发布由 cmd_publish 触发且 publish.enabled=false 时整体阻断。**关键 bug 修**：1) Jinja2 'unhashable type: dict'——Starlette 老 API TemplateResponse(name, context) 把 context 当模板名 hash；改新 API `TemplateResponse(request, name, context)`；2) 测试 _seed_content 缺 auto-topic creation——FK 失败；3) POST JSON body vs Form 字段不匹配（FastAPI 422）——测试改 data=。**真实冒烟**：`python -m pipeline.run webui` → uvicorn 监听 127.0.0.1:8787，HTML 正常返回。全测 509 全绿（原 492 + 17）。
 
 ---
 
