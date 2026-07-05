@@ -256,10 +256,12 @@
   ✅ 完成于 2026-07-06，commit cf10241，备注：pipeline/publishers/safe_publish.py + cmd_publish 接线 + 12 测试。M4-1 不实现具体平台 publisher（X/头条/小红书由 M4-2/3 接入），只做通用安全框架 + MockPublisherAdapter 验证。**三层防御**：① config 锁（publish.enabled + allowed_platforms + scheduled_at 检查）—— 任意一项不满足直接返回 SafePublishResult(published=False, reason=...)，未触 DB；② 乐观锁（UPDATE WHERE status='queued' rowcount==1）—— 抢锁失败意味着另一进程已并发；③ UNIQUE(content_id, platform, account_id) 兜底（db.py 已定义）。**INTENT 日志**：调 adapter.publish 前落 `INTENT publish p_xxx platform=x account=main dry_run=False`（logs/pipeline.log）；进程死在发布后落库前 → 重启时 timeout_publishings() 清理 30min 超时的 publishing 记录 → failed + 'manual check needed' 提示（绝不自动重试）。**异常处理**：PublishError → failed + error 字段；其他异常 → failed + 'unexpected:'（不被外层吞）。全测 521 全绿（原 509 + 12）。**关键 bug 修**：1) 'disabled' in reason 断言 vs 'enabled' 反向——改 reason 文本 'publish is disabled' 让关键字唯一；2) 测试 _mock_adapter 内 class Mock platform=platform 让 RHS 在 class body 解析失败——加 plat_value 中间变量。
 
 ### M4-2 X Publisher（官方 API，最简单，先跑通框架）
-- [ ] **目标**：thread 自动发布到 X
+- [x] **目标**：thread 自动发布到 X
 - **步骤**：X API v2（free tier，1500 帖/月够用）；`publishers/x_api.py`：OAuth2 凭据放 secrets；thread 逐条回复链式发布；中途失败记录已发部分（extra 字段），标 failed 人工处理
 - **验收**：测试账号真实发一条 3 段 thread；dry-run 模式全流程日志正确
 - **参考**：TECH_SPEC §5.2
+
+  ✅ 完成于 2026-07-06，commit e1a2c82 + 70c7c7f，备注：x_api.py（XApiPublisher + load_x_credentials + split_thread + _httpx_post + _partial_msg/parse helper），registry 接入（get_adapter/build_adapters），cmd_publish 由 M4-1 "adapter 未注册"占位替换为 registry 分发。XApiPublisher 走 safe_publish 三层防御；401/403 → LoginExpired 让编排层停该平台（eval 修 #1）；partial 信息统一格式 + URL（人工删 X 帖用，eval 修 #2）。22 + 4 = 26 测试，全测 548/548 绿。**未做**：真实账号发 thread 冒烟——OAuth2 App 申请需用户在 X Developer Portal 手动建（CI 不能代）。
 
 ### M4-3 头条 + 小红书 Publisher
 - [ ] **目标**：图文双平台自动发布（按 M0-0 DECISION：小红书集成 XiaohongshuSkills，头条自写 Playwright）
