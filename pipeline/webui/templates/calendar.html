@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}发布日历 · MediaForge{% endblock %}
+{% block content %}
+<h1>发布日历</h1>
+<p>共 {{ publications|length }} 条排期</p>
+
+<table>
+    <thead>
+        <tr><th>id</th><th>content</th><th>platform</th>
+            <th>scheduled_at (UTC)</th><th>status</th><th>actions</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for p in publications %}
+        <tr>
+            <td><code>{{ p.id }}</code></td>
+            <td><code>{{ p.content_id }}</code></td>
+            <td>{{ p.platform }}</td>
+            <td>{{ p.scheduled_at }}</td>
+            <td><span class="badge">{{ p.status }}</span></td>
+            <td>
+                <button hx-post="/publications/{{ p.id }}/reschedule"
+                        hx-vals='{"scheduled_at":"{{ p.scheduled_at }}"}'
+                        hx-swap="outerHTML" hx-target="closest td">
+                    改时间
+                </button>
+                <button hx-post="/publications/{{ p.id }}/cancel"
+                        hx-swap="outerHTML" hx-target="closest td">
+                    取消
+                </button>
+                <button hx-post="/publications/{{ p.id }}/retry"
+                        hx-swap="outerHTML" hx-target="closest td">
+                    重试
+                </button>
+            </td>
+        </tr>
+    {% else %}
+        <tr><td colspan="6">无排期</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

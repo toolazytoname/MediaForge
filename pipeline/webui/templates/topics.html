@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}选题池 · MediaForge{% endblock %}
+{% block content %}
+<h1>选题池</h1>
+<p>当前过滤：<code>status={{ filter or "all" }}</code></p>
+
+<table>
+    <thead>
+        <tr><th>id</th><th>title</th><th>pillar</th><th>score</th><th>status</th><th>actions</th></tr>
+    </thead>
+    <tbody>
+    {% for t in topics %}
+        <tr>
+            <td><code>{{ t.id }}</code></td>
+            <td>{{ t.title }}</td>
+            <td>{{ t.pillar or "-" }}</td>
+            <td>{{ t.score or "-" }}</td>
+            <td><span class="badge">{{ t.status }}</span></td>
+            <td>
+                <button hx-post="/topics/{{ t.id }}/promote"
+                        hx-swap="outerHTML" hx-target="closest td">
+                    加急
+                </button>
+                <button hx-post="/topics/{{ t.id }}/reject"
+                        hx-swap="outerHTML" hx-target="closest td">
+                    废弃
+                </button>
+            </td>
+        </tr>
+    {% else %}
+        <tr><td colspan="6">无选题</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
