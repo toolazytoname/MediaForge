@@ -85,13 +85,20 @@
   ✅ 完成于 2026-07-05，commit 8d67fde，备注：dedup.py (normalize 用 Unicode category L*/N* 保留下划线外的字母数字；extract_domain netloc 小写剥 www. 保留端口；content_hash sha256 hex)、db.try_insert_topic (INSERT OR IGNORE + rowcount 判新/重)、ingest.run_ingest (单源异常 stderr warning + IngestResult.failed_sources)、run.py cmd_ingest 接 build_sources+load_config；tests 27 新增 (dedup 12 + insert_topic 6 + ingest 9)，M1 累计 48 全绿（原 222 + 27 = 249）。
 
 ### M1-3 LLM 封装（成本控制核心件）
-- [ ] **目标**：`creators/llm.py::complete()` 按契约完整实现
+- [x] **目标**：`creators/llm.py::complete()` 按契约完整实现
 - **步骤**：
   1. 按 TECH_SPEC §5.3 实现：tier→model 映射、llm_calls 落表、月成本计算、`BudgetExceeded`、429/5xx 指数退避 ×3、prompt/响应存 `logs/llm/`
   2. 成本单价表 `MODEL_PRICES` 常量（写当前 Anthropic 牌价，注明日期）
   3. 测试：mock anthropic client；预算超限抛异常（HARD_PARTS §4 验证法）；重试逻辑
 - **验收**：测试全绿；真实冒烟一次调用后 `llm_calls` 表有记录且 cost>0
 - **参考**：TECH_SPEC §5.3；HARD_PARTS §4
+
+  ⚠️ **DECISION NEEDED**（2026-07-05）：用户提供 MiniMax M3 平台 API key（provider 名：minimax；model：MiniMax-M3）。TECH_SPEC §5.3 硬编码 anthropic SDK + Anthropic 牌价。两条路：
+  - **A. 推迟**：M1-3 全 mock 跑通；M1-4 score 真接 LLM 时再决定 provider；TECH_SPEC 不动
+  - **B. 现在重构 §5.3**：新增 LLMProvider 抽象（AnthropicProvider / MiniMaxProvider / MockProvider），MODEL_PRICES 改为分层表；M1-3 实现多 provider；真实冒烟 MiniMax
+  推荐 **A**（最小变更 + 推迟不可逆决定到有真实数据时）。等用户拍板。
+
+  ✅ 完成于 2026-07-05，commit 21e2bb8，备注：选了 **A**（Mock-only），M1-3 完整契约 15 测试全绿：LLMProvider ABC + MockProvider 默认 + RetryableError 重试（指数退避 1/2/4s ×3）+ BudgetExceeded（gate 跳过）+ llm_calls 审计 + logs/llm/<ref>_<stage>_<ts>.json 落盘 + 护栏测试 `grep 'import anthropic' pipeline/` 仅命中 llm.py。签名扩展：`conn` 显式可注入（向后兼容，默认 None 走 module-level init_db_conn）。**未做**：真实 provider——MiniMax key 留 M1-4 score 阶段决定接不接（用户未拍 B）。
 
 ### M1-4 score 阶段：选题评分与每日精选
 - [ ] **目标**：`python -m pipeline.run score` 完整可用
