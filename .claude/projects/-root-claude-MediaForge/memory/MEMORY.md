@@ -4,3 +4,4 @@
 - [M3-3 Web 控制台 v1 心得](m3-3-webui.md) — FastAPI TemplateResponse 新 API、Form vs JSON body、单文件 ≤400 行硬约束（commit ba7310b + 修复 3d353b4）
 - [M4-0 发布决策复核心得](m4-0-decision-audit.md) — 5 项目 GitHub API 复核快照与风险监控要点（commit 8537b76）
 - [M4-1 发布安全框架心得](m4-1-publish-safety.md) — safe_publish 三层防御、INTENT 日志、timeout 清理（commit cf10241）
+- [M4-2 X Publisher 心得](m4-2-x-publisher.md) — OAuth2 bearer + chain in_reply_to_tweet_id + LoginExpired 子类 + partial URL 文案统一（commit e1a2c82 + eval fix 70c7c7f）
