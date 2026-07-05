@@ -1,22 +1,34 @@
-"""CLI 入口（argparse 骨架，M0-1 占位实现）。
+"""CLI 入口（argparse 骨架 + 逐步实现）。
 
-所有 TECH_SPEC §2 子命令已注册为占位函数，打印 'not implemented' 后退出 0。
-后续里程碑（M0-2 起）逐个子命令填充实现，argparse 形状不动。
+所有 TECH_SPEC §2 子命令已注册；M0-2 已填充 init-db（建表幂等），
+其余子命令仍是占位，后续里程碑逐个填实现，argparse 形状不动。
 """
 from __future__ import annotations
 
 import argparse
 import sys
 
+from pipeline import db
+
 
 def _not_implemented(name: str) -> int:
-    """M0-1 占位实现。所有子命令的兜底。"""
+    """占位实现。M0-2 起逐个替换。"""
     print(f"{name}: not implemented (M0-1 placeholder)")
     return 0
 
 
 def cmd_init_db(args: argparse.Namespace) -> int:
-    return _not_implemented("init-db")
+    """建表（幂等）。默认 ./state.db；--config 提供的路径不影响 db 位置。
+
+    M0-2 实现：open → init_db → close。多次调用无副作用（HARD_PARTS §5）。
+    """
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+    finally:
+        conn.close()
+    print("init-db: state.db ready")
+    return 0
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
