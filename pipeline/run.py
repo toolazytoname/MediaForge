@@ -195,6 +195,54 @@ def cmd_review(args: argparse.Namespace) -> int:
     return _not_implemented("review")
 
 
+def cmd_derivative(args: argparse.Namespace) -> int:
+    """派生平台格式（M2-3 一料多吃）。
+
+    输入：gated content（已通过门禁）
+    输出：每平台目录（toutiao.md / xiaohongshu/{slides.json,caption.md,tags.txt} / x/thread.md）
+    副作用：contents.formats 字段更新为本次派生成功的平台列表
+
+    单条 CreateError → skip 该条 + log warning；
+    BudgetExceeded → 终止整批。
+    """
+    import sys
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from pipeline.config import load_config
+    from pipeline.creators import llm as llm_mod
+    from pipeline.creators.derivative import run_derivative
+
+    cfg = load_config(args.config)
+    output_root = Path(getattr(args, "output", None) or "output")
+
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        llm_mod.setup_provider_from_env()
+        llm_mod.init_db_conn(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        results = run_derivative(conn, output_root=output_root, now=now)
+    finally:
+        conn.close()
+
+    ok = sum(1 for r in results if not r.failed_platforms)
+    partial = sum(
+        1 for r in results
+        if r.failed_platforms and len(r.failed_platforms) < 3
+    )
+    failed = sum(1 for r in results if len(r.failed_platforms) == 3)
+
+    print(f"derivative: {len(results)} processed, {ok} ok, {partial} partial, {failed} failed")
+    for r in results:
+        if r.failed_platforms:
+            print(
+                f"  {r.content_id}: failed platforms = {r.failed_platforms}",
+                file=sys.stderr,
+            )
+    return 0
+
+
 def cmd_schedule(args: argparse.Namespace) -> int:
     return _not_implemented("schedule")
 
@@ -248,6 +296,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser("create", help="为 selected topics 生成内容")
     sub.add_parser("gate", help="质量门禁")
+    sub.add_parser(
+        "derivative", help="派生平台格式（gated → toutiao/xiaohongshu/x）"
+    )
     review_p = sub.add_parser("review", help="生成/读取审核清单")
     review_p.add_argument(
         "--notify", action="store_true", help="通过 webhook 通知"
@@ -279,6 +330,7 @@ COMMANDS = {
     "score": cmd_score,
     "create": cmd_create,
     "gate": cmd_gate,
+    "derivative": cmd_derivative,
     "review": cmd_review,
     "schedule": cmd_schedule,
     "publish": cmd_publish,
