@@ -142,13 +142,17 @@
   ✅ 真实冒烟补完于 2026-07-05，commit 63154d4，备注：选 A 方案——llm.py 新增 MiniMaxProvider（Anthropic 兼容 /v1/messages 协议），env 注入 MINIMAX_API_KEY / MINIMAX_BASE_URL / MINIMAX_MODEL，回退 ANTHROPIC_* env。MODEL_PRICES 加 MiniMax-M3（0.30/1.20 USD/Mtoken 占位）。setup_provider_from_env()：env 有 key → MiniMax，否则 Mock 默认（无侵入）。JSON 解析三处加防御性围栏剥离（实战 LLM 仍包代码块）。tests/test_minimax_provider.py 21 新增 + test_canonical.py 1 新增（围栏剥离）。**冒烟实测**：ingest 38 → score 5 selected → create 3 ok / 2 fail (outline JSON 结构性错误) → gate 3 discarded (critic 抓 fact blocker 验证门禁真在工作)。失败 2 条记为 M2-3+ 重试策略数据点；discarded 落 critique.md 留档。全测 362 全绿。
 
   ✅ JSON 自动重试补完于 2026-07-05，commit 6bd4568，备注：llm.py 新增 complete_json(prompt, *, stage, parse, ...) 通用助手——JSON 解析失败时拼 fixup prompt（含上次 malformed 输出 + 错误信息）重试一次。canonical._parse_outline / critic._parse_critique / scorer._parse_score 三处 LLM 调用统一接入。tests/test_complete_json.py 11 新增。**冒烟二轮验证**：ingest 38 → score 5 selected → **create 5 ok / 0 fail**（之前 3/5，重试生效）→ gate 4 discarded + 1 failed（critic JSON 二次失败，重试非万能但覆盖大多数）。全测 373 全绿（原 362 + 11）。
-- [ ] **目标**：canonical → 头条长文 / 小红书图卡文案 / X thread
+
+### M2-3 派生格式生成（一料多吃）
+- [x] **目标**：canonical → 头条长文 / 小红书图卡文案 / X thread
 - **步骤**：
   1. `pipeline/creators/derivative.py`：每格式一个函数，输入 canonical.md，输出平台目录（TECH_SPEC/ARCHITECTURE §8 目录约定）
   2. 头条：标题党程度适中的标题 3 选 1 + 正文（分段短、配图占位标记）；小红书：结构化 slides JSON（封面钩子+3-5 内容卡+行动卡）+ caption + tags；X：5-10 条 thread，每条 ≤ 260 字符（英文）
   3. 派生 prompt 各自独立文件放 `prompts/`
 - **验收**：一条 gated content 跑完生成三个平台目录，文件齐全格式合规（测试校验 thread 每条长度、slides JSON schema）
 - **参考**：PRD §3.2
+
+  ✅ 完成于 2026-07-05，commit 98a49de，备注：derivative.py 三平台派生（toutiao 3 候选标题+600-1200 字短文 / xiaohongshu 5-7 张 slide+50-500 字 caption+3-10 tags / x 5-10 条英文 thread）+ run_derivative 编排 + cmd_derivative 入 run.py；ARCHITECTURE §8 输出目录 `output/<date>/<content_id>/{toutiao.md,xiaohongshu/{slides.json,caption.md,tags.txt},x/thread.md}` 严格遵循；走 complete_json 自动重试 + tmp→rename 幂等；formats 字段合并语义（不覆盖已有平台）。**独立 agent 审计 4 bug 已修**：1) 围栏正则过严吞掉 ```json{...}\n``` 类格式；2) BudgetExceeded 被派生函数误吞；3) formats 重跑覆盖写；4) canonical.md 缺失 IO 故障扩散整批。tests 38 新增，全测 411 全绿（原 373 + 38）；hard limits 校准为平台真实上限（标题 36 / slide body 100 / caption 50-500 / tweet 280）。**真实冒烟**：seed 1 条 gated content → 3 平台文件齐全。**本次 session 同步**：补勾选+补缺标题（commit 文档尾部）。
 
 ### M2-4 模板渲染引擎（图卡出图）
 - [ ] **目标**：slides JSON → PNG 图卡，零外部服务
