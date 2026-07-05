@@ -32,7 +32,33 @@ def cmd_init_db(args: argparse.Namespace) -> int:
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
-    return _not_implemented("ingest")
+    """拉取所有启用的数据源 → 入库 → 去重（HARD_PARTS §5/§8）。
+
+    单源失败不阻断（log warning + 跳过）。失败源不视为致命错误，
+    exit code 仍为 0（M0-1 既有约定："有失败项但流程完成 exit 0"）。
+    """
+    from datetime import datetime, timezone
+
+    from pipeline.config import load_config
+    from pipeline.ingest import run_ingest
+    from pipeline.sources.registry import build_sources
+
+    cfg = load_config(args.config)
+    sources = build_sources(cfg.sources)
+    if not sources:
+        print("ingest: no enabled sources (check config.sources)")
+        return 0
+
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        result = run_ingest(conn, sources, now=now)
+    finally:
+        conn.close()
+
+    # 部分或全部源失败 → exit 0（流程完成），但向运维发出信号
+    return 1 if result.failed_sources else 0
 
 
 def cmd_score(args: argparse.Namespace) -> int:
