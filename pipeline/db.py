@@ -206,6 +206,68 @@ def insert_topic(conn: sqlite3.Connection, t: Topic) -> None:
     conn.commit()
 
 
+# summary 入库前最大字符数（TECH_SPEC §3 topics.summary 字段口径）
+_SUMMARY_MAX_CHARS = 2000
+
+
+def try_insert_topic(
+    conn: sqlite3.Connection,
+    raw: "RawItem",
+    source: str,
+    now: str,
+) -> tuple[Topic, bool]:
+    """INSERT OR IGNORE 一条 topic；按 content_hash 去重。
+
+    Args:
+        conn: SQLite 连接
+        raw: SourceAdapter.fetch() 产出的标准化条目
+        source: 数据源标识（如 'rss:hn'）
+        now: ISO8601 UTC 时间字符串
+
+    Returns:
+        (Topic, is_new)
+          - is_new=True：新插入，返回带新 id 的 Topic
+          - is_new=False：content_hash 已存在，返回库中已有 Topic（保留首次
+            入库的 source/title/url 等，重复调用不会覆盖）
+
+    与 insert_topic 区别：本函数用 INSERT OR IGNORE 不抛异常，专为 ingest
+    编排"批量入库 + 重复计数"设计。
+    """
+    from pipeline.sources.base import RawItem  # noqa: F401 — type hint
+    from pipeline.sources.dedup import content_hash
+    from pipeline.utils.ids import new_id
+
+    h = content_hash(raw.title, raw.url)
+    summary = (raw.summary or "")[:_SUMMARY_MAX_CHARS] or None
+
+    new_topic_id = new_id("t")
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO topics
+            (id, source, title, url, summary, content_hash, pillar,
+             score, score_reason, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            new_topic_id, source, raw.title, raw.url, summary, h,
+            None, None, None, TopicStatus.RAW.value, now, now,
+        ),
+    )
+    conn.commit()
+
+    if cur.rowcount == 1:
+        row = conn.execute(
+            "SELECT * FROM topics WHERE id=?", (new_topic_id,)
+        ).fetchone()
+        return _row_to_topic(row), True
+
+    # content_hash 已存在 → 返回已有 Topic（不覆盖）
+    row = conn.execute(
+        "SELECT * FROM topics WHERE content_hash=?", (h,)
+    ).fetchone()
+    return _row_to_topic(row), False
+
+
 def get_topic(conn: sqlite3.Connection, topic_id: str) -> Topic | None:
     row = conn.execute(
         "SELECT * FROM topics WHERE id=?", (topic_id,)
