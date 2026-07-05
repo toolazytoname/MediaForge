@@ -254,7 +254,7 @@ def render_cards(template: str, slides: list[dict], out_dir: Path,
     无外部服务依赖，离线可跑。"""
 ```
 
-- 配图（插画类）走图像生成 API（config `image_gen.provider`: `none|gemini|openai|baoyu`），provider=`none` 时降级为纯模板文字卡——保证无图像 API 也能出片；`baoyu` 走 subprocess 调 `JimLiu/baoyu-skills` 的 `baoyu-image-gen`（11 provider：OpenAI/Azure/Google/OpenRouter/DashScope/Z.AI/Jimeng/Seedream/MiniMax/Replicate/codex-cli），见 evaluation-notes §5
+- 配图（插画类）走图像生成 API（config `image_gen.provider`: `none|gemini|openai|baoyu`），provider=`none` 时降级为纯模板文字卡——保证无图像 API 也能出片；`baoyu` 走 subprocess 调 `JimLiu/baoyu-skills` 的 `baoyu-image-gen`（12 provider：OpenAI/Azure/Google/OpenRouter/DashScope/Z.AI/Jimeng/Seedream/MiniMax/Replicate/codex-cli/Agnes；`--json` 出口返回 `savedImage` 文件路径，API key 走环境变量注入，无需 EXTEND.md），见 evaluation-notes §5
 - 视频封面同理走模板渲染
 
 ### 5.5 （可选增强，非核心路径）Claude Code skills 桥

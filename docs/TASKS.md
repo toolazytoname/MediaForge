@@ -19,7 +19,7 @@
 - **验收**：evaluation-notes.md 中每项有 `DECISION: <采用/参考/放弃> 因为 <理由>`；TASKS.md 受影响任务（M4-2/M4-3/M2 部分）按决策更新描述
 - **参考**：docs/research/opensource-survey.md（必读"第二轮广撒网"节）
 
-  ✅ 完成于 2026-07-05，commit 56e068d/e776e2a，备注：4 项 DECISION 已落 evaluation-notes.md——TrendPublish 参考（移植门禁修订协议/微信排版/防幻觉条款）；小红书采用 XiaohongshuSkills、放弃 xhs-toolkit（已停更）；AiToEarn 放弃（自部署无法无人值守）仅参考其 API 设计与 electron 遗留代码；Pixelle-Video 采用为 VideoEngine 第二引擎（M5-3 已改写）。评估以源码深读替代本地跑通（4 仓库全量 clone 深读，时间盒内完成）。**追加（2026-07-05 傍晚）**：用户补充 baoyu-skills（JimLiu/baoyu-skills，23.1k⭐，MIT）评估，DECISION = §5.5 skills 桥保留 + 唯一抽出 `baoyu-image-gen` 作 §5.4 配图 backend 扩展（M2-4 增子任务 M2-4.5，可选）。已同步 TECH_SPEC §5.4 §5.5、HARD_PARTS §7、M2-4 任务。M2-4.5 集成前需复核 HEAD `baoyu-image-gen` CLI 签名（v2.1.0 与本地同步，低风险）。
+  ✅ 完成于 2026-07-05，commit 56e068d/e776e2a，备注：4 项 DECISION 已落 evaluation-notes.md——TrendPublish 参考（移植门禁修订协议/微信排版/防幻觉条款）；小红书采用 XiaohongshuSkills、放弃 xhs-toolkit（已停更）；AiToEarn 放弃（自部署无法无人值守）仅参考其 API 设计与 electron 遗留代码；Pixelle-Video 采用为 VideoEngine 第二引擎（M5-3 已改写）。评估以源码深读替代本地跑通（4 仓库全量 clone 深读，时间盒内完成）。**追加（2026-07-05 傍晚）**：用户补充 baoyu-skills（JimLiu/baoyu-skills，23.1k⭐，MIT）评估，DECISION = §5.5 skills 桥保留 + 唯一抽出 `baoyu-image-gen` 作 §5.4 配图 backend 扩展（M2-4 增子任务 M2-4.5，可选）。已同步 TECH_SPEC §5.4 §5.5、HARD_PARTS §7、M2-4 任务。M2-4.5 集成前需复核 HEAD `baoyu-image-gen` CLI 签名（v2.1.0 与本地同步，低风险）。**复核（2026-07-05，Fable 5）**：5 个并行核查 agent 对 evaluation-notes 全部事实声明逐条重验源码+GitHub API，**5 项 DECISION 全部维持**；修正细节偏差（TrendPublish 修订采纳规则实为 action 等级优先非「分数单调不降」、XiaohongshuSkills 三处修饰性夸大、baoyu provider 实为 12 家、本机 skills 已同步 HEAD 版本表作废、Pixelle 新增 24h 清理/progress 未接线/显式传 title 三约束），详见 evaluation-notes.md 文末「复核记录」。
 
 ### M0-1 初始化工程与工具链
 - [ ] **目标**：可运行的空项目
@@ -110,7 +110,7 @@
 - [ ] **目标**：`python -m pipeline.run gate` 完整可用——本系统品质的最后防线
 - **步骤**：
   1. `pipeline/gate/anchors/` 准备 6 篇锚点样例（**此步需要用户参与**：请用户提供或确认 2 好/2 中/2 差样例，可先用占位并标记 `⚠️ 需用户校准`）
-  2. `pipeline/gate/critic.py`：批判轮（列三大问题）→ 触发重写（调 canonical 重写入口，带批判意见，最多 `max_rewrites` 次）；重写协议参考 TrendPublish：只许修表达/结构/排版类问题、禁碰事实类问题（事实问题 → 直接 discarded 或留人审），重写后强制复评、总分不降才采纳否则回滚（evaluation-notes §1）
+  2. `pipeline/gate/critic.py`：批判轮（列三大问题）→ 触发重写（调 canonical 重写入口，带批判意见，最多 `max_rewrites` 次）；重写协议参考 TrendPublish：只许修表达/结构/排版类问题、禁碰事实类问题（事实问题 → 直接 discarded 或留人审），重写后强制复评，采纳规则按 TrendPublish `workflow.ts:1112-1126` 真实逻辑移植（action 等级提升即采纳、持平才要求总分不降、新增 blocker/发布权降级则回滚，见 evaluation-notes §1 及复核记录）
   3. `pipeline/gate/scorer.py`：独立评分会话，锚点对比 + 强制 JSON 输出，按 config 阈值判定 gated/discarded
   4. critique.md 落盘；discarded 的文件保留
 - **验收**：HARD_PARTS §3 的验证法——10 篇质量参差样文，门禁排序与人工排序 Spearman > 0.6（此验收需用户参与打标）；分数写入 contents 表
@@ -136,10 +136,10 @@
 - **参考**：TECH_SPEC §5.4
 
 #### M2-4.5 配图 backend 扩展：baoyu-image-gen 集成（**M0-0 决策新增子任务，可选不阻塞 M2-4 主验收**）
-- **目标**：`pipeline/creators/render.py` 增加 `image_gen.provider == "baoyu"` 分支，subprocess 调 `JimLiu/baoyu-skills` 的 `baoyu-image-gen/scripts/main.ts`，provider 集合由 `gemini|openai` 扩为 11 家（含国内 DashScope/Z.AI/Jimeng/Seedream）
+- **目标**：`pipeline/creators/render.py` 增加 `image_gen.provider == "baoyu"` 分支，subprocess 调 `JimLiu/baoyu-skills` 的 `baoyu-image-gen/scripts/main.ts`，provider 集合由 `gemini|openai` 扩为 12 家（含国内 DashScope/Z.AI/Jimeng/Seedream）
 - **步骤**：
-  1. 集成时复核 HEAD `baoyu-image-gen` 是否仍 v2.1.0 与 CLI 签名（v 号已同步，低风险）；具体 API key 入 `secrets/`，provider/model 写 config
-  2. `render.py` 增加 subprocess 调 `npx -y bun ~/.agents/skills/baoyu-image-gen/scripts/main.ts --prompt <text> --image <out.png> --provider X --model Y --json`，从 JSON 出口取 base64 或文件路径
+  1. 集成时复核 HEAD `baoyu-image-gen` 是否仍 v2.1.0 与 CLI 签名（复核实测本机与 HEAD 字节级一致，命令已跑通 `--help`，低风险）；具体 API key 走环境变量注入 subprocess（无需 EXTEND.md），key 存 `secrets/`，provider/model 写 config
+  2. `render.py` 增加 subprocess 调 `npx -y bun ~/.agents/skills/baoyu-image-gen/scripts/main.ts --prompt <text> --image <out.png> --provider X --model Y --json`，从 JSON 出口取 `savedImage` 文件路径（非 base64）
   3. 重试/失败语义与 §5.4 模板渲染一致
 - **验收**：subprocess 成功调通 OpenAI 与 DashScope 各出 1 张图，JSON 解析正确，失败重试与 §5.4 一致；**不在 cron 路径验证**，仅手动 dry-run 跑通
 - **参考**：TECH_SPEC §5.4 §5.5；evaluation-notes §5
@@ -253,7 +253,7 @@
 - [ ] **目标**：`pixelle` 引擎接入 VideoEngine 体系，承接「AI 生成类内容」（知识科普/读书/情感类）；MPT 保持默认兜底（时效资讯量产）
 - **步骤**：
   1. Docker Compose 部署 Pixelle-Video（`ATH-MaaS/Pixelle-Video`，pin image tag）；生图供应商 key（DashScope/RunningHub 按量）入 `secrets/` 与 config
-  2. `creators/video/pixelle.py` 实现 VideoEngine：submit→`POST /api/video/generate/async`（**mode=fixed** 注入我方口播稿，文案主权在创作管道）、poll→`GET /api/tasks/{id}`、fetch→文件下载。适配要点：aspect→frame_template 尺寸目录；style→frame_template+prompt_prefix；duration_s 按语速预估校验；**轮询 404（其任务状态存内存，服务重启即丢）按 failed 处理+重提交**；脚本分段在我方预处理为段落（其 API 未暴露 split_mode）
+  2. `creators/video/pixelle.py` 实现 VideoEngine：submit→`POST /api/video/generate/async`（**mode=fixed** 注入我方口播稿，文案主权在创作管道；显式传 title 避免其 LLM 代写）、poll→`GET /api/tasks/{id}`（**以 status 为准**，progress 对 video 任务未接线恒 null）、fetch→文件下载（**完成任务 24h 后被服务端清理，需及时取**）。适配要点：aspect→frame_template 尺寸目录；style→frame_template+prompt_prefix；duration_s 按语速预估校验；**轮询 404（其任务状态存内存，服务重启即丢）按 failed 处理+重提交**；脚本分段在我方预处理为段落（其 API 未暴露 split_mode，默认 paragraph = `\n\n` 双换行分镜边界）
   3. 每条视频记录生成成本（约 ¥0.5-5/条）入 llm_calls 或独立审计
   4. 引擎路由：config 按内容 pillar/类型选 `mpt` 或 `pixelle`
   5. （时间盒 0.5 天，可选）AIGCPanel 数字人可行性速评，结论进 Backlog
