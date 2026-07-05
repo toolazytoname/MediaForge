@@ -62,7 +62,35 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 def cmd_score(args: argparse.Namespace) -> int:
-    return _not_implemented("score")
+    """给 raw topics 评分 + 选当日 selected。
+
+    单条解析失败 / LLM 异常 → 该条 rejected，不阻断其他条（HARD_PARTS §5）。
+    """
+    from datetime import datetime, timezone
+
+    from pipeline.config import load_config
+    from pipeline.topics.runner import score_all
+
+    cfg = load_config(args.config)
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        result = score_all(
+            conn,
+            pillars=cfg.pillars,
+            quota=cfg.topics.daily_quota,
+            min_score=cfg.topics.min_score,
+            now=now,
+        )
+    finally:
+        conn.close()
+
+    print(
+        f"score: {result.processed} processed, "
+        f"{result.selected} selected, {result.rejected} rejected"
+    )
+    return 0
 
 
 def cmd_create(args: argparse.Namespace) -> int:
