@@ -76,6 +76,20 @@ _VALID_CATEGORIES = frozenset(
 _VALID_SEVERITIES = frozenset({"low", "medium", "high", "blocker"})
 
 
+def _strip_code_fence(text: str) -> str:
+    """剥 ```json ... ``` 或 ``` ... ``` 围栏（防御性 LLM 行为）。"""
+    s = text.strip()
+    if not s.startswith("```"):
+        return s
+    first_nl = s.find("\n")
+    if first_nl == -1:
+        return s
+    body = s[first_nl + 1:]
+    if body.rstrip().endswith("```"):
+        body = body.rstrip()[:-3].rstrip()
+    return body
+
+
 def _parse_problem(obj: dict, *, require_evidence: bool = False) -> Problem:
     if not isinstance(obj, dict):
         raise GateError(f"problem not a dict: {obj!r}")
@@ -96,8 +110,9 @@ def _parse_problem(obj: dict, *, require_evidence: bool = False) -> Problem:
 
 
 def _parse_score(text: str) -> ScoreResult:
+    cleaned = _strip_code_fence(text)
     try:
-        obj = json.loads(text)
+        obj = json.loads(cleaned)
     except json.JSONDecodeError as e:
         raise GateError(f"scorer JSON parse failed: {e}") from e
     if not isinstance(obj, dict):

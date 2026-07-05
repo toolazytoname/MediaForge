@@ -8,9 +8,10 @@
   4. 429 / 5xx 类异常指数退避重试 3 次
   5. prompt 与响应存 logs/llm/ 供调试（文件名=ref_id+stage+时间戳）
 
-M1-3 阶段：默认 provider=MockProvider（不触真实 key）；
-provider 真实接 MiniMax / Anthropic 由用户在 TASKS.md 的 DECISION NEEDED
-上拍板后接入（M1-4 score 阶段首次真用）。
+Providers（M2-2 真实冒烟接入）：
+  - MockProvider：默认（无 key 环境的开发/测试）
+  - MiniMaxProvider：MiniMax M3（OpenAI 兼容 /chat/completions）
+  - AnthropicProvider：占位（M4-2 再接），本期不实现
 
 所有模块禁止直接 import anthropic——CI 守门（tests/test_creators_llm.py
 ::test_anthropic_import_only_in_llm_module）。
@@ -18,6 +19,7 @@ provider 真实接 MiniMax / Anthropic 由用户在 TASKS.md 的 DECISION NEEDED
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from abc import ABC, abstractmethod
@@ -31,11 +33,12 @@ from pipeline.utils.errors import BudgetExceeded
 
 # ── 价格表（USD / 百万 token）────────────────────────────
 # 占位用——Anthropic Sonnet 4.x / Haiku 4.x 牌价写在此。
-# MiniMax 等其他 provider 价格表 M1-4 决定 provider 后补。
+# MiniMax 价格是国产模型参考价位，待真实冒烟后校准。
 
 MODEL_PRICES: dict[str, dict[str, float]] = {
     "claude-sonnet-5": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
+    "MiniMax-M3": {"input": 0.30, "output": 1.20},
 }
 
 # 月度预算硬顶（USD）。生产从 config.budget.monthly_usd 读；测试可 patch。
@@ -100,6 +103,163 @@ class MockProvider(LLMProvider):
         )
 
 
+class MiniMaxProvider(LLMProvider):
+    """MiniMax M3 provider（Anthropic 兼容 /v1/messages 协议）。
+
+    用户实测环境：base_url=https://api.minimaxi.com/anthropic,
+    model=MiniMax-M3，使用 Anthropic Messages API 协议（非 OpenAI 格式）。
+
+    配置（env 注入，避免硬编码凭据——HARD_PARTS §9）：
+      - MINIMAX_API_KEY  必填；与 ANTHROPIC_API_KEY 同时设置时优先 MINIMAX
+      - MINIMAX_BASE_URL 默认 https://api.minimaxi.com/anthropic
+      - MINIMAX_MODEL    默认 MiniMax-M3
+      - MINIMAX_TIMEOUT_S 默认 60
+      - MINIMAX_API_VERSION 默认 2023-06-01
+
+    异常映射：
+      - HTTP 429 / 5xx / 529   → RetryableError（wrapper 重试）
+      - HTTP 4xx（除 429）     → ValueError（契约错误，立即抛）
+      - 网络异常 / 超时         → RetryableError（瞬时错误）
+      - 响应 JSON 残缺         → ValueError（不可重试）
+    """
+
+    DEFAULT_BASE_URL = "https://api.minimaxi.com/anthropic"
+    DEFAULT_MODEL = "MiniMax-M3"
+    DEFAULT_TIMEOUT_S = 60.0
+    DEFAULT_API_VERSION = "2023-06-01"
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str = DEFAULT_BASE_URL,
+        model: str = DEFAULT_MODEL,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+        api_version: str = DEFAULT_API_VERSION,
+    ) -> None:
+        if not api_key:
+            raise ValueError(
+                "MiniMaxProvider: api_key is required "
+                "(set MINIMAX_API_KEY or ANTHROPIC_API_KEY env var)"
+            )
+        self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._timeout_s = timeout_s
+        self._api_version = api_version
+
+    @classmethod
+    def from_env(cls) -> "MiniMaxProvider":
+        """从 env 构造；找不到 key 抛 ValueError（不静默回退）。
+
+        优先使用 MiniMax-* 变量；如未设置则回退到 Anthropic-* 变量
+        （保持与用户实测环境兼容）。
+        """
+        api_key = (
+            os.environ.get("MINIMAX_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+        )
+        if not api_key:
+            raise ValueError(
+                "MiniMaxProvider.from_env: MINIMAX_API_KEY (or "
+                "ANTHROPIC_API_KEY) env var not set"
+            )
+        return cls(
+            api_key=api_key,
+            base_url=os.environ.get(
+                "MINIMAX_BASE_URL",
+                os.environ.get(
+                    "ANTHROPIC_BASE_URL", cls.DEFAULT_BASE_URL
+                ),
+            ),
+            model=os.environ.get(
+                "MINIMAX_MODEL",
+                os.environ.get("ANTHROPIC_MODEL", cls.DEFAULT_MODEL),
+            ),
+            timeout_s=float(
+                os.environ.get("MINIMAX_TIMEOUT_S", cls.DEFAULT_TIMEOUT_S)
+            ),
+            api_version=os.environ.get(
+                "MINIMAX_API_VERSION", cls.DEFAULT_API_VERSION
+            ),
+        )
+
+    def call(
+        self, prompt: str, model: str, max_tokens: int
+    ) -> CompletionResult:
+        # 延迟 import httpx（让 mock 单测不必装 httpx）
+        try:
+            import httpx  # type: ignore[import-not-found]
+        except ImportError as e:  # pragma: no cover
+            raise RuntimeError(
+                "MiniMaxProvider requires httpx; install requirements.txt"
+            ) from e
+
+        url = f"{self._base_url}/v1/messages"
+        headers = {
+            "x-api-key": self._api_key,
+            "anthropic-version": self._api_version,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self._model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+
+        try:
+            resp = httpx.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=self._timeout_s,
+            )
+        except httpx.RequestError as e:
+            # 网络瞬时错误（DNS / TCP / 超时）→ 可重试
+            raise RetryableError(
+                f"MiniMax network error: {type(e).__name__}: {e}"
+            ) from e
+
+        # 429 / 5xx / 529（Anthropic overload）→ 可重试
+        if resp.status_code in (429, 529) or resp.status_code >= 500:
+            raise RetryableError(
+                f"MiniMax HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        if resp.status_code >= 400:
+            raise ValueError(
+                f"MiniMax HTTP {resp.status_code}: {resp.text[:500]}"
+            )
+
+        try:
+            data = resp.json()
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"MiniMax response not JSON: {e}; body={resp.text[:200]}"
+            ) from e
+
+        try:
+            content_blocks = data["content"]
+            text = "".join(
+                block.get("text", "")
+                for block in content_blocks
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+            usage = data.get("usage", {})
+            input_tokens = int(usage.get("input_tokens", 0))
+            output_tokens = int(usage.get("output_tokens", 0))
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(
+                f"MiniMax response malformed: {e}; "
+                f"keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}"
+            ) from e
+
+        return CompletionResult(
+            text=str(text),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+
 # ── Module-level state（测试 / CLI 注入）────────────────
 
 _PROVIDER: LLMProvider = MockProvider()
@@ -116,6 +276,24 @@ def set_provider(provider: LLMProvider) -> None:
     """注入 provider（测试 / CLI 启动时调用）。"""
     global _PROVIDER
     _PROVIDER = provider
+
+
+def setup_provider_from_env() -> LLMProvider:
+    """CLI 启动时调用：env 有 MINIMAX_API_KEY（或 ANTHROPIC_API_KEY）
+    → 用 MiniMax Provider（Anthropic 兼容），否则 Mock。
+
+    Returns:
+        实际使用的 provider（Mock / MiniMax）
+    """
+    if os.environ.get("MINIMAX_API_KEY") or os.environ.get(
+        "ANTHROPIC_API_KEY"
+    ):
+        provider = MiniMaxProvider.from_env()
+        set_provider(provider)
+        return provider
+    # 默认 Mock；不打 warning（M0 时代就靠这个无 key 跑）
+    set_provider(MockProvider())
+    return _PROVIDER
 
 
 def init_db_conn(conn: sqlite3.Connection) -> None:

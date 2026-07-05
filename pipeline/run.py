@@ -40,6 +40,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     from datetime import datetime, timezone
 
     from pipeline.config import load_config
+    from pipeline.creators import llm as llm_mod
     from pipeline.ingest import run_ingest
     from pipeline.sources.registry import build_sources
 
@@ -52,6 +53,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     conn = db.connect("state.db")
     try:
         db.init_db(conn)
+        llm_mod.setup_provider_from_env()  # 兼容真实 LLM 冒烟（M2-2+）
         now = datetime.now(timezone.utc).isoformat()
         result = run_ingest(conn, sources, now=now)
     finally:
@@ -69,12 +71,14 @@ def cmd_score(args: argparse.Namespace) -> int:
     from datetime import datetime, timezone
 
     from pipeline.config import load_config
+    from pipeline.creators import llm as llm_mod
     from pipeline.topics.runner import score_all
 
     cfg = load_config(args.config)
     conn = db.connect("state.db")
     try:
         db.init_db(conn)
+        llm_mod.setup_provider_from_env()
         now = datetime.now(timezone.utc).isoformat()
         result = score_all(
             conn,
@@ -114,6 +118,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     conn = db.connect("state.db")
     try:
         db.init_db(conn)
+        llm_mod.setup_provider_from_env()
         llm_mod.init_db_conn(conn)
         selected = db.get_topics_by_status(conn, TopicStatus.SELECTED.value)
         now = datetime.now(timezone.utc).isoformat()
@@ -163,6 +168,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
     conn = db.connect("state.db")
     try:
         db.init_db(conn)
+        llm_mod.setup_provider_from_env()
         llm_mod.init_db_conn(conn)
         now = datetime.now(timezone.utc).isoformat()
         result = run_gate(conn, gate_cfg=cfg.gate, now=now)
