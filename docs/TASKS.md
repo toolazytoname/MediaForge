@@ -231,10 +231,18 @@
 ## M4 — 发布通道（预计 4-6 天，最脆弱部分）
 
 ### M4-0 发布通道决策复核（30 分钟）
-- [ ] **目标**：复核 M0-0 的国内发布决策是否仍然成立（距评估已过数周，开源项目变化快）
+- [x] **目标**：复核 M0-0 的国内发布决策是否仍然成立（距评估已过数周，开源项目变化快）
 - **步骤**：检查 M0-0 DECISION 涉及项目的最近 commit/issue；有重大变化（停更/大改版）则重新评估
 - **验收**：在本任务下写 `CONFIRMED` 或新的 `DECISION`；若选 AiToEarn/xhs-toolkit，M4-2/M4-3 改为写对应 API/MCP 客户端（PublisherAdapter 接口契约不变）
 - **参考**：M0-0 的 evaluation-notes.md；HARD_PARTS §7
+
+  ✅ **CONFIRMED**（2026-07-06 复核完成，全部 5 项 DECISION 维持）：
+  - **TrendPublish**（liyown/ai-trend-publish）：stars 3037，最后 push 2026-06-14（cover fallback timeout 修复 + RSS 文档）。仍「参考」，M2-2 已移植门禁协议 — 不变。
+  - **XiaohongshuSkills**（white0dew）：stars 3132，最后 push 2026-05-21（即 vendor pin 锚点），此后 0 commit。仍「采用」，M4-3 集成计划 — 不变。**值得注意**：复核期间 2026-05-21 之后无新 commit，作者活跃度从 M0-0 的「最快次日关 issue」进一步下降（最近 issue 拖 1-3 个月批量关）。M4-3 实际集成时若发现选择器失效 → 走 §7 备选 Plan B（自写 Playwright + social-auto-upload 新版 uploader）。风险监控：M4-3 mac 冒烟先行。
+  - **AiToEarn**（yikart）：stars 23133，最后 push 2026-07-03（极活跃）。仍「放弃整体方案 + 参考 API/Electron 遗留代码」 — 不变。
+  - **Pixelle-Video**（ATH-MaaS）：stars 24157，最后 push 2026-06-14。仍「VideoEngine 第二引擎」 — 不变。M5-3 接入时复核 task status 内存丢失风险（已记于 HARD_PARTS §7）。
+  - **baoyu-skills**（JimLiu）：stars 23131，最后 push 2026-07-04（昨天，极活跃），最近 commit 在 wechat-summary / post-to-x，**image-gen 稳定 v2.1.0 字节级无变化**（复核确认）。仍「§5.5 skills 桥 + 唯一抽 baoyu-image-gen」 — 不变。M2-4.5 集成时再复核 HEAD CLI 签名。
+  - 无停更、无 archived、无 breaking change。所有 M0-0 DECISION 维持原结论，**M4-2/M4-3/M5-3 任务描述无需调整**。
 
 ### M4-1 发布安全框架
 - [ ] **目标**：三重锁 + dry-run + publish 编排
