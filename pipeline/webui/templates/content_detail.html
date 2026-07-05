@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}内容详情 · MediaForge{% endblock %}
+{% block content %}
+<h1>内容详情</h1>
+<p><strong>[{{ content.id }}]</strong> {{ content.title }}</p>
+<table>
+    <tr><th>pillar</th><td>{{ content.pillar }}</td></tr>
+    <tr><th>status</th><td><span class="badge">{{ content.status }}</span></td></tr>
+    <tr><th>gate_score</th><td>{{ content.gate_score_total }} / 30</td></tr>
+    <tr><th>gate_verdict</th><td>{{ content.gate_verdict or "-" }}</td></tr>
+    <tr><th>canonical</th><td><code>{{ content.canonical_path }}</code></td></tr>
+    <tr><th>formats</th><td><code>{{ content.formats }}</code></td></tr>
+    <tr><th>created</th><td>{{ content.created_at }}</td></tr>
+</table>
+
+<h2>canonical 预览</h2>
+<div>{{ canonical_html | safe }}</div>
+{% endblock %}

@@ -416,7 +416,17 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
 
 def cmd_webui(args: argparse.Namespace) -> int:
-    return _not_implemented("webui")
+    """启动本地 Web 控制台（M3-3）。
+
+    绑定 config.webui.host:port（默认 127.0.0.1:8787）。
+    与 launchd 流水线独立——UI 挂了 cron 照跑。
+    """
+    try:
+        from pipeline.webui.app import main as webui_main
+    except ImportError as e:
+        print(f"webui: fastapi/uvicorn not installed: {e}")
+        return 1
+    return webui_main()
 
 
 def build_parser() -> argparse.ArgumentParser:
