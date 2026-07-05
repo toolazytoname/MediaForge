@@ -24,6 +24,9 @@ from pipeline.models import (
     PublicationStatus,
     Topic,
     TopicStatus,
+    TOPIC_TRANSITIONS,
+    CONTENT_TRANSITIONS,
+    PUBLICATION_TRANSITIONS,
 )
 from pipeline.utils.errors import (
     IllegalTransition,
@@ -101,6 +104,84 @@ def _pub(content_id: str, **kw) -> Publication:
     )
     base.update(kw)
     return Publication(**base)
+
+
+# ── 状态机全矩阵覆盖（补 D 项：每个 from_state 的全部非法 outgoing） ──
+#
+# 每个 status 的 outgoing 集合从契约表 *_TRANSITIONS 取，禁止手工列——改契约
+# 自动同步。覆盖 from_state 全集 × to_state 全集 - 合法对 = 非法对全集。
+
+_ALL_TOPIC_STATES = (
+    TopicStatus.RAW, TopicStatus.SCORED, TopicStatus.SELECTED,
+    TopicStatus.CONSUMED, TopicStatus.REJECTED,
+)
+_ALL_CONTENT_STATES = (
+    ContentStatus.DRAFT, ContentStatus.GATED, ContentStatus.APPROVED,
+    ContentStatus.REJECTED_BY_HUMAN, ContentStatus.DISCARDED,
+    ContentStatus.FAILED, ContentStatus.DONE,
+)
+_ALL_PUBLICATION_STATES = (
+    PublicationStatus.QUEUED, PublicationStatus.PUBLISHING,
+    PublicationStatus.PUBLISHED, PublicationStatus.FAILED,
+    PublicationStatus.CANCELLED,
+)
+
+
+def _illegal_pairs(states, transitions_table):
+    """从契约表反推所有非法 (from, to) 对（含自循环与跳级）。"""
+    pairs = []
+    for f in states:
+        for t in states:
+            if t not in transitions_table.get(f, set()):
+                pairs.append((f, t))
+    return pairs
+
+
+_TOPIC_ILLEGAL_PAIRS = _illegal_pairs(_ALL_TOPIC_STATES, TOPIC_TRANSITIONS)
+_CONTENT_ILLEGAL_PAIRS = _illegal_pairs(_ALL_CONTENT_STATES, CONTENT_TRANSITIONS)
+_PUB_ILLEGAL_PAIRS = _illegal_pairs(_ALL_PUBLICATION_STATES, PUBLICATION_TRANSITIONS)
+
+
+@pytest.mark.parametrize("from_state,to_state", _TOPIC_ILLEGAL_PAIRS)
+def test_topic_every_illegal_pair_rejected(
+    conn, topic_id, from_state, to_state
+):
+    """topics 全 25 对 - 5 合法 = 20 非法，全部 IllegalTransition。"""
+    conn.execute(
+        "UPDATE topics SET status=? WHERE id=?",
+        (from_state, topic_id),
+    )
+    conn.commit()
+    with pytest.raises(IllegalTransition):
+        db.transition(conn, "topics", topic_id, from_state, to_state)
+
+
+@pytest.mark.parametrize("from_state,to_state", _CONTENT_ILLEGAL_PAIRS)
+def test_content_every_illegal_pair_rejected(
+    conn, content_id, from_state, to_state
+):
+    """contents 全 49 对 - 14 合法 = 35 非法，全部 IllegalTransition。"""
+    conn.execute(
+        "UPDATE contents SET status=? WHERE id=?",
+        (from_state, content_id),
+    )
+    conn.commit()
+    with pytest.raises(IllegalTransition):
+        db.transition(conn, "contents", content_id, from_state, to_state)
+
+
+@pytest.mark.parametrize("from_state,to_state", _PUB_ILLEGAL_PAIRS)
+def test_publication_every_illegal_pair_rejected(
+    conn, pub_id, from_state, to_state
+):
+    """publications 全 25 对 - 6 合法 = 19 非法，全部 IllegalTransition。"""
+    conn.execute(
+        "UPDATE publications SET status=? WHERE id=?",
+        (from_state, pub_id),
+    )
+    conn.commit()
+    with pytest.raises(IllegalTransition):
+        db.transition(conn, "publications", pub_id, from_state, to_state)
 
 
 # ── Connect / init_db ─────────────────────────────────────
@@ -521,6 +602,23 @@ def test_content_terminal_states_cannot_transition(
     with pytest.raises(IllegalTransition):
         db.transition(conn, "contents", content_id,
                       terminal_status, ContentStatus.GATED)
+
+
+def test_content_optimistic_lock_stale_state(conn, content_id):
+    """contents 表的乐观锁：手动 UPDATE 改 status 后 transition 抛 StaleState。"""
+    db.transition(conn, "contents", content_id,
+                  ContentStatus.DRAFT, ContentStatus.GATED)
+    # 模拟另一进程把它跳到了 approved
+    conn.execute(
+        "UPDATE contents SET status=? WHERE id=?",
+        (ContentStatus.APPROVED, content_id),
+    )
+    conn.commit()
+    with pytest.raises(StaleState) as exc_info:
+        db.transition(conn, "contents", content_id,
+                      ContentStatus.GATED, ContentStatus.APPROVED)
+    assert exc_info.value.expected_status == ContentStatus.GATED
+    assert exc_info.value.actual_status == ContentStatus.APPROVED
 
 
 # ── State machine: publications ────────────────────────────
