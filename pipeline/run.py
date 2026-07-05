@@ -146,7 +146,43 @@ def cmd_create(args: argparse.Namespace) -> int:
 
 
 def cmd_gate(args: argparse.Namespace) -> int:
-    return _not_implemented("gate")
+    """质量门禁：draft → gated/discarded（M2-2）。
+
+    单条 GateError/CreateError → skip 该条 + log warning；
+    BudgetExceeded → 终止整批。
+    """
+    import sys
+    from datetime import datetime, timezone
+
+    from pipeline.config import load_config
+    from pipeline.creators import llm as llm_mod
+    from pipeline.gate import run_gate
+
+    cfg = load_config(args.config)
+
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        llm_mod.init_db_conn(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        result = run_gate(conn, gate_cfg=cfg.gate, now=now)
+    finally:
+        conn.close()
+
+    print(
+        f"gate: {result.processed} processed, "
+        f"{result.gated_count} gated, "
+        f"{result.discarded_count} discarded, "
+        f"{result.failed_count} failed"
+    )
+    # 失败条目细节打 stderr，便于运维定位
+    for o in result.outcomes:
+        if o.final_status in ("failed", "discarded"):
+            print(
+                f"  {o.final_status}: {o.content_id} — {o.reason}",
+                file=sys.stderr,
+            )
+    return 0
 
 
 def cmd_review(args: argparse.Namespace) -> int:
