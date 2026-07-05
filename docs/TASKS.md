@@ -74,13 +74,15 @@
   ✅ 完成于 2026-07-05，commit dd58647，备注：base.py 30 行（RawItem frozen + ABC + SourceError re-export §7 唯一源）、rss.py 116 行（feedparser + dated desc / undated 末位 + summary≤2000 + ISO8601 UTC + 网络/解析异常包 SourceError）、registry.py 60 行（仅 enabled、未知 type → ValueError）；tests 21 新增（7 base + 9 rss + 5 registry）+ 3 本地 fixture，全量 222 全绿（原 201）。独立 agent 审计：0 critical bug，几个 smell 可辩护（bozo best-effort、空 title 留 M1-2 入库时校验、ISO `+00:00` 格式 TECH_SPEC 未 pin）。**未做**：手工冒烟真实 RSS（用户授权下会话跳过）——冒烟代码一行 `python -c "from pipeline.sources.registry import build_sources; from pipeline.config import load_config; [print(s.name, len(s.fetch())) for s in build_sources(load_config('config.example.yaml').sources) if s.name=='rss:hn']"`。
 
 ### M1-2 ingest 编排：入库与去重
-- [ ] **目标**：`python -m pipeline.run ingest` 完整可用
+- [x] **目标**：`python -m pipeline.run ingest` 完整可用
 - **步骤**：
   1. `pipeline/run.py` 的 ingest 子命令：遍历 registry 全部源 → fetch → 计算 `content_hash = sha256(normalize(title)+domain)`（normalize：小写、去空白/标点）→ `INSERT OR IGNORE`
   2. 单源失败：log warning，继续其他源
   3. 打印摘要行 `ingest: N fetched, N new, N dup`
 - **验收**：跑两遍第二遍全 dup；某源 URL 故意写错时其他源正常入库；测试覆盖去重与单源失败
 - **参考**：HARD_PARTS §5；ARCHITECTURE §3.1
+
+  ✅ 完成于 2026-07-05，commit 8d67fde，备注：dedup.py (normalize 用 Unicode category L*/N* 保留下划线外的字母数字；extract_domain netloc 小写剥 www. 保留端口；content_hash sha256 hex)、db.try_insert_topic (INSERT OR IGNORE + rowcount 判新/重)、ingest.run_ingest (单源异常 stderr warning + IngestResult.failed_sources)、run.py cmd_ingest 接 build_sources+load_config；tests 27 新增 (dedup 12 + insert_topic 6 + ingest 9)，M1 累计 48 全绿（原 222 + 27 = 249）。
 
 ### M1-3 LLM 封装（成本控制核心件）
 - [ ] **目标**：`creators/llm.py::complete()` 按契约完整实现
