@@ -101,13 +101,15 @@
   ✅ 完成于 2026-07-05，commit 21e2bb8，备注：选了 **A**（Mock-only），M1-3 完整契约 15 测试全绿：LLMProvider ABC + MockProvider 默认 + RetryableError 重试（指数退避 1/2/4s ×3）+ BudgetExceeded（gate 跳过）+ llm_calls 审计 + logs/llm/<ref>_<stage>_<ts>.json 落盘 + 护栏测试 `grep 'import anthropic' pipeline/` 仅命中 llm.py。签名扩展：`conn` 显式可注入（向后兼容，默认 None 走 module-level init_db_conn）。**未做**：真实 provider——MiniMax key 留 M1-4 score 阶段决定接不接（用户未拍 B）。
 
 ### M1-4 score 阶段：选题评分与每日精选
-- [ ] **目标**：`python -m pipeline.run score` 完整可用
+- [x] **目标**：`python -m pipeline.run score` 完整可用
 - **步骤**：
   1. `pipeline/topics/scorer.py`：对每条 raw topic 构造评分 prompt（含 config 中各支柱描述），cheap 档调用，输出 JSON `{pillar, score, reason}`；解析失败重试 1 次后标 rejected
   2. `pipeline/topics/selector.py`：当日 scored 中 score ≥ config `topics.min_score`（默认 6）按分排序取 top `daily_quota`，转 selected，其余保持 scored（明日仍有机会，3 天后过期转 rejected）
   3. 评分与转移同事务
 - **验收**：mock LLM 测试全绿；真实冒烟：ingest+score 后 `status` 显示合理分布；同一 topic 不会被评两次
 - **参考**：ARCHITECTURE §3.2
+
+  ✅ 完成于 2026-07-05，commit <待补>，备注：scorer.py 192 行（cheap 档 + JSON 解析 + 校验 + 字段写入+状态转移；解析失败重试 1 次；RetryableError 穷尽转 rejected 不阻塞）、selector.py 55 行（按 score desc 取 quota 个；走 db.transition 走状态机）、runner.py 76 行（编排+注入 llm 模块级状态+ScoreRunResult）、run.py cmd_score 薄壳；tests 19 新增（scorer 7 + selector 8 + runner 4），M1 累计 82 全绿（原 63 + 19）。**未做**：真实冒烟——provider 仍 deferred 到 DECISION NEEDED 拍板（用户提 MiniMax 便宜但未明确选 B）。
 
 ---
 
