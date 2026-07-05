@@ -22,7 +22,7 @@
   ✅ 完成于 2026-07-05，commit 56e068d/e776e2a，备注：4 项 DECISION 已落 evaluation-notes.md——TrendPublish 参考（移植门禁修订协议/微信排版/防幻觉条款）；小红书采用 XiaohongshuSkills、放弃 xhs-toolkit（已停更）；AiToEarn 放弃（自部署无法无人值守）仅参考其 API 设计与 electron 遗留代码；Pixelle-Video 采用为 VideoEngine 第二引擎（M5-3 已改写）。评估以源码深读替代本地跑通（4 仓库全量 clone 深读，时间盒内完成）。**追加（2026-07-05 傍晚）**：用户补充 baoyu-skills（JimLiu/baoyu-skills，23.1k⭐，MIT）评估，DECISION = §5.5 skills 桥保留 + 唯一抽出 `baoyu-image-gen` 作 §5.4 配图 backend 扩展（M2-4 增子任务 M2-4.5，可选）。已同步 TECH_SPEC §5.4 §5.5、HARD_PARTS §7、M2-4 任务。M2-4.5 集成前需复核 HEAD `baoyu-image-gen` CLI 签名（v2.1.0 与本地同步，低风险）。**复核（2026-07-05，Fable 5）**：5 个并行核查 agent 对 evaluation-notes 全部事实声明逐条重验源码+GitHub API，**5 项 DECISION 全部维持**；修正细节偏差（TrendPublish 修订采纳规则实为 action 等级优先非「分数单调不降」、XiaohongshuSkills 三处修饰性夸大、baoyu provider 实为 12 家、本机 skills 已同步 HEAD 版本表作废、Pixelle 新增 24h 清理/progress 未接线/显式传 title 三约束），详见 evaluation-notes.md 文末「复核记录」。
 
 ### M0-1 初始化工程与工具链
-- [ ] **目标**：可运行的空项目
+- [x] **目标**：可运行的空项目
 - **步骤**：
   1. `git init`；写 `.gitignore`（`.venv/ secrets/ config.yaml state.db logs/ output/ backups/ locks/ __pycache__/`）
   2. 建 venv；写 `requirements.txt`：`anthropic pydantic pyyaml httpx feedparser jinja2 playwright pytest pytest-cov`
@@ -30,6 +30,8 @@
   4. 首次 commit
 - **验收**：`python -m pipeline.run status` 打印占位输出且 exit 0；`pytest` 收集 0 个用例不报错
 - **参考**：TECH_SPEC §1 §2
+
+  ✅ 完成于 2026-07-05，commit 23e7911，备注：pipeline/run.py 注册 12 个占位子命令（init-db/ingest/score/create/gate/review/schedule/publish/collect/status/reset/webui），status→exit 0；pytest 收集 0 用例 exit 5（pytest 标准"无测试"非异常）。前置状态：initial commit 已含 .gitignore/requirements.txt/config.example.yaml/pipeline/models.py/各 __init__.py 与 base.py 占位，本任务补齐 run.py 与 venv。
 
 ### M0-2 数据模型与状态机
 - [ ] **目标**：`models.py` + `db.py` + 状态机测试
