@@ -116,7 +116,7 @@
 ## M2 — 创作与门禁（预计 3-5 天，系统灵魂）
 
 ### M2-1 canonical 创作管道
-- [ ] **目标**：selected topic → 深度长文 markdown
+- [x] **目标**：selected topic → 深度长文 markdown
 - **步骤**：
   1. `pipeline/creators/canonical.py`：两段式——先调 LLM 产出大纲+核心观点（强制回答"作者的一句话观点是什么"），再成文（1500-3000 字，创作 prompt 存 `pipeline/creators/prompts/canonical.md` 便于迭代）；prompt 移植 TrendPublish 防幻觉条款（商业状态/定价/参数只有来源明确写出才可表述，见 evaluation-notes §1 移植清单）
   2. 若 topic 有 url：httpx 抓原文正文（trafilatura 或简单提取，失败则只用 title+summary）作为素材
@@ -124,6 +124,8 @@
   4. contents 表插入记录（status=draft），topic 转 consumed
 - **验收**：测试（mock LLM）覆盖 tmp-rename 幂等；真实冒烟产出一篇你自己读得下去的长文
 - **参考**：ARCHITECTURE §3.3；HARD_PARTS §5
+
+  ✅ 完成于 2026-07-05，commit <待补>，备注：source_fetcher.py (~65 行 httpx + 简单 HTML 提取, 错则 None)、canonical.py (~190 行 两段式 LLM 创作, tmp→rename, BudgetExceeded 审计发现并修复 上抛不吞)、prompts/canonical_outline.md + canonical_essay.md (防幻觉条款移植)、run.py cmd_create (单条 CreateError skip + BudgetExceeded 终止); tests 11 新增, 全量 294 全绿 (原 283 + 11)。独立 agent 审计 PASS, 修 2 问题 (BudgetExceeded 被吞 + max_tokens 偏紧)。**未做**: 真实冒烟一篇长文 (provider DECISION NEEDED 仍挂着)。
 
 ### M2-2 质量门禁
 - [ ] **目标**：`python -m pipeline.run gate` 完整可用——本系统品质的最后防线
