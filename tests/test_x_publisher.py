@@ -420,3 +420,127 @@ class TestSafePublishXEndToEnd:
         ).fetchone()
         assert row["status"] == PublicationStatus.PUBLISHED.value
         assert (row["platform_post_id"] or "").startswith("dry-")
+
+    def test_partial_thread_failure_writes_partial_to_db_error(
+        self, tmp_path: Path,
+    ) -> None:
+        """端到端：mid-failure 后 publications.error 含 partial_published URL（人工删重帖用）。"""
+        from pipeline.publishers.x_api import XApiPublisher
+        from pipeline.publishers.safe_publish import safe_publish
+
+        conn = _conn(tmp_path)
+        pub, thread_path = _seed_publication(
+            conn, content_id="c_xepart", out_root=tmp_path,
+        )
+
+        counter = {"n": 0}
+
+        def fake_post(url, *, headers, body, timeout):
+            counter["n"] += 1
+            if counter["n"] <= 2:
+                return {"data": {"id": f"id{counter['n']}", "text": "x"}}
+            raise PublishError("server 500")
+
+        adapter = XApiPublisher(bearer_token="dummy", http_post=fake_post)
+        cfg = PublishConfig(
+            enabled=True, allowed_platforms=["x"],
+            min_gap_hours=4, max_daily_per_account=3,
+            cross_platform_gap_minutes=30,
+        )
+        account = AccountConfig(id="main", credentials_path=Path("secrets/x_main.json"))
+        result = safe_publish(
+            conn, pub, adapter, config=cfg, account=account,
+            dry_run=False, now_iso=_NOW_ISO,
+        )
+
+        assert result.published is False
+        row = conn.execute(
+            "SELECT status, error FROM publications WHERE id=?",
+            (pub.id,),
+        ).fetchone()
+        assert row["status"] == PublicationStatus.FAILED.value
+        err = row["error"] or ""
+        assert "partial_published" in err
+        # 已发 2 条 URL 应在 error 字段里
+        assert "https://x.com/i/status/id1" in err
+        assert "https://x.com/i/status/id2" in err
+        assert "manual cleanup" in err.lower()
+
+
+# ── LoginExpired（401/403 → 抛 LoginExpired 让编排层停该平台）───
+
+
+class TestLoginExpired:
+    def test_401_raises_login_expired(self, tmp_path: Path) -> None:
+        """契约：401/403 → LoginExpired（PublishError 子类）—— §2 风控决策。"""
+        from pipeline.publishers.base import LoginExpired
+        from pipeline.publishers.x_api import XApiPublisher, _httpx_post
+
+        # 注入 fake httpx：401
+        from unittest.mock import patch, MagicMock
+
+        fake_resp = MagicMock()
+        fake_resp.status_code = 401
+        fake_resp.text = "Unauthorized"
+
+        fake_client = MagicMock()
+        fake_client.post.return_value = fake_resp
+
+        with patch("httpx.post", fake_client.post):
+            try:
+                _httpx_post(
+                    "https://api.twitter.com/2/tweets",
+                    headers={}, body={}, timeout=10,
+                )
+                assert False, "should have raised"
+            except LoginExpired as e:
+                # 401 → LoginExpired；要 stop all X tasks
+                assert "auth failed" in str(e).lower() or "401" in str(e)
+
+    def test_5xx_raises_publish_error_not_login_expired(self) -> None:
+        """非 401/403 的 4xx/5xx → 业务 PublishError（不让编排层误停平台）。"""
+        from pipeline.publishers.base import LoginExpired
+        from pipeline.publishers.x_api import _httpx_post
+        from unittest.mock import patch, MagicMock
+
+        fake_resp = MagicMock()
+        fake_resp.status_code = 503
+        fake_resp.text = "Service Unavailable"
+
+        fake_client = MagicMock()
+        fake_client.post.return_value = fake_resp
+
+        with patch("httpx.post", fake_client.post):
+            try:
+                _httpx_post("u", headers={}, body={}, timeout=10)
+                assert False, "should have raised"
+            except PublishError as e:
+                assert not isinstance(e, LoginExpired)
+                assert "503" in str(e)
+
+
+# ── partial 文案统一性 ──────────────────────────────────────
+
+
+class TestPartialMsgFormat:
+    def test_partial_msg_includes_url_and_kind(self) -> None:
+        """partial 错误信息含 kind + URL + 'manual cleanup' 关键字。"""
+        from pipeline.publishers.x_api import _partial_msg
+
+        published = [("id1", "https://x.com/i/status/id1")]
+        msg = _partial_msg(
+            failed_at=3, total=5, published=published,
+            cause=ValueError("boom"), kind="X API failed",
+        )
+        assert "X API failed" in msg
+        assert "3/5" in msg
+        assert "https://x.com/i/status/id1" in msg
+        assert "manual cleanup" in msg.lower()
+
+    def test_partial_msg_empty_published(self) -> None:
+        from pipeline.publishers.x_api import _partial_msg
+        msg = _partial_msg(
+            failed_at=1, total=3, published=[],
+            cause=ValueError("boom"), kind="X API failed",
+        )
+        assert "partial_published=[]" in msg
