@@ -36,6 +36,19 @@ DEFAULT_OUTPUT_ROOT = Path("output")
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _OUTLINE_PROMPT_PATH = _PROMPTS_DIR / "canonical_outline.md"
 _ESSAY_PROMPT_PATH = _PROMPTS_DIR / "canonical_essay.md"
+# 重写 prompt（M2-2 gate 用；不在 prompts/ 下避免与创作 prompt 混用）
+_REWRITE_PROMPT_PATH = Path(__file__).parent.parent / "gate" / "prompts" / "rewrite.md"
+
+
+def _render_rewrite_prompt(
+    title: str, canonical_md: str, critique_text: str
+) -> str:
+    tpl = _REWRITE_PROMPT_PATH.read_text(encoding="utf-8")
+    return tpl.format(
+        title=title,
+        canonical_md=canonical_md,
+        critique_text=critique_text,
+    )
 
 
 @dataclass(frozen=True)
@@ -231,5 +244,107 @@ def create_one(
         gate_verdict=None,
         status=ContentStatus.DRAFT.value,
         created_at=now,
+        updated_at=now,
+    )
+
+
+def rewrite_one(
+    conn: sqlite3.Connection,
+    content: Content,
+    *,
+    critique_text: str,
+    now: str,
+) -> Content:
+    """基于 critic 意见重写已存在的 canonical 长文（M2-2 gate 用）。
+
+    流程：
+      1. 读现有 canonical.md
+      2. 调 LLM 产出新版（rewrite prompt）
+      3. 写 .tmp → rename（保留 content_id 不变；文件覆盖）
+      4. UPDATE contents.updated_at（status 不动，由 gate 编排层转移）
+
+    Args:
+        conn: DB 连接（llm.complete 写 llm_calls + 更新 contents 用）
+        content: 已有 Content 记录（status=draft）
+        critique_text: critic 渲染出的可重写问题文本（Markdown）
+        now: ISO8601 UTC
+
+    Returns:
+        新 Content（updated_at 刷新；status 保持原值）
+
+    Raises:
+        CreateError: LLM 异常或写盘失败
+    """
+    canonical_path = Path(content.canonical_path)
+    if not canonical_path.exists():
+        raise CreateError(
+            f"rewrite: canonical.md missing for content={content.id}: "
+            f"{canonical_path}"
+        )
+    old_md = canonical_path.read_text(encoding="utf-8")
+
+    prompt = _render_rewrite_prompt(
+        title=content.title,
+        canonical_md=old_md,
+        critique_text=critique_text,
+    )
+    try:
+        new_md = complete(
+            prompt,
+            stage="create_rewrite",
+            ref_id=content.id,
+            model_tier="creative",
+            max_tokens=6144,
+            conn=conn,
+        )
+    except llm_mod.RetryableError as e:
+        raise CreateError(
+            f"rewrite LLM retry exhausted for content={content.id}: {e}"
+        ) from e
+
+    # 写 .tmp → rename（HARD_PARTS §5 幂等模式）。
+    # 目录可能已有内容（之前 create 写过 canonical.md + meta.json），
+    # rename 不能跨非空目录覆盖，需要先清空 final_dir。
+    final_dir = canonical_path.parent
+    tmp_dir = final_dir.with_name(final_dir.name + ".tmp")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    if final_dir.exists():
+        for child in final_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+    new_meta = {
+        "content_id": content.id,
+        "topic_id": content.topic_id,
+        "title": content.title,
+        "rewritten_at": now,
+        "rewrite_source_chars": len(old_md),
+        "rewrite_output_chars": len(new_md),
+    }
+    _write_outputs(out_dir=tmp_dir, canonical_md=new_md, meta=new_meta)
+    tmp_dir.rename(final_dir)
+
+    # 更新 contents.updated_at（status 由 gate runner 转移）
+    with conn:
+        conn.execute(
+            "UPDATE contents SET updated_at=? WHERE id=?",
+            (now, content.id),
+        )
+
+    return Content(
+        id=content.id,
+        topic_id=content.topic_id,
+        pillar=content.pillar,
+        title=content.title,
+        canonical_path=content.canonical_path,
+        formats=content.formats,
+        gate_score_total=content.gate_score_total,
+        gate_scores=content.gate_scores,
+        gate_verdict=content.gate_verdict,
+        status=content.status,
+        created_at=content.created_at,
         updated_at=now,
     )
