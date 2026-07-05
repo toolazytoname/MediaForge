@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Sample Feed</title>
+    <link>https://example.com/</link>
+    <description>Test fixtures for RssSource</description>
+    <language>en-us</language>
+
+    <item>
+      <title>Third post (oldest)</title>
+      <link>https://example.com/a</link>
+      <description>Summary for third.</description>
+      <dc:creator>alice</dc:creator>
+      <pubDate>Wed, 01 Jul 2026 00:00:00 +0000</pubDate>
+      <guid isPermaLink="false">a-1</guid>
+    </item>
+
+    <item>
+      <title>First post (newest)</title>
+      <link>https://example.com/b</link>
+      <description>Summary for first.</description>
+      <dc:creator>bob</dc:creator>
+      <pubDate>Fri, 03 Jul 2026 12:30:00 +0000</pubDate>
+      <guid isPermaLink="false">b-1</guid>
+    </item>
+
+    <item>
+      <title>Second post</title>
+      <link>https://example.com/c</link>
+      <description>Summary for second.</description>
+      <pubDate>Thu, 02 Jul 2026 06:15:00 +0000</pubDate>
+      <guid isPermaLink="false">c-1</guid>
+    </item>
+
+    <item>
+      <title>No date post</title>
+      <link>https://example.com/d</link>
+      <description>No pubDate.</description>
+      <guid isPermaLink="false">d-1</guid>
+    </item>
+  </channel>
+</rss>
