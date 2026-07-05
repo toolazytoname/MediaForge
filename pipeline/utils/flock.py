@@ -3,7 +3,8 @@
 设计：
   - 单进程内：模块级 `_HELD` 字典防止同进程重复锁
   - 跨进程：fcntl LOCK_EX | LOCK_NB（非阻塞；拿不到立即抛 LockHeld）
-  - 平台：Linux / macOS 用 fcntl；Windows 退化为 noop（开发期可用，发布期禁止）
+  - 平台：仅支持 Linux / macOS（fcntl）。Windows 未支持——本项目目标是
+    macOS 自动化矩阵，不会在 Windows 上跑 cron；如未来要支持需补 msvcrt。
 
 用法：
     from pipeline.utils.flock import acquire, release, LockHeld
