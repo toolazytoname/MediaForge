@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -33,12 +34,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from pipeline import db
-from pipeline.config import AppConfig, load_config
-from pipeline.models import (
-    ContentStatus,
-    PublicationStatus,
-    TopicStatus,
-)
+from pipeline.config import load_config
+from pipeline.models import ContentStatus, PublicationStatus, TopicStatus
+from pipeline.webui.mdrender import md_to_html
+from pipeline.webui.sanitize import sanitize_config
 
 
 _DB_PATH = "state.db"
@@ -52,6 +51,16 @@ def _conn() -> sqlite3.Connection:
     c = db.connect(_DB_PATH)
     db.init_db(c)
     return c
+
+
+@contextmanager
+def _db():
+    """conn 生命周期 context manager（自动 init + close）。"""
+    c = _conn()
+    try:
+        yield c
+    finally:
+        c.close()
 
 
 def _status_counts(conn: sqlite3.Connection) -> dict:
@@ -84,16 +93,14 @@ def create_app() -> FastAPI:
     base = Path(__file__).parent
     templates = Jinja2Templates(directory=str(base / "templates"))
 
-    # /output 静态目录（只读）
-    @app.on_event("startup")
-    def _mount_output() -> None:
-        output_dir = Path("output")
-        if output_dir.exists():
-            app.mount(
-                "/output",
-                StaticFiles(directory=str(output_dir)),
-                name="output",
-            )
+    # /output 静态目录（只读）—— 工厂时挂载（同步，幂等）
+    output_dir = Path("output")
+    if output_dir.exists():
+        app.mount(
+            "/output",
+            StaticFiles(directory=str(output_dir)),
+            name="output",
+        )
 
     # 静态 vendor (pico.css)
     static_dir = base / "static"
@@ -108,11 +115,8 @@ def create_app() -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request) -> HTMLResponse:
-        conn = _conn()
-        try:
+        with _db() as conn:
             counts = _status_counts(conn)
-        finally:
-            conn.close()
         return templates.TemplateResponse(
             request, "dashboard.html",
             {"counts": counts,
@@ -121,11 +125,8 @@ def create_app() -> FastAPI:
 
     @app.get("/api/status")
     def api_status() -> JSONResponse:
-        conn = _conn()
-        try:
+        with _db() as conn:
             return JSONResponse(_status_counts(conn))
-        finally:
-            conn.close()
 
     # ── 选题池 ─────────────────────────────────────────────
 
@@ -134,8 +135,7 @@ def create_app() -> FastAPI:
         request: Request,
         status: str | None = None,
     ) -> HTMLResponse:
-        conn = _conn()
-        try:
+        with _db() as conn:
             if status:
                 rows = db.get_topics_by_status(conn, status)
             else:
@@ -146,13 +146,10 @@ def create_app() -> FastAPI:
                 request, "topics.html",
                 {"topics": rows, "filter": status or ""},
             )
-        finally:
-            conn.close()
 
     @app.post("/topics/{topic_id}/promote", response_class=HTMLResponse)
     def topic_promote(topic_id: str) -> HTMLResponse:
-        conn = _conn()
-        try:
+        with _db() as conn:
             try:
                 db.transition(
                     conn, "topics", topic_id,
@@ -164,13 +161,10 @@ def create_app() -> FastAPI:
                 )
             except Exception as e:
                 return _alert(f"promote 失败：{e}")
-        finally:
-            conn.close()
 
     @app.post("/topics/{topic_id}/reject", response_class=HTMLResponse)
     def topic_reject(topic_id: str) -> HTMLResponse:
-        conn = _conn()
-        try:
+        with _db() as conn:
             try:
                 db.transition(
                     conn, "topics", topic_id,
@@ -182,15 +176,12 @@ def create_app() -> FastAPI:
                 )
             except Exception as e:
                 return _alert(f"reject 失败：{e}")
-        finally:
-            conn.close()
 
     # ── 审核台 ─────────────────────────────────────────────
 
     @app.get("/review", response_class=HTMLResponse)
     def review(request: Request) -> HTMLResponse:
-        conn = _conn()
-        try:
+        with _db() as conn:
             gated = db.get_contents_by_status(
                 conn, ContentStatus.GATED.value,
             )
@@ -198,8 +189,6 @@ def create_app() -> FastAPI:
                 request, "review.html",
                 {"gated": gated},
             )
-        finally:
-            conn.close()
 
     @app.post("/review/{content_id}", response_class=HTMLResponse)
     def review_decide(
@@ -210,8 +199,7 @@ def create_app() -> FastAPI:
         """body: {decision: approve|reject, reason?}"""
         if decision not in ("approve", "reject"):
             return _alert(f"非法 decision: {decision!r}")
-        conn = _conn()
-        try:
+        with _db() as conn:
             try:
                 if decision == "approve":
                     db.transition(
@@ -222,38 +210,34 @@ def create_app() -> FastAPI:
                     return _ok(
                         '<span class="badge ok">approved</span>'
                     )
-                else:  # reject
-                    # 写入理由到 gate_verdict（复用字段）+ 状态转移
-                    verdict = f"REJECTED_BY_HUMAN: {reason}".strip()
-                    cur = conn.execute(
-                        "UPDATE contents SET gate_verdict=?, updated_at=? "
-                        "WHERE id=? AND status=?",
-                        (verdict, db.now_utc(),
-                         content_id, ContentStatus.GATED.value),
-                    )
-                    conn.commit()
-                    if cur.rowcount != 1:
-                        return _alert("内容状态已变化，无法 reject")
-                    db.transition(
-                        conn, "contents", content_id,
-                        ContentStatus.GATED.value,
-                        ContentStatus.REJECTED_BY_HUMAN.value,
-                    )
-                    return _ok(
-                        f'<span class="badge rejected">'
-                        f'rejected ({reason or "no reason"})</span>'
-                    )
+                # reject: 写理由到 gate_verdict + 状态转移
+                verdict = f"REJECTED_BY_HUMAN: {reason}".strip()
+                cur = conn.execute(
+                    "UPDATE contents SET gate_verdict=?, updated_at=? "
+                    "WHERE id=? AND status=?",
+                    (verdict, db.now_utc(),
+                     content_id, ContentStatus.GATED.value),
+                )
+                conn.commit()
+                if cur.rowcount != 1:
+                    return _alert("内容状态已变化，无法 reject")
+                db.transition(
+                    conn, "contents", content_id,
+                    ContentStatus.GATED.value,
+                    ContentStatus.REJECTED_BY_HUMAN.value,
+                )
+                return _ok(
+                    f'<span class="badge rejected">'
+                    f'rejected ({reason or "no reason"})</span>'
+                )
             except Exception as e:
                 return _alert(f"{decision} 失败：{e}")
-        finally:
-            conn.close()
 
     # ── 发布日历 ───────────────────────────────────────────
 
     @app.get("/calendar", response_class=HTMLResponse)
     def calendar(request: Request) -> HTMLResponse:
-        conn = _conn()
-        try:
+        with _db() as conn:
             pubs = []
             for st in PublicationStatus:
                 pubs.extend(db.get_publications_by_status(conn, st.value))
@@ -261,8 +245,6 @@ def create_app() -> FastAPI:
                 request, "calendar.html",
                 {"publications": pubs},
             )
-        finally:
-            conn.close()
 
     @app.post(
         "/publications/{pub_id}/reschedule", response_class=HTMLResponse
@@ -270,29 +252,35 @@ def create_app() -> FastAPI:
     def pub_reschedule(
         pub_id: str, scheduled_at: str = Form(...)
     ) -> HTMLResponse:
-        conn = _conn()
-        try:
+        """reschedule 语义：仅 queued 状态的 publication 可改时间。
+
+        TECH_SPEC §4 没有 reschedule 这条状态边——保留 scheduled_at 字段
+        可变但 status 限定为 queued（发布中/已完成/失败/取消 的不能再改）。
+        """
+        with _db() as conn:
             try:
-                conn.execute(
+                cur = conn.execute(
                     "UPDATE publications SET scheduled_at=?, updated_at=? "
-                    "WHERE id=?",
-                    (scheduled_at, db.now_utc(), pub_id),
+                    "WHERE id=? AND status=?",
+                    (scheduled_at, db.now_utc(),
+                     pub_id, PublicationStatus.QUEUED.value),
                 )
                 conn.commit()
+                if cur.rowcount != 1:
+                    return _alert(
+                        "reschedule 失败：publication 不存在或状态非 queued"
+                    )
                 return _ok(
                     f'<span class="badge ok">rescheduled → {scheduled_at}</span>'
                 )
             except Exception as e:
                 return _alert(f"reschedule 失败：{e}")
-        finally:
-            conn.close()
 
     @app.post(
         "/publications/{pub_id}/cancel", response_class=HTMLResponse
     )
     def pub_cancel(pub_id: str) -> HTMLResponse:
-        conn = _conn()
-        try:
+        with _db() as conn:
             try:
                 db.transition(
                     conn, "publications", pub_id,
@@ -302,8 +290,6 @@ def create_app() -> FastAPI:
                 return _ok('<span class="badge">cancelled</span>')
             except Exception as e:
                 return _alert(f"cancel 失败：{e}")
-        finally:
-            conn.close()
 
     @app.post(
         "/publications/{pub_id}/retry", response_class=HTMLResponse
@@ -313,8 +299,7 @@ def create_app() -> FastAPI:
         注意：不调真实 publish——发布由 `pipeline.run publish` 触发，
         且 publish.enabled=false 时整体阻断。三重锁天然生效。
         """
-        conn = _conn()
-        try:
+        with _db() as conn:
             try:
                 db.transition(
                     conn, "publications", pub_id,
@@ -324,8 +309,6 @@ def create_app() -> FastAPI:
                 return _ok('<span class="badge ok">retried → queued</span>')
             except Exception as e:
                 return _alert(f"retry 失败：{e}")
-        finally:
-            conn.close()
 
     # ── 内容详情 ───────────────────────────────────────────
 
@@ -333,29 +316,21 @@ def create_app() -> FastAPI:
     def content_detail(
         request: Request, content_id: str
     ) -> HTMLResponse:
-        conn = _conn()
-        try:
+        with _db() as conn:
             c = db.get_content(conn, content_id)
             if c is None:
                 raise HTTPException(404, "content not found")
-            # 读 canonical.md（如存在）
             canonical_html = ""
             try:
                 cp = Path(c.canonical_path)
                 if cp.exists():
-                    raw = cp.read_text(encoding="utf-8")
-                    canonical_html = _md_to_html(raw)
+                    canonical_html = md_to_html(cp.read_text(encoding="utf-8"))
             except Exception:
                 canonical_html = "(无法读取 canonical.md)"
             return templates.TemplateResponse(
                 request, "content_detail.html",
-                {
-                    "content": c,
-                    "canonical_html": canonical_html,
-                },
+                {"content": c, "canonical_html": canonical_html},
             )
-        finally:
-            conn.close()
 
     # ── 设置 ───────────────────────────────────────────────
 
@@ -369,7 +344,7 @@ def create_app() -> FastAPI:
         else:
             err = None
         # 脱敏：把 webhook_url 等敏感字段值替换为 "***"
-        sanitized = _sanitize_config(cfg) if cfg else {}
+        sanitized = sanitize_config(cfg.model_dump()) if cfg else {}
         return templates.TemplateResponse(
             request, "settings.html",
             {"config": sanitized, "err": err},
@@ -381,61 +356,8 @@ def create_app() -> FastAPI:
 # ── 辅助函数 ────────────────────────────────────────────────
 
 
-def _md_to_html(md: str) -> str:
-    """极简 markdown → HTML（标题/段落/列表）。够 webui 内容详情用即可。"""
-    lines = md.split("\n")
-    out: list[str] = []
-    in_ul = False
-    for line in lines:
-        s = line.rstrip()
-        if s.startswith("# "):
-            if in_ul:
-                out.append("</ul>")
-                in_ul = False
-            out.append(f"<h1>{_esc(s[2:])}</h1>")
-        elif s.startswith("## "):
-            if in_ul:
-                out.append("</ul>")
-                in_ul = False
-            out.append(f"<h2>{_esc(s[3:])}</h2>")
-        elif s.startswith("- "):
-            if not in_ul:
-                out.append("<ul>")
-                in_ul = True
-            out.append(f"<li>{_esc(s[2:])}</li>")
-        elif s.strip() == "":
-            if in_ul:
-                out.append("</ul>")
-                in_ul = False
-        else:
-            if in_ul:
-                out.append("</ul>")
-                in_ul = False
-            out.append(f"<p>{_esc(s)}</p>")
-    if in_ul:
-        out.append("</ul>")
-    return "\n".join(out)
-
-
-def _esc(s: str) -> str:
-    return (
-        s.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
-
-
-def _sanitize_config(cfg: AppConfig) -> dict:
-    """config 脱敏：webhook_url 等敏感字段值替换为 '***'。"""
-    d = cfg.model_dump()
-    if "notify" in d and d["notify"].get("webhook_url"):
-        d["notify"]["webhook_url"] = "***"
-    return d
-
-
-# 直接启动入口（cmd_webui 调用）
 def main() -> int:
+    """启动入口（cmd_webui 调用）。"""
     import uvicorn
     try:
         cfg = load_config(_CONFIG_PATH)
