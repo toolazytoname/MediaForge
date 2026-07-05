@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pipeline.creators import llm as llm_mod
-from pipeline.creators.llm import complete
+from pipeline.creators.llm import complete_json
 from pipeline.gate.anchors_loader import (
     AnchorsBundle,
     render_for_prompt,
@@ -176,17 +176,19 @@ def score_one(
         excerpt_chars=excerpt_chars,
     )
     try:
-        text = complete(
+        result = complete_json(
             prompt,
             stage="gate_score",
             ref_id=ref_id,
             model_tier="critical",  # 评分走 critical 档（与创作隔离，HARD_PARTS §3）
             max_tokens=2048,
             conn=conn,
+            parse=_parse_score,
+            max_retries=1,
         )
     except llm_mod.RetryableError as e:
         raise GateError(
             f"scorer LLM retry exhausted for ref={ref_id}: {e}"
         ) from e
 
-    return _parse_score(text)
+    return result

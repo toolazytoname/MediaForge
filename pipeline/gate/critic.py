@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pipeline.creators import llm as llm_mod
-from pipeline.creators.llm import complete
+from pipeline.creators.llm import complete_json
 from pipeline.gate.decision import (
     Problem,
     has_blocker,
@@ -136,20 +136,22 @@ def critique_one(
     """
     prompt = _render_critic_prompt(title=title, canonical_md=canonical_md)
     try:
-        text = complete(
+        problems, summary = complete_json(
             prompt,
             stage="gate_critic",
             ref_id=ref_id,
             model_tier="creative",
             max_tokens=2048,
             conn=conn,
+            parse=_parse_critique,
+            max_retries=1,
         )
     except llm_mod.RetryableError as e:
         raise GateError(
             f"critic LLM retry exhausted for ref={ref_id}: {e}"
         ) from e
 
-    problems, summary = _parse_critique(text)
+    text = ""  # raw_response 占位（complete_json 内部已落 logs/llm/）
     needs_rewrite = bool(problems) and safe_to_revise(problems)
     return CritiqueResult(
         problems=problems,
