@@ -62,7 +62,7 @@
 ## M1 — 选题引擎（预计 2-3 天）
 
 ### M1-1 SourceAdapter 基类与 RSS 源
-- [ ] **目标**：能从 RSS 拉回标准化条目
+- [x] **目标**：能从 RSS 拉回标准化条目
 - **步骤**：
   1. `pipeline/sources/base.py`：按 TECH_SPEC §5.1 写 `SourceAdapter` / `RawItem`
   2. `pipeline/sources/rss.py`：`RssSource(name, feed_url, max_items)`，feedparser 解析，异常包装 `SourceError`
@@ -70,6 +70,8 @@
   4. 测试用 `tests/fixtures/sample_feed.xml` 本地文件，不打网络
 - **验收**：单测全绿；手工冒烟：config 配一个真实 RSS（如 hnrss.org/frontpage），跑 fetch 打印条目
 - **参考**：TECH_SPEC §5.1
+
+  ✅ 完成于 2026-07-05，commit dd58647，备注：base.py 30 行（RawItem frozen + ABC + SourceError re-export §7 唯一源）、rss.py 116 行（feedparser + dated desc / undated 末位 + summary≤2000 + ISO8601 UTC + 网络/解析异常包 SourceError）、registry.py 60 行（仅 enabled、未知 type → ValueError）；tests 21 新增（7 base + 9 rss + 5 registry）+ 3 本地 fixture，全量 222 全绿（原 201）。独立 agent 审计：0 critical bug，几个 smell 可辩护（bozo best-effort、空 title 留 M1-2 入库时校验、ISO `+00:00` 格式 TECH_SPEC 未 pin）。**未做**：手工冒烟真实 RSS（用户授权下会话跳过）——冒烟代码一行 `python -c "from pipeline.sources.registry import build_sources; from pipeline.config import load_config; [print(s.name, len(s.fetch())) for s in build_sources(load_config('config.example.yaml').sources) if s.name=='rss:hn']"`。
 
 ### M1-2 ingest 编排：入库与去重
 - [ ] **目标**：`python -m pipeline.run ingest` 完整可用
