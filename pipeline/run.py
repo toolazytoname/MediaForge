@@ -391,23 +391,26 @@ def cmd_schedule(args: argparse.Namespace) -> int:
 
 @_stage_lock("publish")
 def cmd_publish(args: argparse.Namespace) -> int:
-    """发布到期的 publication（M4-1 安全框架）。
+    """发布到期的 publication（M4-1 安全框架 + M4-2 接入 X）。
 
     流程（HARD_PARTS §1 + §9）：
       1. timeout_publishings() 清理超时 publishing 记录
       2. 取 queued + scheduled_at <= now 的 publications
       3. 每个走 safe_publish()——三层防御（config/乐观锁/UNIQUE）+ INTENT 日志
+      4. 未知平台 / 凭据缺失 → fail fast 该条（不让它无限重试）
 
-    M4-1 不实现具体平台 publisher（X/头条/小红书由 M4-2/3 实现）；
-    当前所有 publication 都会被 safe_publish 拒绝（无 adapter 注册）。
+    M4-1 不实现具体平台 publisher；M4-2 接入 X（XApiPublisher）；
+    M4-3 接入头条/小红书。
     --dry-run 模式全流程走 INTENT 日志但不真发。
     """
     import sys
     from datetime import datetime, timezone
+    from pathlib import Path
 
     from pipeline.config import load_config
     from pipeline.models import PublicationStatus
-    from pipeline.publishers.safe_publish import (
+    from pipeline.publishers import (
+        get_adapter,
         safe_publish,
         timeout_publishings,
     )
@@ -432,36 +435,77 @@ def cmd_publish(args: argparse.Namespace) -> int:
             conn, PublicationStatus.QUEUED.value,
         )
 
-        # 3. 遍历（每个 publication 暂无具体 adapter → 走 config 校验拒绝）
-        # M4-2/3 接入具体 publisher 后这里会按 platform 分发 adapter
+        # 3. 遍历：按 platform 取 adapter → safe_publish
         published = 0
         skipped = 0
         failed = 0
         for pub in queued:
-            # 取首个账号（多账号由 M4-2+ 扩展）
-            account_id = pub.account_id
-            # M4-1 无具体 adapter：先校验 enabled/allowed_platforms 路径
-            if not cfg.publish.enabled:
-                skipped += 1
-                continue
-            if (cfg.publish.allowed_platforms
-                    and pub.platform not in cfg.publish.allowed_platforms):
+            # 取对应 platform 的账号配置（多账号由 M4-3+ 扩展，本任务单账号）
+            plat_obj = getattr(cfg.platforms, pub.platform, None)
+            if plat_obj is None or not plat_obj.accounts:
                 print(
                     f"publish: SKIP {pub.id} platform={pub.platform!r} "
-                    f"not in allowed_platforms",
+                    f"not configured",
                     file=sys.stderr,
                 )
                 skipped += 1
                 continue
-            # 具体平台 adapter 暂未实现 —— M4-1 安全框架通过 safe_publish
-            # 校验后由 M4-2 (X) / M4-3 (头条/小红书) 接入具体 publisher
-            # 当前阶段无 adapter 直接跳过（不在本任务范围）
-            print(
-                f"publish: {pub.id} platform={pub.platform} "
-                f"— adapter 未注册（M4-2/3 接入）",
-                file=sys.stderr,
+            # 找 account_id 对应的账号
+            account_cfg_pyd = None
+            for a in plat_obj.accounts:
+                if a.id == pub.account_id:
+                    account_cfg_pyd = a
+                    break
+            if account_cfg_pyd is None:
+                print(
+                    f"publish: SKIP {pub.id} account={pub.account_id!r} "
+                    f"not found for platform={pub.platform!r}",
+                    file=sys.stderr,
+                )
+                skipped += 1
+                continue
+
+            # 构造 adapter（registry 工厂）
+            from pipeline.publishers.base import AccountConfig
+            account = AccountConfig(
+                id=account_cfg_pyd.id,
+                credentials_path=Path(account_cfg_pyd.credentials),
             )
-            skipped += 1
+            try:
+                adapter = get_adapter(
+                    pub.platform, account=account, config=cfg,
+                )
+            except ValueError as e:
+                print(
+                    f"publish: FAIL {pub.id} no adapter for "
+                    f"platform={pub.platform!r}: {e}",
+                    file=sys.stderr,
+                )
+                failed += 1
+                continue
+            except FileNotFoundError as e:
+                # 凭据文件缺失 → safe_publish 框架前 fail
+                print(
+                    f"publish: FAIL {pub.id} credentials missing for "
+                    f"platform={pub.platform!r} account={account.id!r}: {e}",
+                    file=sys.stderr,
+                )
+                failed += 1
+                continue
+
+            # 走 safe_publish（三层防御 + INTENT 日志）
+            result = safe_publish(
+                conn, pub, adapter,
+                config=cfg.publish, account=account,
+                dry_run=dry_run, now_iso=now,
+            )
+            if result.published:
+                published += 1
+            elif "lock" in result.reason.lower() or "due" in result.reason.lower():
+                # 排期未到/另一进程抢占 → 正常跳过（不计入 failed）
+                skipped += 1
+            else:
+                failed += 1
     finally:
         conn.close()
 
