@@ -19,7 +19,7 @@
 - **验收**：evaluation-notes.md 中每项有 `DECISION: <采用/参考/放弃> 因为 <理由>`；TASKS.md 受影响任务（M4-2/M4-3/M2 部分）按决策更新描述
 - **参考**：docs/research/opensource-survey.md（必读"第二轮广撒网"节）
 
-  ✅ 完成于 2026-07-05，commit 56e068d，备注：4 项 DECISION 已落 evaluation-notes.md——TrendPublish 参考（移植门禁修订协议/微信排版/防幻觉条款）；小红书采用 XiaohongshuSkills、放弃 xhs-toolkit（已停更）；AiToEarn 放弃（自部署无法无人值守）仅参考其 API 设计与 electron 遗留代码；Pixelle-Video 采用为 VideoEngine 第二引擎（M5-3 已改写）。评估以源码深读替代本地跑通（4 仓库全量 clone 深读，时间盒内完成）。
+  ✅ 完成于 2026-07-05，commit 56e068d/e776e2a，备注：4 项 DECISION 已落 evaluation-notes.md——TrendPublish 参考（移植门禁修订协议/微信排版/防幻觉条款）；小红书采用 XiaohongshuSkills、放弃 xhs-toolkit（已停更）；AiToEarn 放弃（自部署无法无人值守）仅参考其 API 设计与 electron 遗留代码；Pixelle-Video 采用为 VideoEngine 第二引擎（M5-3 已改写）。评估以源码深读替代本地跑通（4 仓库全量 clone 深读，时间盒内完成）。**追加（2026-07-05 傍晚）**：用户补充 baoyu-skills（JimLiu/baoyu-skills，23.1k⭐，MIT）评估，DECISION = §5.5 skills 桥保留 + 唯一抽出 `baoyu-image-gen` 作 §5.4 配图 backend 扩展（M2-4 增子任务 M2-4.5，可选）。已同步 TECH_SPEC §5.4 §5.5、HARD_PARTS §7、M2-4 任务。M2-4.5 集成前需复核 HEAD `baoyu-image-gen` CLI 签名（v2.1.0 与本地同步，低风险）。
 
 ### M0-1 初始化工程与工具链
 - [ ] **目标**：可运行的空项目
@@ -134,6 +134,15 @@
   4. 中文字体：模板里用系统字体栈 `PingFang SC, Noto Sans CJK`，**验收时人眼检查无豆腐块**
 - **验收**：样例 slides 渲染出 PNG，1080×1440，文字清晰不溢出（截图入 repo `docs/samples/` 供对比）；同输入两次渲染输出字节级一致可不要求，视觉一致即可
 - **参考**：TECH_SPEC §5.4
+
+#### M2-4.5 配图 backend 扩展：baoyu-image-gen 集成（**M0-0 决策新增子任务，可选不阻塞 M2-4 主验收**）
+- **目标**：`pipeline/creators/render.py` 增加 `image_gen.provider == "baoyu"` 分支，subprocess 调 `JimLiu/baoyu-skills` 的 `baoyu-image-gen/scripts/main.ts`，provider 集合由 `gemini|openai` 扩为 11 家（含国内 DashScope/Z.AI/Jimeng/Seedream）
+- **步骤**：
+  1. 集成时复核 HEAD `baoyu-image-gen` 是否仍 v2.1.0 与 CLI 签名（v 号已同步，低风险）；具体 API key 入 `secrets/`，provider/model 写 config
+  2. `render.py` 增加 subprocess 调 `npx -y bun ~/.agents/skills/baoyu-image-gen/scripts/main.ts --prompt <text> --image <out.png> --provider X --model Y --json`，从 JSON 出口取 base64 或文件路径
+  3. 重试/失败语义与 §5.4 模板渲染一致
+- **验收**：subprocess 成功调通 OpenAI 与 DashScope 各出 1 张图，JSON 解析正确，失败重试与 §5.4 一致；**不在 cron 路径验证**，仅手动 dry-run 跑通
+- **参考**：TECH_SPEC §5.4 §5.5；evaluation-notes §5
 
 ### M2-5 review 阶段：审核清单
 - [ ] **目标**：人每天 10 分钟完成审核

@@ -254,12 +254,12 @@ def render_cards(template: str, slides: list[dict], out_dir: Path,
     无外部服务依赖，离线可跑。"""
 ```
 
-- 配图（插画类）走图像生成 API（config `image_gen.provider`: `none|gemini|openai`），provider=`none` 时降级为纯模板文字卡——保证无图像 API 也能出片
+- 配图（插画类）走图像生成 API（config `image_gen.provider`: `none|gemini|openai|baoyu`），provider=`none` 时降级为纯模板文字卡——保证无图像 API 也能出片；`baoyu` 走 subprocess 调 `JimLiu/baoyu-skills` 的 `baoyu-image-gen`（11 provider：OpenAI/Azure/Google/OpenRouter/DashScope/Z.AI/Jimeng/Seedream/MiniMax/Replicate/codex-cli），见 evaluation-notes §5
 - 视频封面同理走模板渲染
 
 ### 5.5 （可选增强，非核心路径）Claude Code skills 桥
 
-`pipeline/creators/skills_bridge.py`：本机装有 Claude Code 时，可用 `claude -p "/baoyu-xhs-images ..."` 获得更精致的图卡。config `render.engine: template`（默认）或 `claude_skills`。**所有 M 里程碑的验收只以 template 引擎为准**，skills 桥坏了不影响流水线。
+`pipeline/creators/skills_bridge.py`：本机装有 Claude Code 时，可用 `claude -p "/baoyu-xhs-images ..."` 获得更精致的图卡。config `render.engine: template`（默认）或 `claude_skills`。**所有 M 里程碑的验收只以 template 引擎为准**，skills 桥坏了不影响流水线。Skills 桥主要承载 Claude 编排型 skill（xhs-images/cover-image/infographic 等）；`baoyu-image-gen` 因是纯 CLI，由 §5.4 `render.py` 直接 subprocess 调用，不走桥。
 
 ### 5.6 VideoEngine 接口（`pipeline/creators/video/base.py`）
 

@@ -15,6 +15,7 @@
 | xhs-toolkit | 小红书发布 | **放弃** | 作者官宣停更，选择器已随 2026 年初改版失效，修复 PR 无人合并 |
 | AiToEarn | 国内多平台发布 | **放弃**（整体方案）/ **参考**（API 设计 + Electron 逆向资料） | 自部署下国内平台无法无人值守：小红书/视频号靠闭源插件、抖音需手机确认、头条不支持 |
 | Pixelle-Video（用户补充） | 视频产出 | **采用**（VideoEngine 第二引擎，AI 生成类内容优先） | 异步 API 与 VideoEngine 契约零适配，AI 生成素材视觉上限远超 MPT 库存混剪 |
+| baoyu-skills（用户补充） | 视觉产出/排版/发布 | **参考**（skills 桥 + 唯一抽出 `baoyu-image-gen` 作 §5.4 配图 backend 扩展） | 23.1k⭐ 活跃度高，但 80% skill 依赖 Claude agent 编排，违反 §5.4 无人值守；只有 image-gen 是纯 CLI 可 subprocess |
 
 连带结论：
 - **OpenMontage 从「第二引擎候选」降级为远期观察**——Pixelle-Video 在生产可用性（Docker + HTTP API + 进度回报）上全面胜出 agent 驱动模式。
@@ -99,6 +100,40 @@
 
 ---
 
+## 5. baoyu-skills（JimLiu/baoyu-skills，23.1k⭐，MIT，TS/bun，用户补充）
+
+**DECISION: 选项 (a) + 有限 (b) — 保留 §5.5 skills 桥；唯一抽出来集成的是 `baoyu-image-gen` 作为 §5.4 配图 backend 扩展** 因为：核心流水线「不依赖 Claude Code CLI」原则（§5.4）排除 80% 的 skill；但 `baoyu-image-gen` 是纯 CLI、subprocess 友好、API key 计费（不占 Claude 额度）、覆盖 11 个 provider（含国内 DashScope/Z.AI/Jimeng/Seedream）——直接扩展 §5.4 的图像生成 provider 集合；其余 skill 保留为 §5.5 可选桥。
+
+**评估要点**：
+- 活跃度：23.1k⭐/2.6k forks，最近 push 2026-07-04（昨天），每天 ≥1 commit，MIT，21 个 skill（HEAD），中英 README，活跃度**远超** HARD_PARTS §7 其他 Plan B 候选。
+- 架构范式：所有 skill = `SKILL.md`（agent 编排指南）+ `scripts/*.ts`（bun CLI 子命令）。只有 3 个是真正的 CLI utility（image-gen / markdown-to-html / compress-image），其它都是 agent 编排流程，依赖 Claude 会话内做风格判断与 AskUserQuestion 确认流。
+- 视觉产出（xhs-images/cover-image/infographic/article-illustrator/comic/slide-deck）：价值在「风格系统 + prompt 模板 + 风格 layout 决策树」（如 9 styles × 6 layouts、5 维封面、21 layouts × 22 styles 信息图），**但调用方式是 Claude agent 内 LLM 决策**，subprocess 拿不到最终交付。**正确集成方式 = 风格模板作为参考知识手工翻译进 MediaForge 的 `templates/`，不直接调 skill**。
+- 图像生成 backend `baoyu-image-gen`：v2.1.0（本机与 HEAD 同步），44KB 主 CLI 支持 `--prompt --image --provider --model --json` 出口、`--batchfile --jobs N` 批模式，11 provider（OpenAI/Azure/Google/OpenRouter/DashScope/Z.AI/Jimeng/Seedream/MiniMax/Replicate/codex-cli）。**subprocess.run 直接调，无需 Claude 中转**。
+- 发布类 `baoyu-post-to-wechat`（CDP 路线）：与 §5.4「官方 API 草稿箱」路线冲突，与「无人值守」原则冲突，**不引入**；HEAD 新增 `wechat-http.ts`/`wechat-remote-publish.ts`/`wechat-api.ts`（向官方 API 演进方向），观察其未来是否演化为官方 API 路径。
+- 排版 `baoyu-markdown-to-html`（v1.57.0 vs HEAD v1.117.3，**落后 60 个 minor**）：4 主题 + 13 色板 + mermaid/plantuml/footnotes/alerts/外链转文末引用——**功能弱于 TrendPublish html-post-processor**（主题少、中文细节差），不替换。
+- 翻译 `baoyu-translate`（落后 58 个 minor）：Claude 编排型，subprocess 只能拿 chunk，翻译靠 Claude agent——**不集成**，翻译走 §5.3 creators/llm.py。
+
+### 本机版本 vs GitHub HEAD（重要）
+
+| Skill | 本机 | HEAD | 状态 |
+|---|---|---|---|
+| baoyu-image-gen | v2.1.0 | v2.1.0 | **同步** |
+| baoyu-infographic | v1.117.4 | v1.117.4 | 同步 |
+| baoyu-markdown-to-html | v1.57.0 | v1.117.3 | **落后 60 minor** |
+| baoyu-translate | v1.59.0 | v1.117.3 | **落后 58 minor** |
+| baoyu-xhs-images | 无 version | v2.0.1（**major 跳**） | **必须重看** |
+| baoyu-post-to-wechat | 无 version | v1.118.2 + 新增 6 文件 | **必须重看** |
+
+评估结论稳定层（架构范式、provider 广度、与 §5.4 原则兼容性）**不依赖新版本**，老版本足够判断。受版本影响的判断仅集中在「具体集成时的 API 签名是否变」，建议真正集成到主仓库时按上表复核 HEAD。
+
+### 移植/集成清单
+
+1. **`baoyu-image-gen` → §5.4 image_gen.provider 追加 `baoyu` 选项**（→ M2-4 增子任务 M2-4.5，可选不阻塞主验收）：`pipeline/creators/render.py` 增加 subprocess 调 `npx -y bun ~/.agents/skills/baoyu-image-gen/scripts/main.ts --prompt <text> --image <out.png> --provider X --model Y --json` 分支。配置 `image_gen.provider: baoyu` 时启用；provider 选 none/baoyu 默认行为与 §5.4 完全一致——**纯扩展，不破坏契约**。
+2. **风格系统（xhs-images / cover-image / infographic）作为参考知识**：style × layout 决策树、prompt 模板设计思路（2-5 维度枚举 + 配色矩阵 + 参考图系统）可手工翻译进 MediaForge 的 `templates/` 资产——但**不直接调 skill**（需 Claude agent），不符合 §5.4 无人值守原则。
+3. **观察 `baoyu-post-to-weibo`**（HEAD 有、本机无）：未来若国内发布要做微博，对比评估。
+
+---
+
 ## 对 TASKS.md 的影响（已同步修改）
 
 - **M2-1**：步骤补充「移植 TrendPublish 防幻觉 prompt 条款」
@@ -106,4 +141,7 @@
 - **M4-3**：小红书改为「集成 XiaohongshuSkills（subprocess 封装，四条护栏）」；头条维持自写 Playwright（参考 AiToEarn electron 遗留代码 + social-auto-upload）
 - **M5-1**：维持 MPT 默认引擎不变
 - **M5-3** → 改为「Pixelle-Video 第二引擎接入」（原 OpenMontage/AIGCPanel 评估内容缩减进 Backlog/子项）
+- **M2-4** → 增子任务 M2-4.5（可选）：`baoyu-image-gen` 集成进 `pipeline/creators/render.py` 作为 `image_gen.provider == "baoyu"` 分支（详见 §5 评估，subprocess + JSON 出口，11 provider，不阻塞 M2-4 主验收）
+- **TECH_SPEC §5.4** → `image_gen.provider` 选项由 `none|gemini|openai` 扩为 `none|gemini|openai|baoyu`（纯扩展不破坏契约）
+- **TECH_SPEC §5.5** → 补一句：skills 桥主要承载 Claude 编排型 skill（xhs-images/cover-image/infographic 等），`baoyu-image-gen` 不走桥，由 §5.4 直接 subprocess 调
 - **HARD_PARTS §7 备选表**：国内发布主选 = 自写 Playwright + XiaohongshuSkills（小红书）；AiToEarn 移出候选

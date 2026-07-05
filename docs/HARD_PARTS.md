@@ -127,7 +127,7 @@
 | 视频生成（精品/AI 生成类） | Pixelle-Video（M0-0 决策，VideoEngine 第二引擎，mode=fixed 注入我方脚本） | OpenMontage（远期观察）/ 人工 + Remotion | 生图成本失控或项目停更 |
 | 数字人 | AIGCPanel（M5-3 缩减为速评） | HeyGen 等商业 API | 本地部署质量/性能不达标 |
 | 热点源 | RSS + DailyHotApi 自部署 | newsnow 自部署 | DailyHotApi 接口挂 |
-| 图像生成 | 不用（模板渲染兜底） | Gemini/OpenAI 图像 API | 模板卡片视觉疲劳、数据表明配图影响点击 |
+| 图像生成 | 不用（模板渲染兜底）；provider=none；可选 baoyu-image-gen subprocess（M0-0 决策扩展，11 provider，见 evaluation-notes §5） | Gemini/OpenAI 图像 API | 模板卡片视觉疲劳、数据表明配图影响点击；或 baoyu-image-gen 升级破坏 CLI 签名（真集成时复核 HEAD） |
 
 > 巨人肩膀原则：每个垂直环节动工前先查本表和 opensource-survey.md——**默认假设已有人造过这个轮子**。发现新的成熟项目 → 更新调研文档并在对应任务下记录，宁可多花 2 小时评估也不自写 2 周。
 
