@@ -192,7 +192,40 @@ def cmd_gate(args: argparse.Namespace) -> int:
 
 
 def cmd_review(args: argparse.Namespace) -> int:
-    return _not_implemented("review")
+    """生成/读取审核清单（M2-5）。
+
+    流程（ARCHITECTURE §3.5 + HARD_PARTS §5）：
+      1. 读旧 REVIEW.md → 应用人标记的 approved/rejected_by_human（幂等）
+      2. 重新生成当日 REVIEW.md（基于当前 gated 状态）
+      3. --notify 时：当日有 gated 才推 IM（webhook_url 为空则跳过）
+    """
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from pipeline.config import load_config
+    from pipeline.review import run_review
+
+    cfg = load_config(args.config)
+    output_root = Path("output")
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        result = run_review(
+            conn,
+            date_str=now[:10],
+            output_root=output_root,
+            now_iso=now,
+            webhook_url=cfg.notify.webhook_url if args.notify else None,
+        )
+    finally:
+        conn.close()
+
+    print(
+        f"review: {result.generated} generated, "
+        f"{result.applied} approved, {result.rejected} rejected"
+    )
+    return 0
 
 
 def cmd_derivative(args: argparse.Namespace) -> int:
