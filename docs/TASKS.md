@@ -193,13 +193,15 @@
 ## M3 — 排期与调度（预计 2 天）
 
 ### M3-1 scheduler：错峰排期
-- [ ] **目标**：approved → publications 排期记录
+- [x] **目标**：approved → publications 排期记录
 - **步骤**：
   1. `pipeline/scheduler.py`：纯函数 `plan(content, platform_configs, existing_pubs, now) -> list[Publication]`
   2. 规则：config 每平台黄金时段窗口（如头条 `07:00-09:00,18:00-20:00` 本地时区）；`random.Random(seed=content_id+platform)` 取点并避开整点 ±3min；同平台同账号间隔 ≥ `min_gap_hours`；同内容跨平台错开 ≥ 30min；当日窗口排满则顺延次日
   3. 时区处理按 HARD_PARTS §8
 - **验收**：固定种子单测：间隔约束、整点规避、顺延逻辑全覆盖；重跑 schedule 不改变已有排期
 - **参考**：ARCHITECTURE §3.6；HARD_PARTS §8
+
+  ✅ 完成于 2026-07-06，commit 94f7798，备注：scheduler.py 纯函数 plan() + cmd_schedule 接线 + 15 测试。plan() 签名含 min_gap_hours / cross_platform_gap_minutes / tz_name 入参（从 config 注入，方便单测）。种子 sha256(content_id|platform) → 4 字节 int，确保可复现（HARD_PARTS §8）。窗口内随机取点 20 次/窗口/日，顺延最多 14 天。UTC 存 + 本地展示；__init__ 暴露 _parse_iso_utc / _parse_window 给测试用。**关键 bug 修**：1) `_sample_in_window` offset 不进位（start_m + offset 可能 ≥ 60）→ 改为绝对分钟算 h/m；2) cmd_schedule 首次实现把 UNIQUE 冲突当 failed → 改 skipped（幂等语义）+ exit 0 不误报。**真实冒烟**：c_smoke_deriv1 → x/toutiao/xiaohongshu 三平台各 1 条 queued，UTC 时间换算到本地全部落在黄金时段窗口内；二次跑 0 scheduled, 3 skipped (already exists), 0 failed。全测 485 全绿（原 470 + 15）。
 
 ### M3-2 launchd 定时化
 - [ ] **目标**：全流水线无人值守定时执行
