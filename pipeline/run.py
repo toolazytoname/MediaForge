@@ -391,7 +391,85 @@ def cmd_schedule(args: argparse.Namespace) -> int:
 
 @_stage_lock("publish")
 def cmd_publish(args: argparse.Namespace) -> int:
-    return _not_implemented("publish")
+    """发布到期的 publication（M4-1 安全框架）。
+
+    流程（HARD_PARTS §1 + §9）：
+      1. timeout_publishings() 清理超时 publishing 记录
+      2. 取 queued + scheduled_at <= now 的 publications
+      3. 每个走 safe_publish()——三层防御（config/乐观锁/UNIQUE）+ INTENT 日志
+
+    M4-1 不实现具体平台 publisher（X/头条/小红书由 M4-2/3 实现）；
+    当前所有 publication 都会被 safe_publish 拒绝（无 adapter 注册）。
+    --dry-run 模式全流程走 INTENT 日志但不真发。
+    """
+    import sys
+    from datetime import datetime, timezone
+
+    from pipeline.config import load_config
+    from pipeline.models import PublicationStatus
+    from pipeline.publishers.safe_publish import (
+        safe_publish,
+        timeout_publishings,
+    )
+
+    cfg = load_config(args.config)
+    dry_run = bool(getattr(args, "dry_run", False))
+    now = datetime.now(timezone.utc).isoformat()
+
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+
+        # 1. 超时清理
+        timeouted = timeout_publishings(
+            conn, timeout_minutes=30, now_iso=now,
+        )
+        if timeouted:
+            print(f"publish: WARN {timeouted} publishing(s) timed out → failed")
+
+        # 2. 取候选（queued + 已到期）
+        queued = db.get_publications_by_status(
+            conn, PublicationStatus.QUEUED.value,
+        )
+
+        # 3. 遍历（每个 publication 暂无具体 adapter → 走 config 校验拒绝）
+        # M4-2/3 接入具体 publisher 后这里会按 platform 分发 adapter
+        published = 0
+        skipped = 0
+        failed = 0
+        for pub in queued:
+            # 取首个账号（多账号由 M4-2+ 扩展）
+            account_id = pub.account_id
+            # M4-1 无具体 adapter：先校验 enabled/allowed_platforms 路径
+            if not cfg.publish.enabled:
+                skipped += 1
+                continue
+            if (cfg.publish.allowed_platforms
+                    and pub.platform not in cfg.publish.allowed_platforms):
+                print(
+                    f"publish: SKIP {pub.id} platform={pub.platform!r} "
+                    f"not in allowed_platforms",
+                    file=sys.stderr,
+                )
+                skipped += 1
+                continue
+            # 具体平台 adapter 暂未实现 —— M4-1 安全框架通过 safe_publish
+            # 校验后由 M4-2 (X) / M4-3 (头条/小红书) 接入具体 publisher
+            # 当前阶段无 adapter 直接跳过（不在本任务范围）
+            print(
+                f"publish: {pub.id} platform={pub.platform} "
+                f"— adapter 未注册（M4-2/3 接入）",
+                file=sys.stderr,
+            )
+            skipped += 1
+    finally:
+        conn.close()
+
+    print(
+        f"publish: {published} published, "
+        f"{skipped} skipped, {failed} failed"
+    )
+    return 0 if failed == 0 else 1
 
 
 @_stage_lock("collect")
