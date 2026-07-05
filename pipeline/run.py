@@ -94,7 +94,55 @@ def cmd_score(args: argparse.Namespace) -> int:
 
 
 def cmd_create(args: argparse.Namespace) -> int:
-    return _not_implemented("create")
+    """为 selected topics 生成 canonical 长文（M2-1）。
+
+    单条 CreateError → 跳过该 topic、继续下一条；
+    BudgetExceeded / 其他系统性错误 → 立即抛出退出。
+    """
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from pipeline.config import load_config
+    from pipeline.creators import llm as llm_mod
+    from pipeline.creators.canonical import create_one
+    from pipeline.models import TopicStatus
+    from pipeline.utils.errors import BudgetExceeded, CreateError
+
+    cfg = load_config(args.config)
+    output_root = Path(getattr(args, "output", None) or "output")
+
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        llm_mod.init_db_conn(conn)
+        selected = db.get_topics_by_status(conn, TopicStatus.SELECTED.value)
+        now = datetime.now(timezone.utc).isoformat()
+
+        ok = 0
+        failed = 0
+        for topic in selected:
+            try:
+                content = create_one(
+                    conn, topic, pillars=cfg.pillars,
+                    output_root=output_root, now=now,
+                )
+                print(f"create: {topic.id} → {content.id} ({content.canonical_path})")
+                ok += 1
+            except CreateError as e:
+                # 单条失败 → 跳过、继续
+                print(
+                    f"create: WARN topic={topic.id} skipped: {e}",
+                    file=sys.stderr,
+                )
+                failed += 1
+            except BudgetExceeded:
+                # 系统性 → 终止整批
+                raise
+    finally:
+        conn.close()
+
+    print(f"create: {ok} ok, {failed} failed")
+    return 0
 
 
 def cmd_gate(args: argparse.Namespace) -> int:
