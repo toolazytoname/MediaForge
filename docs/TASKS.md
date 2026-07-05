@@ -46,7 +46,7 @@
   ✅ 完成于 2026-07-05，commit 3305151 + d735e50，备注：db.py 398 行（WAL+FK+5 表 DDL+transfer 集中强制），utils/errors.py 含 PipelineError 基类+IllegalTransition/StaleState（其余 SourceError/CreateError/GateError/PublishError/BudgetExceeded 留 M0-3），utils/ids.py new_id(prefix)→8hex。第一轮独立验收 D 项 FAIL（topics/contents/publications from_state 全部 outgoing 非法对未覆盖 36%），返工 commit d735e50 用 `_illegal_pairs()` 从契约表反推补齐：topics 20 + contents 43 + publications 20 = 83 矩阵测试 + contents 乐观锁，共 154 测试。第二轮复验 PASS。
 
 ### M0-3 配置加载与日志
-- [ ] **目标**：config.yaml 加载校验 + 结构化日志
+- [x] **目标**：config.yaml 加载校验 + 结构化日志
 - **步骤**：
   1. `pipeline/config.py`：pydantic 模型覆盖 TECH_SPEC §6 全部字段；`load_config(path)` 缺字段报清晰错误
   2. 校验 `config.example.yaml` 能通过加载（作为测试）
@@ -54,6 +54,8 @@
   4. `pipeline/utils/errors.py`：TECH_SPEC §7 全部异常类
 - **验收**：`load_config('config.example.yaml')` 成功；把 example 里 `gate.threshold_total` 改成字符串后加载报错并指明字段；测试全绿
 - **参考**：TECH_SPEC §6 §7
+
+  ✅ 完成于 2026-07-05，commit 4cd4012，备注：config.py 243 行（pydantic v2 全覆盖 §6，discriminated union by type/kind, extra=forbid），log.py 104 行（JsonLineFormatter + TimedRotatingFileHandler midnight/30 + ensure_ascii=False），errors.py 99 行（§7 全部异常类 + BudgetExceeded 携带 stage/used_usd/limit_usd）。独立验收一轮 PASS（A-G 全过），无返工。tests 47 新增 (config 14 + log 9 + errors 24)，全测试 201 全绿。
 
 ---
 
