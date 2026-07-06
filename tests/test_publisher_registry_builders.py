@@ -66,7 +66,6 @@ def test_build_toutiao_returns_toutiao_publisher(tmp_path: Path) -> None:
     assert adapter._screenshots == Path("logs/screenshots/toutiao")
 
 
-@pytest.mark.xfail(reason="M4-3 _build_xiaohongshu bug: TypeError unexpected kwarg cookies_path", strict=True)
 def test_build_xiaohongshu_returns_publisher(tmp_path: Path) -> None:
     """_build_xiaohongshu 构造 XiaohongshuPublisher，XHS_SKILLS_PATH env 注入。
 
@@ -86,7 +85,6 @@ def test_build_xiaohongshu_returns_publisher(tmp_path: Path) -> None:
     assert adapter._skills == Path("/custom/skills").expanduser()
 
 
-@pytest.mark.xfail(reason="M4-3 _build_xiaohongshu bug: TypeError unexpected kwarg cookies_path", strict=True)
 def test_build_xiaohongshu_no_env_uses_none(tmp_path: Path) -> None:
     """XHS_SKILLS_PATH 未设 → skills_path=None（M4-3 bug 阻塞）。
 
@@ -178,6 +176,24 @@ def test_build_douyin_fallback_when_ai_ratio_none(tmp_path: Path) -> None:
     assert adapter._ai_ratio == "high"  # fallback
 
 
+def test_build_douyin_tolerates_config_none(tmp_path: Path) -> None:
+    """config=None 时不应崩溃——与其他 builder（x/toutiao/xhs）对齐。
+
+    M4-3 bug：原 _build_douyin 直接读 config.platforms.douyin，config=None 时
+    AttributeError。其他 builder 都不读 config，所以只有 douyin 受影响。
+    修复后 config=None → 走默认 ai_ratio='high'。
+    """
+    from pipeline.publishers.douyin import DouyinPublisher
+
+    cookies = tmp_path / "dy.json"
+    cookies.write_text("{}")
+    account = AccountConfig(id="main", credentials_path=cookies)
+
+    adapter = get_adapter("douyin", account=account, config=None)
+    assert isinstance(adapter, DouyinPublisher)
+    assert adapter._ai_ratio == "high"
+
+
 # ── build_adapters 编排覆盖 ────────────────────────────────────────
 
 
@@ -217,7 +233,6 @@ def test_build_adapters_warns_on_unknown_platform(tmp_path: Path) -> None:
     assert "x" not in result
 
 
-@pytest.mark.xfail(reason="M4-3 build_adapters bug: acc.credentials vs AccountPlaywright.cookies", strict=True)
 def test_build_adapters_returns_configured_platforms(tmp_path: Path) -> None:
     """完整 cfg：x + toutiao 都配账号 → build_adapters 返回两平台。
 

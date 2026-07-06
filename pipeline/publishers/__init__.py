@@ -69,20 +69,21 @@ def _build_xiaohongshu(
     from pipeline.publishers.xiaohongshu import XiaohongshuPublisher
     # 路径优先级：env XHS_SKILLS_PATH > 默认
     skills_path = os.environ.get("XHS_SKILLS_PATH")
-    return XiaohongshuPublisher(
-        cookies_path=account.credentials_path,
-        skills_path=skills_path,
-    )
+    # M4-3 bug fix：XiaohongshuPublisher 内部用 skills_path 自管 Chrome user-data-dir，
+    # 不接收 cookies_path 形参。原代码多传了 cookies_path=account.credentials_path 会 TypeError。
+    return XiaohongshuPublisher(skills_path=skills_path)
 
 
 def _build_douyin(account: AccountConfig, config: Any) -> PublisherAdapter:
     """抖音 → DouyinPublisher（Playwright 自写，PRD §3.4 AI 标识必勾）。"""
     from pipeline.publishers.douyin import DouyinPublisher
     # AI 标识占比：config.platforms.douyin.ai_ratio > 默认 'high'
+    # M4-3 bug fix：与 _build_x/toutiao/xhs 对齐，防御 config=None（registry 单元测试场景）。
     ai_ratio = "high"
-    plat = getattr(config.platforms, "douyin", None)
-    if plat is not None and hasattr(plat, "ai_ratio"):
-        ai_ratio = plat.ai_ratio or "high"
+    if config is not None:
+        plat = getattr(config.platforms, "douyin", None)
+        if plat is not None and hasattr(plat, "ai_ratio"):
+            ai_ratio = plat.ai_ratio or "high"
     return DouyinPublisher(
         cookies_path=account.credentials_path,
         screenshot_dir=Path("logs/screenshots/douyin"),
@@ -138,9 +139,13 @@ def build_adapters(
         accounts_raw = plat_obj.accounts or []
         items: list[tuple[AccountConfig, PublisherAdapter]] = []
         for acc in accounts_raw:
+            # M4-3 bug fix：x 平台用 AccountAPI（字段 credentials），
+            # Playwright 三平台用 AccountPlaywright（字段 cookies）。
+            # 原代码写死 acc.credentials，遇到 Playwright 类型会 AttributeError。
+            creds = acc.credentials if platform_name == "x" else acc.cookies
             account_cfg = AccountConfig(
                 id=acc.id,
-                credentials_path=Path(acc.credentials),
+                credentials_path=Path(creds),
             )
             if platform_name not in _BUILDERS:
                 warnings.warn(
