@@ -428,6 +428,167 @@
 
 ---
 
+## M7 — 工程健壮性与体验优化（架构师 review 追加，2026-07-06）
+
+> 本节由架构师通读全仓后追加。分两组：**R = 健壮性/正确性/测试/规范**（先做，防线性问题）、**U = UI/UX 友好化**（核心诉求：让日常操作不再全程敲 terminal）。
+> **执行者注意（弱模型必读）**：每个任务已写明「错在哪（文件:行号）/ 怎么改 / 红线（不许动什么）」。严格照做，**不要顺手改契约**（models.py 字段、SQL schema、Adapter 方法签名、TECH_SPEC §3/§4/§5 一律不动）。改动前先 `git pull` 确认行号，行号漂移就用「错误代码原文」定位。每个任务做完单独 commit，跑 `python -m pytest tests/ -q` 全绿才算完成。
+
+### R7-1 修 webui 连接与时间 API 三处隐患（低风险，先做热身）
+- [ ] **目标**：消除 webui 每请求重开连接、每请求跑 DDL、以及弃用的 `utcnow()`
+- **错在哪**：
+  1. `pipeline/webui/app.py:50-53` `_conn()` 每次请求都 `db.init_db(c)`——`init_db` 会执行全部 `CREATE TABLE IF NOT EXISTS` DDL，**每个 HTTP 请求跑一遍建表语句**，纯浪费且拖慢页面
+  2. `pipeline/webui/app.py:123` 用了 `datetime.utcnow()`——本项目跑在 Python 3.14，该 API 已 deprecated，会打 warning 且未来移除
+- **怎么改**：
+  1. 在 `create_app()` 内、返回 app 前**只调用一次** `db.init_db`（用一个临时连接建表后 close），把 `_conn()` 里的 `db.init_db(c)` 删掉，`_conn()` 只保留 `db.connect(_DB_PATH)`。这样每请求仍新开连接（SQLite 下可接受）但不再重复建表
+  2. `app.py` 顶部已 `from datetime import datetime`；把第 123 行 `datetime.utcnow().isoformat()` 改为 `datetime.now(timezone.utc).isoformat()`，并在 import 段加 `from datetime import timezone`（或改成 `from datetime import datetime, timezone`）
+- **验收标准**：`tests/test_webui*.py` 全绿；新增 1 个断言测试——patch `db.init_db` 后连续发 3 个 `GET /api/status`，断言 `db.init_db` 被调用次数 ≤ 1（证明不再每请求建表）
+- **红线**：不要改 `db.py` 的 `init_db` 本身；不要改路由签名
+- **参考**：TECH_SPEC §7
+
+### R7-2 修 /output 与 /static 挂载时机 → 图卡/预览 404（HIGH，影响审核体验）
+- [ ] **目标**：`output/` 目录在 webui 启动后才生成时，图卡 PNG 仍能被访问
+- **错在哪**：`pipeline/webui/app.py:97-112`——`/output` 和 `/static` 用 `if output_dir.exists(): app.mount(...)` 挂载。若启动 webui 时 `output/` 还不存在（新机器、当天还没 create），之后流水线生成了图卡，**这些图片永远 404，直到重启 webui**。审核台/详情页的 `<img>` 全裂
+- **怎么改**：
+  1. 挂载前确保目录存在：把条件挂载改成 `output_dir.mkdir(parents=True, exist_ok=True)` 后**无条件** `app.mount("/output", StaticFiles(directory=str(output_dir)), name="output")`
+  2. `/static` 目录是仓库自带资产（`pipeline/webui/static/`），正常存在，保留即可；但同样去掉 `if` 直接挂（该目录已随代码提交）
+- **验收标准**：新增测试——先删除/不创建 `output/`，`create_app()` 后再 `mkdir output/2026-01-01 && 写一个 x.png`，请求 `GET /output/2026-01-01/x.png` 返回 200 且 content-type 为 image/png
+- **红线**：`/output` 必须只读（StaticFiles 默认只读，别加写路由）；不要把 `output/` 加进 git（`.gitignore` 已忽略，别动）
+- **参考**：TECH_SPEC §7「/output 挂静态目录，只读」
+
+### R7-3 webui 直写 SQL 违反 §7 契约 → 抽到 db.py 助手函数（MEDIUM）
+- [ ] **目标**：消除 UI 层里的裸 `UPDATE` SQL，遵守 TECH_SPEC §7「**UI 不得直接写 SQL**」
+- **错在哪**：TECH_SPEC §7 明文规定「读走 db.py 查询函数，写走 transition() 与既有编排函数」。但：
+  1. `pipeline/webui/app.py:215-221` reject 分支直接 `conn.execute("UPDATE contents SET gate_verdict=?, updated_at=? WHERE id=? AND status=?")`
+  2. `pipeline/webui/app.py:272-278` reschedule 直接 `conn.execute("UPDATE publications SET scheduled_at=?, updated_at=? WHERE id=? AND status=?")`
+  这两处是 UI 层裸 SQL，违反契约、且逻辑散落难测
+- **怎么改**：
+  1. 在 `pipeline/db.py` 新增两个纯函数（放在文件里现有 update/transition 函数附近，保持风格一致）：
+     - `set_gate_verdict(conn, content_id, verdict, *, expect_status) -> int`：执行那条 `UPDATE contents SET gate_verdict=?, updated_at=? WHERE id=? AND status=?`，返回 `cursor.rowcount`，内部 `conn.commit()`
+     - `reschedule_publication(conn, pub_id, scheduled_at, *, expect_status) -> int`：执行那条 `UPDATE publications SET scheduled_at=?`，返回 rowcount
+  2. `app.py` 两处改为调用新助手，判 `rowcount != 1` 走原有 `_alert(...)` 分支。行为完全等价，只是把 SQL 挪进 db 层
+- **验收标准**：`app.py` 里 `grep "conn.execute" pipeline/webui/app.py` 除了 `_status_counts` 的只读 SELECT 外无写 SQL；新增 `tests/test_db.py` 用例覆盖两个新函数（状态匹配返回 1、状态不匹配返回 0）；webui 现有测试全绿
+- **红线**：**不要改 SQL 语义**（字段、WHERE 条件一字不改，只是搬家）；不要改 schema；`transition()` 已有的状态转移调用（app.py 里 approve/promote/cancel/retry 那些）保持不动，它们已经合规
+- **参考**：TECH_SPEC §7、§8
+
+### R7-4 metrics 裸吞异常违反 §8 → 补结构化日志（MEDIUM）
+- [ ] **目标**：让「失败静默重试次日」的 metrics 路径留下可排障日志，遵守 §8「禁止裸 except: pass」
+- **错在哪**：TECH_SPEC §8 规定「任何 except 分支必须要么 re-raise 要么 log.warning 以上级别记录」。但 `pipeline/metrics/collectors.py` 与 `pipeline/metrics/runner.py:122,130` 有大量 `except Exception:` 后只 `failed += 1; continue`，**一个字都不记**。线上 metrics 抓不到数时无从排障
+- **怎么改**：
+  1. 用 `pipeline/utils/log.py` 的结构化 logger（其它模块的用法照抄），在每个 `except Exception as e:` 分支加一行 `logger.warning(...)`，**必带 `stage="collect"` 与 `ref_id=<publication_id>`**（§8 要求每条日志带 stage+ref_id），message 含 `repr(e)`
+  2. 注意把 `except Exception:` 改成 `except Exception as e:` 才能拿到异常对象
+  3. runner.py 与 collectors.py 里所有这类裸吞点都要补（前面 grep 已列出行号：collectors.py 的 96/143/180/227/285/324/364/396，runner.py 的 122/130）——逐个补，别漏
+- **验收标准**：`grep -n "except Exception" pipeline/metrics/` 每一处下方 3 行内都能看到 `logger.warning`；新增测试——mock collector 抛异常，断言 logger 收到一条含该 publication_id 的 warning（可用 `caplog`）
+- **红线**：**不要改控制流**——失败仍是 `failed += 1; continue`（§8 允许「记录后继续」，metrics 是非关键路径，不能因单条失败阻断编排）；不要 re-raise
+- **参考**：TECH_SPEC §8；HARD_PARTS §5（collect 幂等）
+
+### R7-5 补 tests/test_e2e_dryrun.py（§9 必测项缺失，HIGH）
+- [ ] **目标**：补上 TECH_SPEC §9 明确要求但**至今不存在**的端到端 dry-run 集成测试
+- **错在哪**：TECH_SPEC §9 白纸黑字：「集成测试 `tests/test_e2e_dryrun.py`：造一个假 topic，全流程跑到 publish --dry-run」。现仓库只有 `test_toutiao_e2e.py`/`test_douyin_e2e.py`（单平台），**没有全链路 dry-run 测试**。这是里程碑级验收漏洞
+- **怎么改**：新建 `tests/test_e2e_dryrun.py`：
+  1. 用临时 db（`db.connect(":memory:")` 或 tmp_path 下的 state.db）+ `db.init_db`
+  2. LLM 全程走 `MockProvider`（llm.py 已有），**不打真实网络**；平台发布用 `MockPublisherAdapter`（safe_publish.py 已有）
+  3. 造一个假 topic 插入 → 依次调用各阶段编排函数（score_all → create → gate runner → review 落库 approved → scheduler.plan → safe_publish dry_run=True），断言最终 publication 记录存在且**真实 publish 未被触发**（`publish.enabled=false` 时断言 mock.publish 的 call_count==0，或 dry_run 分支返回 published=False）
+  4. 参考现有 `tests/test_publish*.py`、`tests/test_gate*.py` 的 mock 装配方式，别自己发明
+- **验收标准**：`pytest tests/test_e2e_dryrun.py -q` 绿；测试内断言覆盖「全链路状态推进正确」+「dry-run 下 PublisherAdapter.publish 真实动作未发生」（§9 必测第 4 条）
+- **红线**：**mock LLM/平台可以，绝不 mock 状态机**（HARD_PARTS §10 第 3 条）——状态转移必须走真实 `db.transition`；不要为了让测试过而改生产代码逻辑
+- **参考**：TECH_SPEC §9；HARD_PARTS §5、§10
+
+### R7-6 文档 commit 补齐 + mypy 声明对齐现实（LOW，卫生）
+- [ ] **目标**：消除文档里的 `commit <待补>` 悬空引用，并让「mypy --strict 强制」的声明与现实一致
+- **错在哪**：
+  1. `docs/TASKS.md` 有 4 处 `commit <待补>`（M1-2/M1-4/M2-1/M5-2 的完成备注），无法追溯到真实 sha
+  2. TECH_SPEC §10 声称「`mypy --strict pipeline/` 通过（M2 起强制）」，但仓库**没有任何 mypy 配置**（无 mypy.ini/pyproject.toml/setup.cfg），CI 也没跑——这是一句无人执行的空头承诺
+- **怎么改**：
+  1. 对每处 `commit <待补>`：用 `git log --oneline -- <该任务涉及的文件>` 找到对应提交 sha，把 `<待补>` 替换为真实短 sha。**找不到确切对应的**就替换为 `<历史提交，sha 已无法精确追溯>` 并保留备注，不要瞎填
+  2. mypy 二选一（推荐 A，改动小）：
+     - **A. 降级声明**：把 TECH_SPEC §10 那句改为「mypy --strict 为**目标**，尚未接入 CI 强制」，与现实对齐，不装
+     - **B. 真接入**：加 `mypy.ini`（`[mypy]\nstrict = True\nfiles = pipeline`），跑 `mypy pipeline/`，把报出的类型错误**单独开任务**修（本任务只负责加配置 + 记录错误数量到本任务备注，不在此任务里修全部类型错——那是另一个大工程）
+- **验收标准**：`grep "commit <待补>" docs/TASKS.md` 无输出；TECH_SPEC §10 的 mypy 声明与仓库实际状态一致
+- **红线**：这是文档任务，**不要改任何 pipeline/ 代码逻辑**（除非选 B 加 mypy.ini 配置文件，那也只加文件不改逻辑）
+- **参考**：TECH_SPEC §10；git-workflow 全局规则
+
+---
+
+### U7-1 Dashboard 升级：从三张裸表 → 运营驾驶舱（HIGH，体验核心）
+- [ ] **目标**：打开首页 30 秒看懂「系统在干什么、花了多少钱、有没有出问题、有什么待我处理」，不再只是三张 status 计数表
+- **错在哪**：`pipeline/webui/templates/dashboard.html` 现在只有 topics/contents/publications 三张 `status→count` 表（见文件全文 36 行），**没有成本、没有预算余量、没有告警、没有待办、没有近期活动、计数不可点击钻取**。运营者看不出任何有价值信息
+- **怎么改**（后端 `app.py` 的 `dashboard` 路由 + 新增查询；前端 `dashboard.html`）：
+  1. **成本卡片**：在 `db.py` 新增只读查询 `sum_llm_cost_this_month(conn) -> float`（`SELECT COALESCE(SUM(cost_usd),0) FROM llm_calls WHERE created_at >= <当月1号ISO>`）与 `count_llm_calls_today(conn)`。dashboard 传入模板，顶部渲染「本月 LLM 花费 $X / 预算 $Y（从 `config.budget.monthly_usd` 读）→ 进度条 + 剩余额度」。预算用满 80% 显示黄色、100% 红色
+  2. **待办卡片**：显著展示「🔴 N 篇待审」（gated 计数，链接到 `/review`）、「🟡 N 条待发布」（queued 计数，链接 `/calendar`）、「⚠️ N 条发布失败」（failed 计数）。这几个数字要大、要能点
+  3. **近期活动**：新增查询取最近 10 条 `contents`（按 updated_at desc）与最近 10 条 `publications`，渲染成时间线小表，每行链到详情页
+  4. **计数可钻取**：三张状态表的每个 status 单元格包成链接（topics→`/topics?status=X`，contents→审核/详情，publications→`/calendar`）
+  5. **自动刷新**：用 htmx `hx-get="/api/status" hx-trigger="every 30s"` 让计数区无刷新更新（`/api/status` 已存在）
+- **验收标准**：`GET /` 返回 200 且含「本月花费」「待审 N 篇」字样；预算进度条按 mock 数据正确变色；点「待审 N 篇」跳到 `/review`；新增 db 查询函数各有单测（当月成本求和、今日调用数）
+- **红线**：**只读**——dashboard 不做任何写操作；成本查询别改 `llm_calls` 表；预算数字从 config 读，不要硬编码
+- **参考**：TECH_SPEC §7；HARD_PARTS §4（成本可见性）
+
+### U7-2 一键运行流水线：UI 触发各阶段，告别全程 terminal（HIGHEST，用户明确诉求）
+- [ ] **目标**：在 Web 控制台点按钮就能跑 `ingest/score/create/gate/schedule/collect`，看到实时结果与摘要，**日常运营不再需要开终端敲命令**（发布 publish 因高危单独放 U7-6 做，不在本任务）
+- **背景**：这是用户最强烈的诉求——「别让我全程通过 terminal 操作」。目前 UI 只能审核，其余阶段全靠手敲 `python -m pipeline.run <stage>`
+- **怎么改**（新增一个「运行台 /runs」页面 + 后台任务执行）：
+  1. **执行封装**：新建 `pipeline/webui/runner_bridge.py`。提供 `run_stage(stage: str) -> RunResult`：内部**不重复实现业务**，而是复用 `pipeline.run` 里对应的 `cmd_*(args)` 函数（构造一个最小 `argparse.Namespace(config="./config.yaml", verbose=False)` 传入）。捕获其 stdout 摘要行与 exit code，返回 `RunResult(stage, ok, summary_text, started_at, finished_at)`。**只允许白名单阶段**：`{"ingest","score","create","gate","schedule","collect"}`——`publish` 不进白名单（发布必须留在受控 CLI/cron 路径）
+  2. **并发安全**：`cmd_*` 已被 `_stage_lock` 装饰（flock），UI 触发时若 cron 正在跑会自动 SKIP——这正是我们要的，不用额外加锁。但**UI 请求本身要异步**：用 FastAPI `BackgroundTasks` 或一个简单的内存任务表（`dict[run_id, RunResult]`），点按钮立即返回「已提交」，页面轮询结果，避免长阻塞 HTTP
+  3. **路由**：`POST /runs/{stage}`（stage 必须在白名单，否则 `_alert`）触发后台执行；`GET /runs` 展示各阶段「上次运行时间 / 结果摘要 / 成功失败」；`GET /runs/status` 给 htmx 轮询用
+  4. **前端**：`templates/runs.html`——每个白名单阶段一个卡片：阶段名 + 「▶ 运行」按钮（`hx-post="/runs/{stage}"`）+ 上次结果区（`hx-get="/runs/status" hx-trigger="every 3s"` 刷新）。base.html 导航加「运行台」入口
+  5. **顺序提示**：页面顶部标注推荐顺序 `ingest → score → create → gate → (人审) → schedule`，并对「有前置未满足」给文字提示（不强制拦截，只提示）
+- **验收标准**：浏览器点「运行 ingest」→ 页面显示「运行中…」→ 数秒后显示摘要（如 `ingest: 0 fetched...`）且 exit 状态正确；`POST /runs/publish` 返回 400 拒绝（白名单外）；单测覆盖：`run_stage("ingest")` 复用 `cmd_ingest` 且返回结构正确、`run_stage("publish")` 抛拒绝、后台任务不阻塞请求
+- **红线（务必遵守）**：
+  - **本任务白名单不含 `publish`**——不是因为 publish 不能进 UI，而是因为它是唯一不可逆的高危动作，值得**单独一个任务**（U7-6）加二次确认/先 dry-run 等护栏后再上，避免和这 6 个安全阶段混在一起被草率实现。本任务只做到 `schedule`
+  - **不要重写各阶段业务逻辑**——`runner_bridge` 必须复用现有 `cmd_*`，只做「构造 args + 捕获输出 + 记录结果」这层薄封装
+  - 不要引入 Celery/Redis 等重型队列（KISS）——`BackgroundTasks` + 内存 dict 足够，本系统是单机单用户
+- **参考**：TECH_SPEC §2（CLI 契约，各 cmd 的摘要行格式）、§7；HARD_PARTS §1、§8；CLAUDE.md 工作约定第 7 条
+
+### U7-6 UI 发布（带护栏，独立高危任务）（HIGH，在 U7-2/R7-2 之后做）
+- [ ] **目标**：在 Web 控制台也能触发真实发布——但因为发布**不可逆**（发出去删不掉、矩阵账号重复内容会被风控），必须比其它阶段多套护栏。**这是全项目风险最高的 UI 功能，单独成任务、单独 review**
+- **为什么单独拆出来**：发布进 UI 本身没问题（更方便，用户诉求合理），真正的风险从来不是"UI vs 终端"，而是"点一下就不可逆"。所以把它从 U7-2 的安全阶段里剥出来，加够护栏再上
+- **怎么改**：
+  1. **总闸不变**：`config.publish.enabled` 仍是硬开关。`false` 时 UI 发布按钮显示为**禁用态**并提示"发布总闸未开启（config.publish.enabled=false）"，点了也走不到真实发布——这层由 `safe_publish` 天然保证，UI 只是把状态展示出来
+  2. **先 dry-run 后真发**：UI 上一条 queued publication 提供两个按钮——「🔍 预演(dry-run)」先跑一遍 `safe_publish(dry_run=True)` 把 validate 结果/将要发的标题正文展示出来；确认无误后「🚀 确认发布」才 `dry_run=False`
+  3. **二次确认**：「确认发布」必须弹二次确认（htmx 可用一个展开的确认条：显示"你正在向 <platform>/<account> 发布 <title>，此操作不可撤销"+ 一个「我确认」按钮），不能单击直接发
+  4. **复用安全框架**：后端**必须**调 `pipeline/publishers/safe_publish.py` 的现成编排（三层防御：config 锁 / 乐观锁抢占 / UNIQUE 兜底 + INTENT 日志都在里面），**绝不绕过它自己拼发布逻辑**。路由 `POST /publications/{id}/publish?dry_run=true|false`，后台异步执行（同 U7-2 的 BackgroundTasks 模式，因为浏览器自动化要几分钟）
+  5. **发布中锁 UI**：一条 publication 进入 `publishing` 状态后，其 UI 行禁用所有按钮，避免并发点击（乐观锁在 DB 层已防重，但 UI 也别诱导用户去点）
+- **验收标准**：`publish.enabled=false` 时按钮禁用且后端拒绝真实发布（断言 mock adapter.publish 未被调用）；`enabled=true` 时「预演」返回 validate 结果不真发、「确认发布」经二次确认后才走 `dry_run=False`；全程复用 `safe_publish` 不重写；单测覆盖 enabled 开/关两条路径 + dry-run 与真发分流
+- **红线**：
+  - **必须复用 `safe_publish`**——它是 M4-1 的三重锁核心，绕过它 = 破坏防重复发布防线（HARD_PARTS §1，全系统最高优先级正确性问题）
+  - **不许移除或弱化二次确认与总闸**——这是 UI 发布之所以敢做的前提
+  - 不改 `publications` 表 schema、不改 `PublisherAdapter` 签名、不改状态转移表
+- **参考**：HARD_PARTS §1（必读）；TECH_SPEC §5.2、§7；M4-1 `safe_publish.py`；CLAUDE.md 工作约定第 7 条
+
+### U7-3 审核台补图卡缩略预览（MEDIUM，§7 明确要求但缺失）
+- [ ] **目标**：审核时直接在页面看到小红书图卡 PNG 缩略图，不用点开文件
+- **错在哪**：TECH_SPEC §7 要求审核台含「图卡缩略引用」、§图卡 PNG 直接 `<img>`。但 `pipeline/webui/templates/review.html` 全文只有一个指向 canonical.md 的文字链接（第 15 行），**没有任何 `<img>` 图卡预览**（已 grep 确认 review.html 无 png/img/slide 字样）
+- **怎么改**：
+  1. 后端 `app.py` 的 `review` 路由：对每条 gated content，探测其图卡目录 `output/<date>/<content_id>/xiaohongshu/`（派生阶段 M2-3/M2-4 的产出约定）下的 `*.png`，收集相对路径列表传给模板（目录不存在就传空列表，不报错）。**用只读文件系统探测，别查数据库不存在的字段**
+  2. `review.html`：在每个 `<article>` 内加一个横向缩略图条，`{% for img in c.card_images %}<img src="/output/{{ img }}" style="height:120px;margin:4px">{% endfor %}`，无图时显示「（无图卡）」
+- **验收标准**：造一条 gated content 且在其 `output/.../xiaohongshu/` 放 2 张 png，`GET /review` 页面含 2 个指向 `/output/...png` 的 `<img>`；无图卡的 content 显示「（无图卡）」不报错
+- **红线**：**不许给 contents 表加字段**存图卡路径（TECH_SPEC §3 schema 冻结）——图卡路径靠运行时探测文件系统得到；`/output` 只读挂载已在 R7-2 修好，依赖它
+- **参考**：TECH_SPEC §7；ARCHITECTURE §8（输出目录约定）
+
+### U7-4 vendor htmx + 统一样式（LOW，去外网依赖 + 一致性）
+- [ ] **目标**：webui 完全离线可用、视觉一致
+- **错在哪**：`pipeline/webui/templates/base.html:7` 用 `<script src="https://unpkg.com/htmx.org@1.9.10">` 从 CDN 加载 htmx。**离线/内网/断网时整个 UI 的所有交互按钮失效**（htmx 是 UI 交互基石）；也是一个外部供应链依赖。而 pico.css 已经 vendor 在本地（`static/pico.min.css`），htmx 却没有，不一致
+- **怎么改**：
+  1. 下载 htmx 1.9.10 的 min.js 存到 `pipeline/webui/static/htmx.min.js`（若无外网，让用户提供该文件；文件约 47KB）。base.html 第 7 行改为 `<script src="/static/htmx.min.js"></script>`
+  2. base.html 里内联的 `<style>`（第 8-17 行）与散落在 settings.html 的 `<style>` 合并到 `static/app.css` 一个文件，base.html 用 `<link>` 引入，各模板删除内联 style（DRY）
+- **验收标准**：断网状态下启动 webui，页面所有 htmx 按钮（promote/approve/reschedule）仍可用；`grep -rn "unpkg\|cdn\|https://" pipeline/webui/templates/` 无外部资源引用
+- **红线**：不要升级 htmx 大版本（锁 1.9.x，API 稳定）；不要引入 npm/构建链（TECH_SPEC §7「不引入 npm 构建链」）
+- **参考**：TECH_SPEC §7
+
+### U7-5 运行日志查看页（LOW，排障闭环）
+- [ ] **目标**：出问题时在 UI 看最近日志，不用 ssh 去 tail 文件
+- **错在哪**：`logs/pipeline.log`（结构化 json lines）与 `logs/llm/` 只能在终端看。配合 U7-2 一键运行后，运营者需要一个地方看「刚才那次运行到底报了什么错」
+- **怎么改**：
+  1. 后端新增 `GET /logs?stage=&limit=200` 路由：读 `logs/pipeline.log` **尾部** N 行（用高效 tail，别整文件读进内存——文件可能很大，`from collections import deque` 配合迭代读取，`maxlen=limit`），每行 `json.loads`，可选按 `stage` 过滤，倒序传模板
+  2. `templates/logs.html`：表格展示 `ts / level / stage / ref_id / msg`；level=warning/error 行标黄/红。base.html 导航加「日志」入口
+  3. 解析失败的行（非 json）跳过不报错
+- **验收标准**：`GET /logs` 返回最近日志表格；`?stage=collect` 只显示该 stage；日志文件不存在时显示「暂无日志」不 500
+- **红线**：**日志脱敏**——若某行 msg 含 `token`/`cookie`/`authorization`/`api_key` 等敏感词，该字段值用 `***` 打码再展示（HARD_PARTS §9「IM 通知内容不含 cookie/token」，UI 展示同理）；页面只读，不提供删除/清空日志的操作
+- **参考**：TECH_SPEC §8（日志格式）；HARD_PARTS §9（凭据安全）
+
+> **M7 建议执行顺序**：R7-1 → R7-2 → R7-3 → R7-4 → R7-5 → R7-6（健壮性打底），再 U7-1 → U7-2 → U7-3 → U7-4 → U7-5（体验升级），最后 U7-6（UI 发布，高危，必须在 U7-2 的后台执行框架 + R7-2 的图片可显示之后做）。U7-2 是用户最关心的「摆脱 terminal」核心，U7-6 是它的高危延伸（发布进 UI，但加二次确认 + 先 dry-run + 总闸）。每个任务独立 commit，`feat: M7 <编号> <描述>` 或 `fix: M7 <编号> <描述>`。
+
+---
+
 ## 后续 Backlog（不排期）
 
 - **数字人口播 lane**（AIGCPanel 引擎，走 VideoEngine 接口）：好物分享/带货方向；前提=M5-3 评估通过 + 账号过带货门槛 + 平台虚拟人报备完成
