@@ -458,3 +458,68 @@ def transition(
         # 合同未规定此类语义，按 IllegalTransition 处理（保守）
         raise IllegalTransition(table, from_status, to_status)
     raise StaleState(table, row_id, from_status, existing["status"])
+
+
+# ── 状态条件 UPDATE（webui 等非 transition 调用方） ──────────
+#
+# 与 transition() 的区别：这些函数不改 status 字段，而是改业务字段
+# （contents.gate_verdict / publications.scheduled_at），但仍要求
+# 当前 status 必须等于 expect_status——保留乐观锁语义。
+# TECH_SPEC §7：「UI 不得直接写 SQL」，所以即使是 status 条件 UPDATE
+# 也封装在此，webui 路由不应再出现 conn.execute("UPDATE ...")。
+
+
+def set_gate_verdict(
+    conn: sqlite3.Connection,
+    content_id: str,
+    verdict: str,
+    *,
+    expect_status: str,
+) -> int:
+    """UPDATE contents SET gate_verdict=?, updated_at=? WHERE id=? AND status=?
+
+    Args:
+        conn: SQLite 连接
+        content_id: 内容 id
+        verdict: 新的 gate_verdict（如 "REJECTED_BY_HUMAN: 理由"）
+        expect_status: 期望当前 status（通常为 ContentStatus.GATED.value）
+
+    Returns:
+        cursor.rowcount（1=成功，0=行不存在或状态不匹配）。
+        内部 conn.commit()。
+    """
+    cur = conn.execute(
+        "UPDATE contents SET gate_verdict=?, updated_at=? "
+        "WHERE id=? AND status=?",
+        (verdict, now_utc(), content_id, expect_status),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def reschedule_publication(
+    conn: sqlite3.Connection,
+    pub_id: str,
+    scheduled_at: str,
+    *,
+    expect_status: str,
+) -> int:
+    """UPDATE publications SET scheduled_at=?, updated_at=? WHERE id=? AND status=?
+
+    Args:
+        conn: SQLite 连接
+        pub_id: publication id
+        scheduled_at: 新的 ISO8601 UTC 时间字符串
+        expect_status: 期望当前 status（通常为 PublicationStatus.QUEUED.value）
+
+    Returns:
+        cursor.rowcount（1=成功，0=行不存在或状态不匹配）。
+        内部 conn.commit()。
+    """
+    cur = conn.execute(
+        "UPDATE publications SET scheduled_at=?, updated_at=? "
+        "WHERE id=? AND status=?",
+        (scheduled_at, now_utc(), pub_id, expect_status),
+    )
+    conn.commit()
+    return cur.rowcount

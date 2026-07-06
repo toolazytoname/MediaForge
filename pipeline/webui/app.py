@@ -218,15 +218,13 @@ def create_app() -> FastAPI:
                         '<span class="badge ok">approved</span>'
                     )
                 # reject: 写理由到 gate_verdict + 状态转移
+                # R7-3：写 SQL 抽到 db.set_gate_verdict，UI 不再裸 conn.execute
                 verdict = f"REJECTED_BY_HUMAN: {reason}".strip()
-                cur = conn.execute(
-                    "UPDATE contents SET gate_verdict=?, updated_at=? "
-                    "WHERE id=? AND status=?",
-                    (verdict, db.now_utc(),
-                     content_id, ContentStatus.GATED.value),
+                n = db.set_gate_verdict(
+                    conn, content_id, verdict,
+                    expect_status=ContentStatus.GATED.value,
                 )
-                conn.commit()
-                if cur.rowcount != 1:
+                if n != 1:
                     return _alert("内容状态已变化，无法 reject")
                 db.transition(
                     conn, "contents", content_id,
@@ -276,14 +274,12 @@ def create_app() -> FastAPI:
         """
         with _db() as conn:
             try:
-                cur = conn.execute(
-                    "UPDATE publications SET scheduled_at=?, updated_at=? "
-                    "WHERE id=? AND status=?",
-                    (scheduled_at, db.now_utc(),
-                     pub_id, PublicationStatus.QUEUED.value),
+                # R7-3：写 SQL 抽到 db.reschedule_publication
+                n = db.reschedule_publication(
+                    conn, pub_id, scheduled_at,
+                    expect_status=PublicationStatus.QUEUED.value,
                 )
-                conn.commit()
-                if cur.rowcount != 1:
+                if n != 1:
                     return _alert(
                         "reschedule 失败：publication 不存在或状态非 queued"
                     )
