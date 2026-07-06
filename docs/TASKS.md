@@ -336,10 +336,12 @@
 ## M6 — 数据回流与优化（预计 2-3 天，之后进入运营期）
 
 ### M6-1 collect：表现数据回流
-- [ ] **目标**：发布 24h/72h 后抓取 views/likes/comments 入 metrics 表
+- [x] **目标**：发布 24h/72h 后抓取 views/likes/comments 入 metrics 表
 - **步骤**：X 走 API；头条/小红书用登录态抓自己主页的创作者数据（只读自己的数据，合规）；失败静默重试次日
 - **验收**：published 内容 48h 后 metrics 表有数据
 - **参考**：ARCHITECTURE §3.8
+
+  ✅ 完成于 2026-07-06，commit fe94a04，备注：`pipeline/metrics/collectors.py` 4 个 collector + `runner.py` 编排。X API v2 走公共指标解析（impression_count → views；shares = retweet+quote）；头条/抖音走 Playwright + storage_state 抓创作者后台；小红书占位（XiaohongshuSkills 未公开标准化 metrics 命令，无 probe_fn 时 collect 返回 None，等 XHS 项目公开标准化命令时接入）。**失败语义**：401/403/429/网络异常 → 静默返回 None → 编排层不阻断其他 publication；明日 cron 再试（HARD_PARTS §5 metrics 表天然时间序列幂等）。`cmd_collect` 替换 M0-1 占位。tests 26 新增（X 7 + 中文平台 5 + 工厂 4 + 编排 5 + 候选 2 + 边界 3），含「多次 collect 时间序列幂等」「单条失败不阻断」验证。全测 748 绿（原 722 + 26）。**集成 TODO**（用户上线前）：① 头条/抖音/小红书的真实后台页面改版时修订 `_parse_*_manage_html` 启发式；② 抖音视频发布时间 1h 内的发布应在 24h 后才有足够数据。
 
 ### M6-2 周报与门禁校准
 - [ ] **目标**：每周一自动生成 `output/weekly-report.md`
