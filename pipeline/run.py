@@ -518,7 +518,43 @@ def cmd_publish(args: argparse.Namespace) -> int:
 
 @_stage_lock("collect")
 def cmd_collect(args: argparse.Namespace) -> int:
-    return _not_implemented("collect")
+    """回流表现数据（M6-1）。
+
+    流程：
+    1. 查 publications 中 published 且 published_at 距今 ≥ 24h 的记录
+    2. 按 platform 调对应 collector（X API / 头条 / 小红书 / 抖音）
+    3. insert metrics 表（多次快照，天然幂等）
+    4. 单条失败 → log warning + 继续（明日 cron 再试）
+    """
+    import sys
+    from datetime import datetime, timezone
+
+    from pipeline.config import load_config
+    from pipeline.metrics import run_collect
+
+    cfg = load_config(args.config)
+    now = datetime.now(timezone.utc)
+
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        result = run_collect(conn, config=cfg, now=now)
+    finally:
+        conn.close()
+
+    print(
+        f"collect: {result.examined} examined, "
+        f"{result.collected} collected, "
+        f"{result.failed} failed, "
+        f"{result.skipped} skipped"
+    )
+    # 失败条目的摘要打 stderr 便于运维
+    if result.failed > 0:
+        print(
+            f"collect: {result.failed} 条失败将次日自动重试",
+            file=sys.stderr,
+        )
+    return 0
 
 
 @_stage_lock("status")
