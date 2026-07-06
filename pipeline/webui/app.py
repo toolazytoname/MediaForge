@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -48,9 +48,7 @@ _CONFIG_PATH = "./config.yaml"
 
 
 def _conn() -> sqlite3.Connection:
-    c = db.connect(_DB_PATH)
-    db.init_db(c)
-    return c
+    return db.connect(_DB_PATH)
 
 
 @contextmanager
@@ -93,6 +91,14 @@ def create_app() -> FastAPI:
     base = Path(__file__).parent
     templates = Jinja2Templates(directory=str(base / "templates"))
 
+    # 应用启动时一次性建表（每请求跑 DDL 是浪费；create_app 内做完即可）
+    # db.connect 不支持 contextmanager，手动 close
+    _init_c = db.connect(_DB_PATH)
+    try:
+        db.init_db(_init_c)
+    finally:
+        _init_c.close()
+
     # /output 静态目录（只读）—— 工厂时挂载（同步，幂等）
     output_dir = Path("output")
     if output_dir.exists():
@@ -120,7 +126,7 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(
             request, "dashboard.html",
             {"counts": counts,
-             "now": datetime.utcnow().isoformat()},
+             "now": datetime.now(timezone.utc).isoformat()},
         )
 
     @app.get("/api/status")
