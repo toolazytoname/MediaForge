@@ -135,64 +135,96 @@ def login_toutiao(account: str, *, timeout_s: int = 300) -> Path:
             browser.close()
 
 
-# ── 小红书（提示用户用 XiaohongshuSkills 自带方式登录）─────
+# ── 小红书（subprocess 调 XiaohongshuSkills 自带 login） ───
 
 
 def login_xiaohongshu(
     account: str,
     *,
     skills_path: str | Path | None = None,
+    headless: bool = False,
+    timeout_s: int = 300,
 ) -> Path:
-    """小红书登录：提示用户在 mac 上按 XiaohongshuSkills 项目说明完成。
+    """小红书登录：调 `python <skills>/scripts/cdp_publish.py login`。
 
-    XiaohongshuSkills 自管 login state（cookie / QR 扫码），不同小版本间实现
-    可能差异。M4-3 不强耦合其内部登录机制——只确保 storage_state JSON
-    路径就位且为合法占位（首次发布时由 XiaohongshuSkills 自己写入）。
+    XiaohongshuSkills 自管 Chrome user-data-dir（每个 account 一个 profile）；
+    cookie 不在我方 storage_state JSON 里。我们的 login 命令只负责启动
+    有头 / 无头 Chrome、让人扫码（headless=False 默认），成功后 CLI 自己
+    把 cookie 存进 user-data-dir。下次发布 CLI 直接复用同一 profile。
 
-    用户拿到本命令打印的提示后：
-      1. 在 mac 上 clone white0dew/XiaohongshuSkills
-      2. 按其 README 跑登录命令
-      3. 把生成的 cookie/state 文件软链 / 拷贝到
-         secrets/cookies/xiaohongshu_<account>.json
+    Args:
+        account: 账号别名（传给 --account）
+        skills_path: 覆盖 XHS_SKILLS_PATH
+        headless: True 走 `--headless`（CLI 支持；用于 cron 远程登录 + QR 截图）
+        timeout_s: subprocess 超时（默认 5 分钟）
 
-    本函数仍创建占位文件，让 pipeline 配置校验通过、不被误报"凭据缺失"。
+    Returns:
+        占位 / 标记文件路径（XHS 不暴露 cookie 文件路径；返回 secrets/cookies/
+        xiaohongshu_<account>.json 占位仅作 pipeline 状态指示）
     """
     out_path = _ensure_cookies_path("xiaohongshu", account)
-
     skills = Path(
         skills_path
         or os.environ.get("XHS_SKILLS_PATH")
         or "~/.agents/skills/xiaohongshu-skills",
     ).expanduser()
 
-    print(
-        f"[login/xiaohongshu/{account}] 提示：XiaohongshuSkills 自管登录态。\n"
-        f"  1. 在 mac 上 clone 项目：\n"
-        f"     git clone https://github.com/white0dew/XiaohongshuSkills.git\n"
-        f"  2. 进入目录，按 README 完成登录（通常为 QR 扫码）\n"
-        f"  3. 把生成的 cookie/state JSON 放到:\n"
-        f"     {out_path}\n"
-        f"  或者把项目放到: {skills}\n"
-        f"  设置 XHS_SKILLS_PATH 环境变量覆盖默认路径。\n"
-        f"\n"
-        f"  本命令会创建一个占位 JSON，让 pipeline 校验通过。"
-    )
-
-    if not out_path.exists():
-        out_path.write_text(
-            json.dumps({
-                "_comment": (
-                    "Placeholder. Replace with XiaohongshuSkills-generated "
-                    "cookie/state JSON. See XiaohongshuSkills README."
-                ),
-                "cookies": [],
-                "origins": [],
-            }, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+    cli_script = skills / "scripts" / "cdp_publish.py"
+    if not cli_script.exists():
+        raise PublishError(
+            f"XiaohongshuSkills CLI not found: {cli_script}. "
+            f"Clone white0dew/XiaohongshuSkills (HEAD 988fd2e) and "
+            f"set XHS_SKILLS_PATH env."
         )
-        _chmod_600(out_path)
-    print(f"[login/xiaohongshu/{account}] placeholder saved: {out_path}")
+
+    cmd = [
+        "python", str(cli_script), "login",
+        "--account", account,
+    ]
+    if headless:
+        cmd.append("--headless")
+
+    import subprocess as _sp
+    try:
+        proc = _sp.run(cmd, timeout=timeout_s)
+    except _sp.TimeoutExpired as e:
+        raise PublishError(
+            f"xhs login timeout after {timeout_s}s; user did not scan QR"
+        ) from e
+    except FileNotFoundError as e:
+        raise PublishError(
+            f"xhs login failed: command not found: {cmd[0]}: {e}"
+        ) from e
+
+    if proc.returncode != 0:
+        snippet = (proc.stderr or proc.stdout)[-400:]
+        raise PublishError(
+            f"xhs login CLI failed (exit={proc.returncode}): {snippet}"
+        )
+
+    # 写占位文件（指示登录完成；CLI 自己管 Chrome profile）
+    out_path.write_text(
+        json.dumps({
+            "_comment": (
+                "XiaohongshuSkills login completed. "
+                "Actual cookies live in the CLI's Chrome user-data-dir, "
+                "not in this file. This file exists only so the pipeline "
+                "config-validator does not flag credentials missing."
+            ),
+            "account": account,
+            "skills_path": str(skills),
+            "logged_in_at": _now_iso(),
+        }, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    _chmod_600(out_path)
+    print(f"[login/xiaohongshu/{account}] login OK; marker saved: {out_path}")
     return out_path
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ── 顶层分发 ────────────────────────────────────────────────
