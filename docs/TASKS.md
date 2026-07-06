@@ -283,13 +283,15 @@
 **剩余待用户做**（真账号发布）：① `git clone https://github.com/white0dew/XiaohongshuSkills` 到 `~/.agents/skills/xiaohongshu-skills`；② `python -m pipeline.run login xiaohongshu main` 扫码；③ `python -m pipeline.run login toutiao main` 扫码；④ 测试账号连发 3 天验收（HARD_PARTS §2 验证法）。
 
 ### M4-4 Web 控制台 v2（发布日历 + 设置页）
-- [ ] **目标**：图形化管理发布排期
+- [x] **目标**：图形化管理发布排期
 - **步骤**：
   1. 按 TECH_SPEC §7 补齐 `/calendar`、`/publications/{id}/reschedule|cancel|retry`、`/settings`
   2. 日历为周视图表格（不引入 JS 日历库，htmx 换周即可）；retry 走 reset 逻辑（failed→queued）
   3. 设置页展示各平台 cookie 健康状态（最后校验时间 + 有效/失效标记）
 - **验收**：改一条排期时间、取消一条、重试一条 failed，数据库状态与页面一致；三重锁对 UI 操作生效（`publish.enabled=false` 时 retry 后依然不会真实发布）
 - **参考**：TECH_SPEC §7；ARCHITECTURE §3.9
+
+  ✅ 完成于 2026-07-06，commit 6e44db9，备注：M3-3 已实现 reschedule/cancel/retry/settings 路由；M4-4 新增周视图 + cookie 健康两段。`pipeline/webui/calendar.py::bucket_week()` 纯函数按 anchor ISO 周一→周日把 publications 分桶（非法 ISO 静默跳过）；`/calendar` 支持 `?week=YYYY-MM-DD` + htmx 换周（hx-target=#calendar-grid, hx-swap=innerHTML）；模板从扁平列表改为 7 列日格 + 按 status 渲染操作按钮。`pipeline/webui/cookie_health_views.py::collect_cookie_health()` 轻量级检查（不实际探活避免 settings 页 hang；publish 时仍走 cookie_health.check_health）— 头条 storage_state / 小红书 skills_path 双 CLI / X bearer_token 三类凭据统一接口。tests/test_webui_m4_4.py 16 新增（周视图 6 + settings 4 + 纯函数 6），全测 631 绿（原 615 + 16）。smoke：/、/calendar、/calendar?week、/settings、/api/status 五路由全 200。**契约不变**：AccountPlaywright 仍只含 id+cookies；XHS skills_path 走 env XHS_SKILLS_PATH（per-account 不进 schema，避免 TECH_SPEC §6 改动）。
 
 **🏁 M4 里程碑验收**：三平台（X+头条+小红书）自动发布稳定 7 天：每日 review 后自动排期发布，除 10 分钟人审（Web 审核台）外零人工干预。
 
