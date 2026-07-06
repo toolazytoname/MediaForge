@@ -14,14 +14,26 @@ from pipeline.creators.video.mpt import (
     build_mpt_engine,
     is_mpt_alive,
 )
+from pipeline.creators.video.pixelle import (
+    PixelleEngine,
+    build_pixelle_engine,
+    is_pixelle_alive,
+    FRAME_TEMPLATE_BY_ASPECT,
+    DEFAULT_VOICE,
+)
 
 __all__ = [
     "VideoEngine",
     "VideoRequest",
     "VideoJobStatus",
     "MPTEngine",
+    "PixelleEngine",
     "build_mpt_engine",
+    "build_pixelle_engine",
     "is_mpt_alive",
+    "is_pixelle_alive",
+    "FRAME_TEMPLATE_BY_ASPECT",
+    "DEFAULT_VOICE",
 ]
 
 
@@ -30,6 +42,7 @@ __all__ = [
 
 _ENGINE_BUILDERS = {
     "mpt": build_mpt_engine,
+    "pixelle": build_pixelle_engine,
 }
 
 
