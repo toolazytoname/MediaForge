@@ -282,6 +282,12 @@
 
 **剩余待用户做**（真账号发布）：① `git clone https://github.com/white0dew/XiaohongshuSkills` 到 `~/.agents/skills/xiaohongshu-skills`；② `python -m pipeline.run login xiaohongshu main` 扫码；③ `python -m pipeline.run login toutiao main` 扫码；④ 测试账号连发 3 天验收（HARD_PARTS §2 验证法）。
 
+  ⚠️ **BUG FOUND**（2026-07-06 补测时发现）：`publishers/__init__.py::_build_xiaohongshu` 给 `XiaohongshuPublisher` 传了 `cookies_path=account.credentials_path` 关键字参数，但 `XiaohongshuPublisher.__init__` 不接受该形参（只收 `skills_path`/`runner`/`timeout_s`/`render_fn`/`vendor_commit`）。**任何配置了 xiaohongshu 账号的 cmd_publish 调用都会 TypeError 崩溃**。M4-3 当时 e2e 测试绕过了 registry 路径（直接构造 XiaohongshuPublisher 传 skills_path），漏掉了该 bug。修复方向（待 Backlog 激活时做）：从 `_build_xiaohongshu` 去掉 `cookies_path=...` 关键字（XiaohongshuPublisher 内部用 skills_path 自管 Chrome user-data-dir，不需要单独 cookies 路径）；或扩展 `XiaohongshuPublisher.__init__` 接受 `cookies_path` 用于 cdp_publish 登录态。前者侵入更小。补测套件 `tests/test_publisher_registry_builders.py` 用 `@pytest.mark.xfail(reason="M4-3 _build_xiaohongshu cookies_path bug")` 标记覆盖该分支，等修后去掉 xfail。
+
+  ⚠️ **BUG FOUND**（2026-07-06 补测时发现）：`publishers/__init__.py::build_adapters` line 143 写死 `acc.credentials` 访问 `AccountConfig` 构造，但 `AccountPlaywright`（用于 toutiao/xhs/douyin）的字段名是 `cookies`，`AccountAPI`（用于 X）才是 `credentials`。**任何配 toutiao/xhs/douyin 账号的 cmd_publish 调用都会 AttributeError 崩溃**。修复方向：用 `getattr(acc, "credentials", None) or acc.cookies` 兼容两类型；或统一 schema（更彻底但触及 TECH_SPEC §6 契约——不在本任务范围）。补测套件用 `@pytest.mark.xfail` 标记覆盖该分支。
+
+  ⚠️ **BUG FOUND**（2026-07-06 补测时发现）：`publishers/__init__.py::_build_douyin` line 83 直接 `config.platforms.douyin`，不防御 `config=None`。`_build_toutiao/_build_xiaohongshu/_build_x` 都能容忍 `config=None`，唯独 douyin 不行。生产路径 `build_adapters(cfg)` 永远传非 None cfg 不爆，但 registry 单元测试中直接 `get_adapter("douyin", config=None)` 会 AttributeError。修复方向：与 _build_toutiao 对齐——`plat = getattr(getattr(config, "platforms", None), "douyin", None)` 防御。
+
 ### M4-4 Web 控制台 v2（发布日历 + 设置页）
 - [x] **目标**：图形化管理发布排期
 - **步骤**：

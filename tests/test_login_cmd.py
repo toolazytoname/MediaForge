@@ -21,6 +21,9 @@ import pytest
 from pipeline.publishers.base import PublishError
 from pipeline.publishers.login_cmd import (
     DEFAULT_COOKIES_DIR,
+    _chmod_600,
+    _ensure_cookies_path,
+    login_douyin,
     login_toutiao,
     login_xiaohongshu,
     run_login,
@@ -304,3 +307,160 @@ def test_cmd_login_failure_returns_1(tmp_path: Path, monkeypatch, capsys) -> Non
 def test_default_cookies_dir_constant() -> None:
     """secrets/cookies/ 是 secrets/ 的子目录，gitignore 应已覆盖。"""
     assert DEFAULT_COOKIES_DIR == Path("secrets/cookies")
+
+
+# ── 内部 helper ─────────────────────────────────────
+
+
+def test_ensure_cookies_path_creates_dir(tmp_path: Path, monkeypatch) -> None:
+    """_ensure_cookies_path 自动 mkdir secrets/cookies/，文件名 = <p>_<acc>.json。"""
+    monkeypatch.chdir(tmp_path)
+    p = _ensure_cookies_path("toutiao", "main")
+    # 路径是相对路径（DEFAULT_COOKIES_DIR = "secrets/cookies"）；CWD 已 chdir 到 tmp_path
+    assert p.name == "toutiao_main.json"
+    assert p.parent.name == "cookies"
+    assert p.parent.parent.name == "secrets"
+    assert (tmp_path / "secrets" / "cookies").is_dir()
+
+
+def test_chmod_600_posix(tmp_path: Path) -> None:
+    """POSIX 系统 _chmod_600 设为 0o600。"""
+    if os.name != "posix":
+        pytest.skip("posix-only")
+    f = tmp_path / "x.json"
+    f.write_text("{}")
+    _chmod_600(f)
+    mode = stat.S_IMODE(f.stat().st_mode)
+    assert mode == 0o600
+
+
+# ── 抖音（注入 Playwright） ─────────────────────────────────
+
+
+def test_login_douyin_saves_storage_state(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """注入 fake Playwright：模拟扫码完成 → storage_state 落盘。"""
+    monkeypatch.chdir(tmp_path)
+
+    fake_state = {
+        "cookies": [{"name": "sessionid", "value": "v", "domain": ".douyin.com"}],
+        "origins": [],
+    }
+
+    fake_page = MagicMock()
+    fake_page.wait_for_url.return_value = None
+    fake_page.goto.return_value = MagicMock(status=200)
+
+    fake_context = MagicMock()
+    fake_context.storage_state.return_value = fake_state
+    fake_context.new_page.return_value = fake_page
+
+    fake_browser = MagicMock()
+    fake_browser.new_context.return_value = fake_context
+
+    fake_p = MagicMock()
+    fake_p.chromium.launch.return_value = fake_browser
+    fake_p.__enter__ = lambda s: fake_p
+    fake_p.__exit__ = lambda s, *a: None
+
+    with patch("playwright.sync_api.sync_playwright", return_value=fake_p):
+        out_path = login_douyin("main", timeout_s=5)
+
+    assert out_path.exists()
+    assert out_path.name == "douyin_main.json"
+    loaded = json.loads(out_path.read_text(encoding="utf-8"))
+    assert loaded == fake_state
+    if os.name == "posix":
+        mode = stat.S_IMODE(out_path.stat().st_mode)
+        assert mode == 0o600
+
+
+def test_login_douyin_timeout_raises_publish_error(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """扫码超时 → PublishError。"""
+    monkeypatch.chdir(tmp_path)
+
+    from playwright.sync_api import TimeoutError as PWTimeout
+
+    fake_page = MagicMock()
+    fake_page.goto.return_value = MagicMock(status=200)
+    fake_page.wait_for_url.side_effect = PWTimeout("simulated")
+
+    fake_context = MagicMock()
+    fake_context.new_page.return_value = fake_page
+    fake_browser = MagicMock()
+    fake_browser.new_context.return_value = fake_context
+
+    fake_p = MagicMock()
+    fake_p.chromium.launch.return_value = fake_browser
+    fake_p.__enter__ = lambda s: fake_p
+    fake_p.__exit__ = lambda s, *a: None
+
+    with patch("playwright.sync_api.sync_playwright", return_value=fake_p):
+        with pytest.raises(PublishError, match="login timeout"):
+            login_douyin("main", timeout_s=1)
+
+
+def test_login_douyin_no_entry_url_raises(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """所有 PROFILE_URL_FALLBACK 都不通 → PublishError。"""
+    monkeypatch.chdir(tmp_path)
+
+    fake_page = MagicMock()
+    fake_page.goto.return_value = None  # 每次 goto 返回 None
+
+    fake_context = MagicMock()
+    fake_context.new_page.return_value = fake_page
+    fake_browser = MagicMock()
+    fake_browser.new_context.return_value = fake_context
+
+    fake_p = MagicMock()
+    fake_p.chromium.launch.return_value = fake_browser
+    fake_p.__enter__ = lambda s: fake_p
+    fake_p.__exit__ = lambda s, *a: None
+
+    with patch("playwright.sync_api.sync_playwright", return_value=fake_p):
+        with pytest.raises(PublishError, match="could not reach douyin"):
+            login_douyin("main", timeout_s=1)
+
+
+def test_login_douyin_chromium_launch_fails(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """chromium 启动失败 → PublishError（捕获所有 Exception）。"""
+    monkeypatch.chdir(tmp_path)
+
+    fake_p = MagicMock()
+    fake_p.chromium.launch.side_effect = RuntimeError("no chrome")
+    fake_p.__enter__ = lambda s: fake_p
+    fake_p.__exit__ = lambda s, *a: None
+
+    with patch("playwright.sync_api.sync_playwright", return_value=fake_p):
+        with pytest.raises(PublishError, match="chromium launch failed"):
+            login_douyin("main", timeout_s=1)
+
+
+# ── run_login 入口（douyin dispatch） ─────────────────────
+
+
+def test_run_login_dispatches_to_douyin(tmp_path: Path, monkeypatch) -> None:
+    """run_login('douyin', 'main') → login_douyin。"""
+    monkeypatch.chdir(tmp_path)
+    called: dict = {}
+
+    def fake_dy(account, **kw):
+        called["fn"] = "douyin"
+        called["account"] = account
+        return tmp_path / "douyin_main.json"
+
+    import pipeline.publishers.login_cmd as lc
+    monkeypatch.setitem(
+        lc._PLATFORM_LOGIN_DISPATCH, "douyin", fake_dy,
+    )
+    out = run_login("douyin", "main")
+    assert called["fn"] == "douyin"
+    assert called["account"] == "main"
+    assert out == tmp_path / "douyin_main.json"

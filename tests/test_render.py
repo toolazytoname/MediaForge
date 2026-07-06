@@ -342,6 +342,185 @@ class TestRenderCardsErrors:
                 templates_dir=tmp_out_dir / "empty",
             )
 
+    def test_chromium_not_found_raises(
+        self, sample_slides, tmp_out_dir: Path, monkeypatch,
+    ):
+        """探测 + 显式 chromium_path 都为 None → RenderError。"""
+        # 强制探测返 None
+        from pipeline.creators import render as rmod
+        monkeypatch.setattr(rmod, "_detect_chromium_path", lambda: None)
+        with pytest.raises(RenderError, match="chromium not found"):
+            render_cards(
+                "xhs_card", sample_slides, tmp_out_dir,
+                chromium_path=None,
+            )
+
+
+class TestChromiumDetectionDetailed:
+    """_detect_chromium_path 各分支覆盖（line 135 / 144-149 缺路径）。"""
+
+    def test_env_var_points_to_existing(self, tmp_path: Path, monkeypatch):
+        """env 指向存在路径 → 优先返回 env（line 135）。"""
+        from pipeline.creators import render as rmod
+
+        fake_chrome = tmp_path / "my-chrome"
+        fake_chrome.write_text("#!/bin/sh\n")
+        monkeypatch.setenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", str(fake_chrome))
+        # 系统探测路径（/snap/bin/chromium 等）全 patch 成不存在
+        monkeypatch.setattr(rmod.Path, "exists", lambda self: True if str(self) == str(fake_chrome) else False)
+
+        result = rmod._detect_chromium_path()
+        assert result == str(fake_chrome)
+
+    def test_env_var_points_to_nonexistent_falls_through(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """env 指向不存在路径 → 跳过 env，继续探测。"""
+        from pipeline.creators import render as rmod
+
+        monkeypatch.setenv(
+            "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+            str(tmp_path / "no-such-chrome"),
+        )
+        # 不抛错；返回 None 或有效路径
+        result = rmod._detect_chromium_path()
+        assert result is None or Path(result).exists()
+
+    def test_pw_cache_fallback(self, tmp_path: Path, monkeypatch):
+        """~/.cache/ms-playwright 命中 chromium 二进制 → 返回（line 144-148）。"""
+        from pipeline.creators import render as rmod
+
+        # 构造假 ~/.cache/ms-playwright/chromium-1234/chrome-linux/chrome
+        fake_cache = tmp_path / "ms-playwright"
+        chrome_dir = fake_cache / "chromium-1234" / "chrome-linux"
+        chrome_dir.mkdir(parents=True)
+        chrome_bin = chrome_dir / "chrome"
+        chrome_bin.write_text("#!/bin/sh\n")
+
+        # 屏蔽其他探测路径
+        monkeypatch.setenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "")
+        # 强制所有 /snap/bin, /usr/bin/* chromium 路径不存在
+        orig_exists = rmod.Path.exists
+        def fake_exists(self):
+            s = str(self)
+            if any(s.startswith(p) for p in ("/snap/bin", "/usr/bin/chromium", "/usr/bin/google-chrome")):
+                return False
+            return orig_exists(self)
+        monkeypatch.setattr(rmod.Path, "exists", fake_exists)
+        # 强制 os.path.expanduser → tmp_path
+        monkeypatch.setattr(
+            "os.path.expanduser",
+            lambda p: str(tmp_path / "ms-playwright") if p == "~/.cache/ms-playwright" else p,
+        )
+
+        result = rmod._detect_chromium_path()
+        assert result == str(chrome_bin)
+
+    def test_no_chromium_anywhere_returns_none(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """env 失效 + snap /usr/bin 都不存在 + pw_cache 不存在 → None（line 149）。"""
+        from pipeline.creators import render as rmod
+
+        monkeypatch.setenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/no/such/env/chrome")
+        # 所有探测路径全不存在 + pw_cache 也不存在
+        orig_exists = rmod.Path.exists
+        monkeypatch.setattr(rmod.Path, "exists", lambda self: False)
+        # 防御：orig_exists 可能被 monkeypatch 替换后丢失，这里用 lambda
+
+        result = rmod._detect_chromium_path()
+        assert result is None
+
+
+class TestWriteAtomicEdgeCases:
+    """_write_atomic_png 边界：已有 .tmp 文件 → 先 unlink（HARD_PARTS §5 幂等）。"""
+
+    def test_unlinks_existing_tmp(self, tmp_path: Path):
+        from pipeline.creators.render import _write_atomic_png
+
+        out = tmp_path / "card.png"
+        stale_tmp = out.parent / (out.name + ".tmp")
+        stale_tmp.write_bytes(b"stale content from previous run")
+
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"fresh" * 10
+        _write_atomic_png(out, png_bytes)
+
+        # 旧 .tmp 已被删；最终 png 写入新内容
+        assert not stale_tmp.exists()
+        assert out.read_bytes() == png_bytes
+
+
+# ── 8. render_cards 主循环 mock 覆盖（coverage 工具追踪） ────
+
+# 真实 chromium e2e（TestRenderCardsE2E）能 PASS 但 coverage 工具漏追踪
+# Playwright 内部 C extension 内的 Python 代码。用纯 mock 的版本确保
+# 220-250 render 主循环被 coverage 工具统计。
+
+class TestRenderCardsMockedMainLoop:
+    """mock sync_playwright 跑全 render_cards 主循环 → 覆盖 220-250。"""
+
+    def _build_mock_playwright(self):
+        """构造 fake Playwright contextmanager，模拟一次成功渲染。"""
+        from unittest.mock import MagicMock
+
+        fake_png = b"\x89PNG\r\n\x1a\n" + b"x" * 100
+        fake_page = MagicMock()
+        fake_page.screenshot.return_value = fake_png
+        fake_page.set_viewport_size.return_value = None
+        fake_page.set_content.return_value = None
+        fake_page.evaluate.return_value = None
+
+        fake_context = MagicMock()
+        fake_context.new_page.return_value = fake_page
+
+        fake_browser = MagicMock()
+        fake_browser.new_context.return_value = fake_context
+
+        fake_p = MagicMock()
+        fake_p.chromium.launch.return_value = fake_browser
+        fake_p.__enter__ = lambda s: fake_p
+        fake_p.__exit__ = lambda s, *a: None
+        return fake_p
+
+    def test_main_loop_with_chromium_explicit(
+        self, sample_slides, tmp_out_dir: Path, monkeypatch,
+    ):
+        """显式 chromium_path 走主循环：launch → context → page → 渲染 N 张。"""
+        from unittest.mock import patch
+
+        monkeypatch.chdir(tmp_out_dir.parent)
+        with patch("playwright.sync_api.sync_playwright", return_value=self._build_mock_playwright()):
+            paths = render_cards(
+                template="xhs_card",
+                slides=sample_slides[:2],  # 2 张图覆盖主循环
+                out_dir=tmp_out_dir,
+                chromium_path="/fake/chrome",
+            )
+        assert len(paths) == 2
+        for p in paths:
+            assert p.exists()
+            assert p.suffix == ".png"
+
+    def test_main_loop_chromium_launch_fails_wrapped_as_render_error(
+        self, sample_slides, tmp_out_dir: Path, monkeypatch,
+    ):
+        """launch 抛异常 → 包装为 RenderError（line 248-250）。"""
+        from unittest.mock import MagicMock, patch
+
+        fake_p = MagicMock()
+        fake_p.__enter__ = lambda s: fake_p
+        fake_p.__exit__ = lambda s, *a: None
+        fake_p.chromium.launch.side_effect = RuntimeError("chrome crashed")
+        monkeypatch.chdir(tmp_out_dir.parent)
+        with patch("playwright.sync_api.sync_playwright", return_value=fake_p):
+            with pytest.raises(RenderError, match="render_cards failed"):
+                render_cards(
+                    template="xhs_card",
+                    slides=sample_slides[:1],
+                    out_dir=tmp_out_dir,
+                    chromium_path="/fake/chrome",
+                )
+
 
 # ── 7. 集成：从真实 xiaohongshu/slides.json 路径加载 ──
 
