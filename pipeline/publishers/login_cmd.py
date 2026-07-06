@@ -227,12 +227,102 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# ── 抖音 ────────────────────────────────────────────
+
+
+def login_douyin(account: str, *, timeout_s: int = 300) -> Path:
+    """抖音登录：开有头 chromium → 创作者中心 → 扫码登录。
+
+    抖音登录流程：
+    1. 访问 creator.douyin.com → 跳登录页
+    2. 用户用抖音 App 扫码
+    3. 登录后页面跳回 creator.douyin.com
+    4. 保存 storage_state JSON
+
+    与头条登录逻辑相似（都是 Playwright storage_state 模式），单独函数
+    是因为 cookie 路径 / 等待 URL 不一样。
+    """
+    try:
+        from playwright.sync_api import (
+            sync_playwright, TimeoutError as PWTimeout,
+        )
+    except ImportError as e:
+        raise PublishError(
+            f"playwright not installed: {e}; "
+            "run `pip install playwright && playwright install chromium`"
+        ) from e
+
+    from pipeline.publishers import douyin_selectors as dy_sel
+
+    out_path = _ensure_cookies_path("douyin", account)
+
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.launch(headless=False)
+        except Exception as e:
+            raise PublishError(f"chromium launch failed: {e!r}") from e
+        try:
+            ctx = browser.new_context(
+                viewport={"width": 1440, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36"
+                ),
+            )
+            page = ctx.new_page()
+
+            # 进登录入口
+            for url in dy_sel.PROFILE_URL_FALLBACK:
+                try:
+                    resp = page.goto(url, timeout=15000)
+                    if resp is not None:
+                        break
+                except Exception:
+                    continue
+            else:
+                raise PublishError(
+                    "could not reach douyin login entry; "
+                    "check network / browser"
+                )
+
+            print(f"[login/douyin/{account}] 请在浏览器里用抖音 App 扫码登录。")
+            print(f"[login/douyin/{account}] 等待登录完成（最多 {timeout_s}s）...")
+
+            # 等待 URL 离开登录路径
+            try:
+                page.wait_for_url(
+                    lambda url: not any(
+                        kw in url.lower()
+                        for kw in ("passport", "login", "auth")
+                    ),
+                    timeout=timeout_s * 1000,
+                )
+            except PWTimeout as e:
+                raise PublishError(
+                    f"login timeout after {timeout_s}s; user did not scan QR"
+                ) from e
+
+            # 保存 storage_state
+            state = ctx.storage_state()
+            out_path.write_text(
+                json.dumps(state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            _chmod_600(out_path)
+            print(f"[login/douyin/{account}] saved: {out_path}")
+            return out_path
+        finally:
+            browser.close()
+
+
 # ── 顶层分发 ────────────────────────────────────────────────
 
 
 _PLATFORM_LOGIN_DISPATCH = {
     "toutiao": login_toutiao,
     "xiaohongshu": login_xiaohongshu,
+    "douyin": login_douyin,
 }
 
 

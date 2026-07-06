@@ -75,10 +75,26 @@ def _build_xiaohongshu(
     )
 
 
+def _build_douyin(account: AccountConfig, config: Any) -> PublisherAdapter:
+    """抖音 → DouyinPublisher（Playwright 自写，PRD §3.4 AI 标识必勾）。"""
+    from pipeline.publishers.douyin import DouyinPublisher
+    # AI 标识占比：config.platforms.douyin.ai_ratio > 默认 'high'
+    ai_ratio = "high"
+    plat = getattr(config.platforms, "douyin", None)
+    if plat is not None and hasattr(plat, "ai_ratio"):
+        ai_ratio = plat.ai_ratio or "high"
+    return DouyinPublisher(
+        cookies_path=account.credentials_path,
+        screenshot_dir=Path("logs/screenshots/douyin"),
+        ai_ratio=ai_ratio,
+    )
+
+
 _BUILDERS: dict[str, Callable[[AccountConfig, Any], PublisherAdapter]] = {
     "x": _build_x,
     "toutiao": _build_toutiao,
     "xiaohongshu": _build_xiaohongshu,
+    "douyin": _build_douyin,
 }
 
 
@@ -115,7 +131,7 @@ def build_adapters(
 
     out: dict[str, list[tuple[AccountConfig, PublisherAdapter]]] = {}
     platforms = cfg.platforms.model_dump(exclude_none=False)
-    for platform_name in ("x", "toutiao", "xiaohongshu"):
+    for platform_name in ("x", "toutiao", "xiaohongshu", "douyin"):
         plat_obj = getattr(cfg.platforms, platform_name, None)
         if plat_obj is None:
             continue

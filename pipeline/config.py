@@ -173,6 +173,7 @@ class PlatformsConfig(BaseModel):
     x: Platform | None = None
     toutiao: Platform | None = None
     xiaohongshu: Platform | None = None
+    douyin: Platform | None = None
 
 
 # ── WebUI ─────────────────────────────────────────────────
