@@ -2,12 +2,14 @@
 
 集中 export 公共 API 与 `get_adapter(platform, account)` 工厂。
 M4-2: x（XApiPublisher）
-M4-3: toutiao（Playwright）/ xiaohongshu（XiaohongshuSkills 桥）
+M4-3: toutiao（Playwright 自写）/ xiaohongshu（XiaohongshuSkills 桥）
 
 新增平台 = 在 _BUILDERS 加一行；调用方零改动。
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any, Callable
 
 from pipeline.publishers.base import (
@@ -51,11 +53,32 @@ def _build_x(account: AccountConfig, config: Any) -> PublisherAdapter:
     return XApiPublisher(bearer_token=token)
 
 
+def _build_toutiao(account: AccountConfig, config: Any) -> PublisherAdapter:
+    """头条 → ToutiaoPublisher（Playwright 自写，HARD_PARTS §2）。"""
+    from pipeline.publishers.toutiao import ToutiaoPublisher
+    return ToutiaoPublisher(
+        cookies_path=account.credentials_path,
+        screenshot_dir=Path("logs/screenshots/toutiao"),
+    )
+
+
+def _build_xiaohongshu(
+    account: AccountConfig, config: Any,
+) -> PublisherAdapter:
+    """小红书 → XiaohongshuPublisher（subprocess 桥，evaluation-notes §2）。"""
+    from pipeline.publishers.xiaohongshu import XiaohongshuPublisher
+    # 路径优先级：env XHS_SKILLS_PATH > 默认
+    skills_path = os.environ.get("XHS_SKILLS_PATH")
+    return XiaohongshuPublisher(
+        cookies_path=account.credentials_path,
+        skills_path=skills_path,
+    )
+
+
 _BUILDERS: dict[str, Callable[[AccountConfig, Any], PublisherAdapter]] = {
     "x": _build_x,
-    # M4-3 在此加：
-    # "toutiao": _build_toutiao,
-    # "xiaohongshu": _build_xiaohongshu,
+    "toutiao": _build_toutiao,
+    "xiaohongshu": _build_xiaohongshu,
 }
 
 
@@ -119,6 +142,4 @@ def build_adapters(
     return out
 
 
-# ── imports stay at bottom to avoid cycle when builders import sub-modules ───
-
-from pathlib import Path  # noqa: E402
+# imports stay at bottom to avoid cycle when builders import sub-modules

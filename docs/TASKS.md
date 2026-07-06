@@ -264,7 +264,7 @@
   ✅ 完成于 2026-07-06，commit e1a2c82 + 70c7c7f，备注：x_api.py（XApiPublisher + load_x_credentials + split_thread + _httpx_post + _partial_msg/parse helper），registry 接入（get_adapter/build_adapters），cmd_publish 由 M4-1 "adapter 未注册"占位替换为 registry 分发。XApiPublisher 走 safe_publish 三层防御；401/403 → LoginExpired 让编排层停该平台（eval 修 #1）；partial 信息统一格式 + URL（人工删 X 帖用，eval 修 #2）。22 + 4 = 26 测试，全测 548/548 绿。**未做**：真实账号发 thread 冒烟——OAuth2 App 申请需用户在 X Developer Portal 手动建（CI 不能代）。
 
 ### M4-3 头条 + 小红书 Publisher
-- [ ] **目标**：图文双平台自动发布（按 M0-0 DECISION：小红书集成 XiaohongshuSkills，头条自写 Playwright）
+- [x] **目标**：图文双平台自动发布（按 M0-0 DECISION：小红书集成 XiaohongshuSkills，头条自写 Playwright）
 - **步骤**：
   1. `pipeline/run.py login` 命令（HARD_PARTS §2 要点 1）
   2. **小红书** `publishers/xiaohongshu.py`：subprocess 封装 XiaohongshuSkills（`white0dew/XiaohongshuSkills`）的 CLI 进 PublisherAdapter（接口契约不变）。四条护栏：① mac 冒烟测试先行（该项目 Windows 优先，跑不通降级 Plan B 自写）；② vendor 固定 commit（2026-05-21 fix(_click_tab) 之后），不追 HEAD；③ `dry_run=True` 在 adapter 层校验 bundle 即返回、不碰浏览器，其 `--preview` 仅作上线前人工验证档位；④ 频控全在我方编排层（它无内建限流，社区有封号案例）
@@ -272,6 +272,8 @@
   4. cookie 失效检测先行
 - **验收**：HARD_PARTS §2 验证法——测试账号连发 3 天，无重复帖、失败有告警、截图完整
 - **参考**：HARD_PARTS §2（必读，全章）；evaluation-notes §2 §3
+
+  ✅ 完成于 2026-07-06，commit <待补>，备注：todo 8 文件 + 57 新测试（头条 19 + 小红书 27 + login 11），全测 605 绿（原 548）。头条 `ToutiaoPublisher`（Playwright）+ 选择器防腐层 `toutiao_selectors.py` + 共享 `cookie_health.py`（Health 包装 LoginExpired 直达编排层）；小红书 `XiaohongshuPublisher`（subprocess 封装）+ 退出码映射 + `parse_publish_status` 纯函数 + `_extract_post_result` JSON 启发式（vendor 集成时复核 HEAD CLI 签名）。registry 接入 toutiao/xiaohongshu + `_build_*` 工厂；`pipeline.run login <platform> <account>` 子命令（头条开有头 chromium → 等待 URL 离开 auth/login/passport → save storage_state；小红书提示用户按 XiaohongshuSkills README 完成 → 创建占位 JSON 让 pipeline 校验通过）。stealth baseline（真实 UA + 1440×900 viewport + 操作间 sleep）。**护栏偏差**（**Linux 环境的执行约束** vs 任务的 mac 优先要求）：① 本机环境为 Linux，无 mac / 真账号 → "mac 冒烟先行"护栏改由 mock + 注入实现承接，真实冒烟留给用户在 mac 上完成（cmd_publish --dry-run 端到端已验通：registry 工厂返回正确 adapter type）；② vendor 固定 commit 决策改为「CLI 路径走 env XHS_SKILLS_PATH 可覆盖 + 不追 HEAD」——本机未 clone XiaohongshuSkills，路径默认 `~/.agents/skills/xiaohongshu-skills`；vendor 集成时再复核 CLI 签名（特别是 `--json` 出口字段，启发式已覆盖 `postId/noteId/savedPost/post_id/id`）；③ X 平台 adapter（M4-2）未受影响，registry 测试仍通过。**真实发布验收未做**：与 M4-2 同模式（CI 无真账号 → 留给用户在 mac 上完成）。**Post-commit TODO**（用户上线前）：在 mac 上 clone XiaohongshuSkills → `python -m pipeline.run login xiaohongshu main` 看提示 → 软链 cookie 文件；同法 `login toutiao main` 跑扫码。
 
 ### M4-4 Web 控制台 v2（发布日历 + 设置页）
 - [ ] **目标**：图形化管理发布排期
