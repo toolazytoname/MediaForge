@@ -354,6 +354,8 @@
 - **前置**：过去 30 天人审通过率 ≥ 85% 且无平台违规记录，否则不开
 - **验收**：高分内容跳过人审直接 approved，日志清晰标注 auto-approved
 
+  ⏸️ **未启动**（2026-07-06）：前置条件不满足——过去 30 天无真实发布数据。**真实运营满 30 天后再启动本任务**。预计届时需要：① 跑 M6-1 collect 累计 30 天 metrics ② 改 review.runner.py 在 policy=auto_above:N 时跳过人工 review ③ audit trail 留「auto-approved」标签 ④ 加测试。
+
 ---
 
 ## 后续 Backlog（不排期）
