@@ -1,6 +1,6 @@
 # HARD_PARTS — 难点攻坚与实施注意事项
 
-> 版本 v1.0 | 2026-07-04
+> 版本 v1.1 | 2026-07-06
 > 架构师预判的坑。**实现每个任务前，先查本文件有无对应章节。** 每个难点给出：为什么难、决策、实现要点、验证方法。
 
 ---
@@ -119,15 +119,15 @@
 
 | 组件 | 当前选型 | Plan B | 切换触发条件 |
 |------|----------|--------|--------------|
-| 国内发布（小红书） | XiaohongshuSkills（M0-0 决策，subprocess 集成，pin commit） | 自写 Playwright（patchright，参考 social-auto-upload 新版 uploader + AiToEarn electron 遗留代码） | mac 冒烟不通过，或连续 1 周失败率 > 30%，或项目停更 |
-| 国内发布（头条/其他） | 自写 Playwright（M0-0 决策；AiToEarn/xhs-toolkit 已评估放弃） | AiToEarn 仅海外平台重评 | — |
-| 公众号图文 | 自研 lane + 官方 API 草稿箱（M0-0 决策：不部署 TrendPublish，移植其审稿协议/微信排版/防幻觉条款） | TrendPublish CLI dry-run 作对照产线 | 自研排版质量不达标 |
-| 海外发布 | X 官方 API | Postiz 自托管（一次接入 YouTube/TikTok/IG 等） | 扩到 ≥ 3 个海外平台时直接上 Postiz |
-| 视频生成（量产） | MoneyPrinterTurbo | NarratoAI（解说类）/ 直接 ffmpeg + edge-tts 自拼 | MPT 停更或质量不满意 |
-| 视频生成（精品/AI 生成类） | Pixelle-Video（M0-0 决策，VideoEngine 第二引擎，mode=fixed 注入我方脚本） | OpenMontage（远期观察）/ 人工 + Remotion | 生图成本失控或项目停更 |
-| 数字人 | AIGCPanel（M5-3 缩减为速评） | HeyGen 等商业 API | 本地部署质量/性能不达标 |
+| 国内发布（小红书） | XiaohongshuSkills（M4-3 已实装，subprocess 集成，pin commit 2026-05-21） | 自写 Playwright（patchright，参考 social-auto-upload 新版 uploader + AiToEarn electron 遗留代码） | mac 冒烟不通过，或连续 1 周失败率 > 30%，或项目停更 |
+| 国内发布（头条/抖音） | 自写 Playwright（M4-3 头条 / M5-2 抖音已实装；AiToEarn/xhs-toolkit M0-0 评估放弃） | AiToEarn 仅海外平台重评 | — |
+| 公众号图文 | 自研 lane + 官方 API 草稿箱（M0-0 决策：M2-2 已移植审稿协议/防幻觉条款；M0-0 不部署 TrendPublish；Backlog 待激活） | TrendPublish CLI dry-run 作对照产线 | 自研排版质量不达标 |
+| 海外发布 | X 官方 API（M4-2 已实装） | Postiz 自托管（一次接入 YouTube/TikTok/IG 等） | 扩到 ≥ 3 个海外平台时直接上 Postiz |
+| 视频生成（量产） | MoneyPrinterTurbo（M5-1 已实装，工厂降级） | NarratoAI（解说类）/ 直接 ffmpeg + edge-tts 自拼 | MPT 停更或质量不满意 |
+| 视频生成（精品/AI 生成类） | Pixelle-Video（M5-3 已实装为 VideoEngine 第二引擎，mode=fixed 注入我方脚本，404 重提交） | OpenMontage（远期观察）/ 人工 + Remotion | 生图成本失控或项目停更 |
+| 数字人 | AIGCPanel（M5-3 缩减为速评后留 Backlog） | HeyGen 等商业 API | 本地部署质量/性能不达标 + 账号过带货门槛 + 平台虚拟人报备完成 |
 | 热点源 | RSS + DailyHotApi 自部署 | newsnow 自部署 | DailyHotApi 接口挂 |
-| 图像生成 | 不用（模板渲染兜底）；provider=none；可选 baoyu-image-gen subprocess（M0-0 决策扩展，11 provider，见 evaluation-notes §5） | Gemini/OpenAI 图像 API | 模板卡片视觉疲劳、数据表明配图影响点击；或 baoyu-image-gen 升级破坏 CLI 签名（真集成时复核 HEAD） |
+| 图像生成 | 不用（模板渲染兜底）；provider=none；可选 baoyu-image-gen subprocess（M2-4.5 子任务待激活，11 provider，见 evaluation-notes §5） | Gemini/OpenAI 图像 API | 模板卡片视觉疲劳、数据表明配图影响点击；或 baoyu-image-gen 升级破坏 CLI 签名（真集成时复核 HEAD） |
 
 > 巨人肩膀原则：每个垂直环节动工前先查本表和 opensource-survey.md——**默认假设已有人造过这个轮子**。发现新的成熟项目 → 更新调研文档并在对应任务下记录，宁可多花 2 小时评估也不自写 2 周。
 
@@ -136,9 +136,11 @@
 ## §8 时区与调度细节
 
 - 存储一律 UTC，**排期计算在本地时区**（平台黄金时段是本地概念），config 里 `timezone: Asia/Shanghai`
-- Mac 上用 launchd 而非 cron：睡眠错过的任务会在唤醒后补跑；`launchd/` 目录放 plist 模板，TASKS.md M3 有安装说明
-- 发布时间随机化必须用 `random.Random(seed=publication_id)` —— 可复现（重跑 schedule 不会改变已排时间）
-- cron 重叠防护：每个子命令启动时 `flock` 锁文件 `locks/<stage>.lock`，拿不到锁直接退出（上一轮还没跑完）
+- 定时驱动按平台二选一：
+  - macOS：launchd plist（睡眠错过的任务会在唤醒后补跑）；`launchd/` 目录放 plist 模板，`scripts/install_launchd.sh` 幂等安装
+  - Linux：cron + 每个子命令入口的 `flock` 装饰器（`scripts/install_cron.sh` 备选安装）
+- 发布时间随机化必须用 `random.Random(seed=sha256(content_id|platform))` —— 可复现（重跑 schedule 不会改变已排时间）
+- cron 重叠防护：每个子命令启动时 `flock` 锁文件 `locks/<stage>.lock`，拿不到锁直接 `exit 0` 打印 `SKIP (lock held)`（HARD_PARTS §5）
 
 ---
 

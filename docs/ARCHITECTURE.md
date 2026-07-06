@@ -1,6 +1,6 @@
 # ARCHITECTURE — 系统架构设计
 
-> 版本 v1.0 | 2026-07-04 | 实现前必读。接口契约细节见 [TECH_SPEC.md](./TECH_SPEC.md)
+> 版本 v1.1 | 2026-07-06 | M0~M6 主线全达成后回顾修订。接口契约细节见 [TECH_SPEC.md](./TECH_SPEC.md)
 
 ## 1. 设计原则
 
@@ -29,10 +29,10 @@
 └────┼──────────┼──────────┼─────────┼─────────┼──────────┼────────────┼──────────┼─────┘
      │          │          │         │         │          │            │          │
      ▼          ▼          ▼         ▼         ▼          ▼            ▼          ▼
- sources/   topics/    creators/   gate/    review/   scheduler    publishers/ metrics/
- RSS,HN,    LLM评分    LLM API+    LLM      IM通知/    错峰排期     social-auto  平台数据
- GH趋势     去重      模板渲染+   批判     审核文件               -upload,     回流
- DailyHot             MPT视频     评分                            Postiz,X API
+ sources/   topics/    creators/   gate/    review/   scheduler    publishers/        metrics/
+ RSS,HN,    LLM评分    LLM API+    LLM      IM通知/    错峰排期     自写Playwright    平台数据
+ GH趋势     去重      模板渲染+   批判     审核文件    可复现种子    +Xiaohongshu      回流
+ DailyHot             MPT/Pixelle 评分                 (sha256)     Skills桥,X API    +周报
      │          │          │         │         │          │            │          │
      └──────────┴──────────┴─────────┴────┬────┴──────────┴────────────┴──────────┘
                                           ▼
@@ -70,8 +70,10 @@
 - 两级结构：
   - `CanonicalCreator`：生成核心内容（深度长文 markdown）——这是唯一一次"真正的创作"
   - `DerivativeCreator`：从 canonical 派生平台原生格式（图卡、thread、视频脚本）——只做"翻译"，不做二次创作
-- LLM 调用统一走 `creators/llm.py`（Claude API 封装，含重试/预算控制）
-- 视频走 `creators/video.py`（MoneyPrinterTurbo HTTP API 客户端）
+- LLM 调用统一走 `creators/llm.py`（Claude / MiniMax API 封装，含重试/预算控制/JSON 修复）
+- 视频口播稿走 `creators/video_script.py`（口播稿派生，60-90s 钩子前置）
+- 视频生成走 `creators/video/` 抽象层：MPT 默认（量产）+ Pixelle-Video 第二引擎（精品，`mode=fixed` 注入我方脚本）
+- 图卡渲染走 `creators/render.py`（Jinja2 + Playwright 1080×1440，可选 baoyu-image-gen 配图）
 - **边界**：创作不自评。写完就交给 gate
 
 ### 3.4 gate/ — 质量门禁（本系统的灵魂）
@@ -104,16 +106,23 @@
 ### 3.7 publishers/ — 发布执行
 
 - 输入：status=`queued` 且 `scheduled_at <= now` 的 Publication。输出：status=`published`（带平台返回的 URL/ID）或 `failed`
-- 每平台一个 `PublisherAdapter` 子类：`ToutiaoPublisher`（Playwright，图文长文）、`XiaohongshuPublisher`（走 social-auto-upload）、`XPublisher`（官方 API）、后续 `WechatMpPublisher`（官方 API 草稿箱）、`DouyinPublisher`、`YoutubePublisher`（Postiz API）
+- 每平台一个 `PublisherAdapter` 子类：
+  - `XApiPublisher`：X 官方 API v2（OAuth2 bearer + 链式 thread）
+  - `ToutiaoPublisher`：自写 Playwright，图文长文（与 M0-0 决策一致——AiToEarn 整体方案放弃）
+  - `XiaohongshuPublisher`：subprocess 封装 `white0dew/XiaohongshuSkills`（vendor pin commit），Plan B 是自写 Playwright
+  - `DouyinPublisher`：自写 Playwright，**强制勾选 AI 生成标识**（PRD §3.4 不可省略）
+  - 后续：`WechatMpPublisher`（官方 API 草稿箱 + 人工点发布）、`YoutubePublisher`（Postiz API）
 - **三重安全锁**（缺一不发）：见 §6
-- 失败重试：指数退避最多 2 次；仍失败 → `failed` + IM 告警，**绝不**自动无限重试（风控敏感）
+- 失败重试：失败 → `failed` + IM 告警，**绝不**自动无限重试（风控敏感）；需重试由 Web UI 或 `reset` 命令人工触发
 - **边界**：发布器不修改内容。格式不合规（超字数等）→ 报 `failed` 让上游修
+- **超时清理**：publishing 状态超过 30min 的记录自动 → failed + 'manual check needed'（绝不自动重试，HARD_PARTS §1）
 
 ### 3.8 metrics/ — 数据回流
 
 - 输入：status=`published` 且发布 > 24h 的 Publication。输出：`Metric` 记录（曝光/互动数据快照）
-- V1 只做两件事：定时抓取表现数据入库 + 生成周报（`output/weekly-report.md`）
-- V2 才做：表现数据反哺 topics 评分权重
+- 定时抓取各平台表现数据（X 走 API、头条/抖音走 Playwright 创作者后台、小红书暂无标准化命令）入库 `metrics` 表
+- 每周一生成 `output/weekly-report.md`（发布数 / 门禁通过率 / 平台 top3 bottom3 / LLM 成本 / 门禁分-表现 Pearson r）
+- M6-3 待前置条件满足后启动：高分门禁内容 auto-approved 免审直发
 - **边界**：只读平台数据，绝不代表用户进行互动（点赞/回复自动化是高危风控行为）
 
 ### 3.9 webui/ — 本地 Web 控制台（图形化管控）
@@ -123,10 +132,11 @@
 - 页面：
   1. **Dashboard**：各状态计数、今日流水线运行记录、LLM 本月成本、最近告警
   2. **选题池**：topics 列表（按状态过滤），手动"加急"某 topic（升为 selected）或废弃
-  3. **审核台**（核心页面）：待审内容并排展示 canonical 预览 + 图卡缩略 + 门禁评分/评语，一键 通过/打回（打回填原因）——替代编辑 REVIEW.md 的操作方式（REVIEW.md 保留为降级手段）
-  4. **发布日历**：publications 日历视图，可改时间、取消、把 failed 重置为 queued
+  3. **审核台**（核心页面）：待审内容并排展示 canonical 预览 + 图卡缩略 + 门禁评分/评语，一键 通过/打回（打回填原因）
+  4. **发布日历**：publications 周视图（7 列日格），可改时间、取消、把 failed 重置为 queued
   5. **内容详情**：单条内容全链路时间线（topic→创作→门禁→审核→各平台发布→数据）
-  6. **设置**：只读展示 config（脱敏）+ 各平台登录态健康状态
+  6. **设置**：只读展示 config（脱敏）+ 各平台登录态健康状态（头条 storage_state / 小红书 skills_path / X bearer_token 三类）
+- **REVIEW.md 与 webui 并存**：M2-5 实现的 REVIEW.md 仍是 cron 主路径（人可手编）；M3-3 实现的 webui 是新增的图形化通道，两条路径都走 `db.transition()` 状态机
 - 写操作全部复用 `db.py transition()`（状态机约束对 UI 同样生效）；发布三重锁对 UI 触发的操作同样生效
 - 安全：默认只绑 `127.0.0.1:8787`，本机单人无认证；部署 VPS 需开 `webui.auth` basic auth
 
@@ -160,8 +170,9 @@ Publication: queued → publishing → published
 | 调度 | cron/launchd 起步 | KISS；每阶段是独立命令天然可 cron | n8n（V1 引入=运维负担）、Celery（无分布式需求） |
 | LLM | Anthropic API 直连（Haiku 初筛/Sonnet 创作） | 纯 API 依赖，配 key 即跑，不依赖 Claude Code CLI | 依赖本地 Claude Code skills（被否：系统必须能脱离开发工具独立运行） |
 | 图卡/封面渲染 | HTML 模板（Jinja2）+ Playwright 截图 | 零外部服务、离线可跑、风格由模板资产控制 | 调 Claude Code skills（开发工具依赖）、纯图像生成 API（成本+不可控） |
-| 视频 | MoneyPrinterTurbo（API 模式，Docker 部署） | 95k star 项目、活跃、MIT、有 HTTP API | 自写 ffmpeg 管线（重复造轮子） |
-| 国内发布 | social-auto-upload（Playwright） | 唯一活跃的多平台方案 | AiToEarn 自部署（重，但其 MCP 是备选，见 HARD_PARTS §7） |
+| 视频（量产） | MoneyPrinterTurbo（API 模式，Docker 部署） | 95k star 项目、活跃、MIT、有 HTTP API | 自写 ffmpeg 管线（重复造轮子） |
+| 视频（精品/AI 生成类） | Pixelle-Video（第二引擎，mode=fixed 注入我方脚本） | 24k star，Web 端可见可控 | NarratoAI / OpenMontage（远期观察） |
+| 国内发布 | 自写 Playwright + XiaohongshuSkills 桥（subprocess） | 头条/抖音无官方 API → 必须浏览器自动化；小红书借社区成熟方案 | AiToEarn 自部署（V1 评估放弃——自部署下国内平台无法无人值守）；social-auto-upload 的现成 uploader（V1 评估参考） |
 | 海外发布 | X 官方 API 起步；扩展期上 Postiz | X API 免费档够用；Postiz 一次接入多平台 | 逐平台自接（工作量爆炸） |
 | 通知 | 飞书/Telegram webhook（config 二选一） | 单人使用，webhook 最简 | 自建 Web UI（YAGNI） |
 | 配置 | 单一 `config.yaml` + pydantic 校验 | 启动即验证，fail fast | 环境变量散落（难管理） |
@@ -181,26 +192,42 @@ Publication: queued → publishing → published
 
 ## 7. 部署形态
 
-- **V1**：本地 Mac，launchd 定时任务（Mac 上比 cron 可靠，睡眠唤醒后会补跑），MoneyPrinterTurbo 跑 Docker
-- **V2**：迁移到一台常开 VPS/家用小主机；国内平台发布器因需要登录态，建议留在本地 Mac 或配指纹浏览器环境
+- **V1**：本机（macOS 或 Linux），定时驱动——
+  - macOS：launchd plist（睡眠唤醒后会补跑）
+  - Linux：cron + `pipeline/run.py` 入口的 flock 装饰器（防并发重叠）
+  - 两者都装：`scripts/install_launchd.sh`（mac）+ `scripts/install_cron.sh`（Linux）幂等切换
+- **V2**：迁移到一台常开 VPS/家用小主机；国内平台发布器因需要登录态，建议留在本地有头浏览器环境或配指纹浏览器
+- MoneyPrinterTurbo / Pixelle-Video：各自 Docker Compose 部署在同机
 - 日志：`logs/pipeline.log`（rotating），所有阶段共用结构化日志（json lines），排障靠 `content_id` 全链路追踪
+- 备份：`scripts/backup_db.sh` 每日 `sqlite3 .backup` 命令（保证一致性，非 cp）→ `backups/` 保留 14 天
 
 ## 8. 目录与文件产物约定
 
 ```
 output/
   2026-07-05/
-    t_a1b2c3/                      # content_id 目录
-      canonical.md                 # 核心内容
+    c_a1b2c3/                      # content_id 目录
+      canonical.md                 # 核心长文
       meta.json                    # Content 元数据快照
-      critique.md                  # 门禁批判意见
-      xiaohongshu/                 # 派生格式，每平台一目录
-        cards/*.png
-        caption.txt
+      critique.md                  # 门禁批判意见（gated 后生成）
+      toutiao.md                   # 头条短文
+      xiaohongshu/
+        slides.json                # 图卡结构化数据
+        caption.md
+        tags.txt
+        cards/*.png                # 渲染后的 1080×1440 图卡
       x/
-        thread.md
-      video/
-        script.md
-        final.mp4
-    REVIEW.md                      # 当日审核清单
+        thread.md                  # ≤10 条英文 thread
+    REVIEW.md                      # 当日审核清单（M2-5 cron 路径）
+  weekly-report.md                 # 周一生成的周报（M6-2）
+
+secrets/
+  cookies/<platform>_<account>.json  # Playwright storage_state，权限 600
+  *.env                            # 平台凭据（gitignore）
+
+locks/
+  <stage>.lock                    # flock 防并发，同 stage 不重叠
+
+backups/
+  state-YYYY-MM-DD.db             # sqlite3 .backup 每日滚动 14 天
 ```
