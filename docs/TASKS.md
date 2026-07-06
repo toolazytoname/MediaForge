@@ -288,6 +288,8 @@
 
   ⚠️ **BUG FOUND**（2026-07-06 补测时发现）：`publishers/__init__.py::_build_douyin` line 83 直接 `config.platforms.douyin`，不防御 `config=None`。`_build_toutiao/_build_xiaohongshu/_build_x` 都能容忍 `config=None`，唯独 douyin 不行。生产路径 `build_adapters(cfg)` 永远传非 None cfg 不爆，但 registry 单元测试中直接 `get_adapter("douyin", config=None)` 会 AttributeError。修复方向：与 _build_toutiao 对齐——`plat = getattr(getattr(config, "platforms", None), "douyin", None)` 防御。
 
+  ✅ **BUG FIX**（2026-07-06，commit 96c01f9）：3 个 bug 已修。① `_build_xiaohongshu` 删多余 `cookies_path` kwarg；② `build_adapters` 按 `platform_name` 分支（`x` 读 `acc.credentials`、Playwright 三平台读 `acc.cookies`）；③ `_build_douyin` 加 `if config is not None` 守卫。`tests/test_publisher_registry_builders.py` 11/11 全绿（原 7 pass + 3 xfail，新增 `test_build_douyin_tolerates_config_none` 覆盖 #3）。约定遵守：TECH_SPEC §6 契约不动，仅修 registry 层。
+
 ### M4-4 Web 控制台 v2（发布日历 + 设置页）
 - [x] **目标**：图形化管理发布排期
 - **步骤**：
