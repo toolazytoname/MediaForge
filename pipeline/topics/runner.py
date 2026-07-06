@@ -1,17 +1,23 @@
-"""score 阶段编排（M1-4）。
+"""score 阶段编排（M1-4 + M1-6 跨源 URL 去重）。
 
 score_all(conn, pillars, quota, min_score, now) → ScoreRunResult
 
 行为：
   1. 注入 llm 模块级状态（db conn + tier_map）
   2. 取所有 status=raw topic
-  3. 逐条 score_topic（解析失败 → rejected；其他异常上抛）
-  4. select_daily 转 top N → selected
-  5. 返回 processed / selected / rejected 计数给 CLI 打摘要
+  3. **M1-6：URL 合并去重**（同 URL 多源转载 → 只保留代表条参与评分）
+  4. 逐条 score_topic（解析失败 → rejected；其他异常上抛）
+  5. select_daily 转 top N → selected
+  6. 返回 processed / selected / rejected / duplicates_merged 计数给 CLI 打摘要
+
+M1-6 已知限制：merge_by_url 只在内存里合并；DB 中重复条目仍占 raw 状态，
+下次 cron score 会再合并一次（少量 LLM 浪费）。彻底解决需 schema 加
+merged_into_topic_id 字段（动契约，留 TODO）。
 """
 from __future__ import annotations
 
 import sqlite3
+import sys
 from dataclasses import dataclass
 
 from pipeline import db
@@ -20,6 +26,7 @@ from pipeline.creators import llm as llm_mod
 from pipeline.models import TopicStatus
 from pipeline.topics.scorer import score_topic
 from pipeline.topics.selector import select_daily
+from pipeline.topics.url_dedup import merge_by_url
 
 
 @dataclass(frozen=True)
@@ -27,6 +34,8 @@ class ScoreRunResult:
     processed: int
     selected: int
     rejected: int
+    # M1-6：URL 合并去重丢弃的条数；duplicate 不参与评分/不参与选 quota
+    duplicates_merged: int = 0
 
 
 # 默认 tier 映射（M1-3 已留口，可由外部 set_tier_map 覆盖）
@@ -48,7 +57,8 @@ def score_all(
     """执行一次 score 编排。
 
     处理流程：
-      raw → (scored | rejected) → (selected 每日 top N)
+      raw → URL 合并去重（M1-6） → score (representatives only) →
+      select (top N) → selected
 
     Returns:
         ScoreRunResult 不可变统计
@@ -58,8 +68,18 @@ def score_all(
 
     raw_topics = db.get_topics_by_status(conn, TopicStatus.RAW.value)
 
+    # M1-6：跨源 URL 合并去重
+    # 代表条进入 score；duplicate 不参与评分（避免同主题多次占 quota）
+    reps, dups = merge_by_url(raw_topics)
+    if dups:
+        print(
+            f"score: M1-6 merged {len(dups)} duplicate(s) by URL "
+            f"(representatives={len(reps)})",
+            file=sys.stderr,
+        )
+
     rejected = 0
-    for topic in raw_topics:
+    for topic in reps:
         result = score_topic(
             conn, topic, pillars=pillars, now=now
         )
@@ -71,7 +91,10 @@ def score_all(
     )
 
     return ScoreRunResult(
-        processed=len(raw_topics),
+        # processed = 实际进入 score 的条数 = representatives
+        # 不用 raw_topics 数（含 dup），避免"processed 看着像做了实际没做"的误会
+        processed=len(reps),
         selected=len(select_result.selected),
         rejected=rejected,
+        duplicates_merged=len(dups),
     )

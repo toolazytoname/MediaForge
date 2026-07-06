@@ -128,6 +128,21 @@
 
 ---
 
+### M1-6 跨源 URL 去重（防同一新闻多源转载，借鉴 Horizon）
+- [x] **目标**：同 URL 的多源转载只保留代表条参与 score + selector，避免同事件多次占用 daily_quota
+- **步骤**：
+  1. `pipeline/topics/url_dedup.py` 新增纯函数：`normalize_url(url)`（剥 www./fragment/trailing slash、host 小写、保留 query）+ `merge_by_url(topics) -> (reps, dups)`（content 最长的作代表）
+  2. `pipeline/topics/runner.py::score_all` 在 raw → score 之间调 `merge_by_url`：代表条进 score，duplicate 跳过评分；`ScoreRunResult.duplicates_merged` 新字段记录
+  3. `cmd_score` 打印新增 `N url_dup_merged` 计数
+  4. **契约不变**：SourceAdapter/RawItem/TECH_SPEC §3 schema/models.Topic 全不动；in-memory 合并，DB 中重复仍占 raw
+  5. 测试：纯函数 18（normalize 各边界 + merge 各种场景）+ runner 集成 4（合并/不合并/无 URL 透传/warn 日志）
+- **验收**：全测绿
+- **参考**：HARD_PARTS §7；evaluation-notes §6
+
+  ✅ 完成于 2026-07-06，commit <待补>，备注：`pipeline/topics/url_dedup.py` (~95 行纯函数) + `pipeline/topics/runner.py` 接入 `merge_by_url` + `ScoreRunResult.duplicates_merged` 新字段 + `cmd_score` 打印新计数。tests 22 新增（url_dedup 18 + runner 集成 4），全量 885 pass + 12 skip（原 863 + 22），4 失败 pre-existing 不变。**契约零变更**；in-memory 合并，DB 中重复条目下次 cron 仍会被再次合并（少量 LLM 浪费），彻底解决需 schema 加 `merged_into_topic_id` 字段（动契约，留 TODO）。
+
+---
+
 ## M2 — 创作与门禁（预计 3-5 天，系统灵魂）
 
 ### M2-1 canonical 创作管道

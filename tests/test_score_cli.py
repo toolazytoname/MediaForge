@@ -189,3 +189,142 @@ def test_llm_call_recorded(db_with_raw) -> None:
         assert row["stage"] == "score"
         assert row["model"] == "claude-haiku-4-5-20251001"
         assert row["cost_usd"] > 0
+
+
+# ── M1-6 跨源 URL 去重（score runner 集成） ──────────────────
+
+
+def _insert_topic_with_url(
+    conn, *, id: str, title: str, url: str | None, summary: str = "",
+    now: str,
+) -> None:
+    """插入带 URL 的 raw topic（绕过 _make_topic 的固定 url=None）。"""
+    from pipeline.models import Topic
+
+    t = Topic(
+        id=id, source="rss:test", title=title, url=url, summary=summary,
+        content_hash=content_hash(title, url),
+        pillar=None, score=None, score_reason=None,
+        status=TopicStatus.RAW.value,
+        created_at=now, updated_at=now,
+    )
+    db.insert_topic(conn, t)
+
+
+def test_url_dedup_merges_duplicates_in_runner(tmp_path: Path) -> None:
+    """同 URL 两条 → runner 只评 1 条代表（processed=1，duplicates_merged=1）。
+
+    LLM 调用次数也从 2 降到 1（避免重复占用 daily_quota）。
+    """
+    p = tmp_path / "state.db"
+    conn = db.connect(p)
+    db.init_db(conn)
+    now = "2026-07-05T00:00:00+00:00"
+    _insert_topic_with_url(
+        conn, id="t1", title="Short", url="https://example.com/a",
+        now=now,
+    )
+    _insert_topic_with_url(
+        conn, id="t2", title="Longer title for same news",
+        url="https://example.com/a", now=now,
+    )
+
+    set_provider(ScriptedProvider([
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+    ]))
+
+    result = runner.score_all(
+        conn, pillars=_pillars(), quota=2, min_score=6.0,
+        now="2026-07-05T02:00:00+00:00",
+    )
+
+    assert result.processed == 1  # 只评代表条
+    assert result.duplicates_merged == 1
+    assert result.selected == 1
+
+    # LLM 只调 1 次（不是 2 次）
+    rows = conn.execute("SELECT * FROM llm_calls").fetchall()
+    assert len(rows) == 1
+
+
+def test_url_dedup_no_merge_when_urls_differ(tmp_path: Path) -> None:
+    """URL 不同 → 不合并，processed=2，duplicates_merged=0。"""
+    p = tmp_path / "state.db"
+    conn = db.connect(p)
+    db.init_db(conn)
+    now = "2026-07-05T00:00:00+00:00"
+    _insert_topic_with_url(
+        conn, id="t1", title="A", url="https://a.com/1", now=now,
+    )
+    _insert_topic_with_url(
+        conn, id="t2", title="B", url="https://b.com/2", now=now,
+    )
+
+    set_provider(ScriptedProvider([
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+    ]))
+
+    result = runner.score_all(
+        conn, pillars=_pillars(), quota=2, min_score=6.0,
+        now="2026-07-05T02:00:00+00:00",
+    )
+
+    assert result.processed == 2
+    assert result.duplicates_merged == 0
+
+
+def test_url_dedup_no_url_topics_pass_through(tmp_path: Path) -> None:
+    """url=None 的 topic 不参与合并（无 key），全部 processed。"""
+    p = tmp_path / "state.db"
+    conn = db.connect(p)
+    db.init_db(conn)
+    now = "2026-07-05T00:00:00+00:00"
+    # 复用 db_with_raw fixture 的 4 条（都是 url=None）
+    seeds = ["a", "b", "c", "d"]
+    for s in seeds:
+        t = _make_topic(id=new_id("t"), title=s, source=f"src-{s}", now=now)
+        db.insert_topic(conn, t)
+
+    set_provider(ScriptedProvider([
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+    ]))
+
+    result = runner.score_all(
+        conn, pillars=_pillars(), quota=2, min_score=6.0,
+        now="2026-07-05T02:00:00+00:00",
+    )
+
+    assert result.processed == 4  # 全评（无 URL 不合并）
+    assert result.duplicates_merged == 0
+
+
+def test_url_dedup_logs_warning_when_dup_found(
+    tmp_path: Path, capsys,
+) -> None:
+    """有 duplicate → 打 stderr 摘要 'M1-6 merged N duplicate(s)'。"""
+    p = tmp_path / "state.db"
+    conn = db.connect(p)
+    db.init_db(conn)
+    now = "2026-07-05T00:00:00+00:00"
+    _insert_topic_with_url(
+        conn, id="t1", title="A", url="https://example.com/a", now=now,
+    )
+    _insert_topic_with_url(
+        conn, id="t2", title="B", url="https://example.com/a", now=now,
+    )
+
+    set_provider(ScriptedProvider([
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+    ]))
+
+    runner.score_all(
+        conn, pillars=_pillars(), quota=2, min_score=6.0,
+        now="2026-07-05T02:00:00+00:00",
+    )
+
+    captured = capsys.readouterr()
+    assert "M1-6 merged 1 duplicate(s)" in captured.err
