@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Callable
 
 from pipeline.models import Publication
+from pipeline.utils.log import get_logger
+
+
+logger = get_logger(__name__)
 
 
 # ── MetricsSnapshot（不写 DB 的中间表示） ────────────────
@@ -93,7 +97,11 @@ class XMetricsCollector(MetricsCollector):
                     "Authorization": f"Bearer {self._token}",
                 }, timeout=15.0,
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"x collect failed: {e!r}",
+                extra={"stage": "collect", "ref_id": pub.id},
+            )
             return None
 
         if status == 401 or status == 403:
@@ -140,7 +148,11 @@ def _real_x_get(url, *, headers=None, timeout=15.0):
     import httpx
     try:
         resp = httpx.get(url, headers=headers or {}, timeout=timeout)
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            f"x http failed: {e!r}",
+            extra={"stage": "collect", "ref_id": f"x:{url[:120]}"},
+        )
         return (0, None)
     if resp.status_code >= 400:
         return (resp.status_code, None)
@@ -177,7 +189,11 @@ class ToutiaoMetricsCollector(MetricsCollector):
             return None
         try:
             data = self._probe(self._cookies, pub.platform_post_id)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"toutiao collect failed: {e!r}",
+                extra={"stage": "collect", "ref_id": pub.id},
+            )
             return None
         if not isinstance(data, dict):
             return None
@@ -224,7 +240,11 @@ def _real_toutiao_probe(cookies_path: Path, post_id: str) -> dict | None:
                 return _parse_toutiao_manage_html(html, post_id)
             finally:
                 browser.close()
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            f"toutiao probe failed: {e!r}",
+            extra={"stage": "collect", "ref_id": f"toutiao:{post_id}"},
+        )
         return None
 
 
@@ -282,7 +302,11 @@ class XiaohongshuMetricsCollector(MetricsCollector):
             return None
         try:
             data = self._probe(pub.platform_post_id)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"xhs collect failed: {e!r}",
+                extra={"stage": "collect", "ref_id": pub.id},
+            )
             return None
         if not isinstance(data, dict):
             return None
@@ -321,7 +345,11 @@ class DouyinMetricsCollector(MetricsCollector):
             return None
         try:
             data = self._probe(self._cookies, pub.platform_post_id)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"douyin collect failed: {e!r}",
+                extra={"stage": "collect", "ref_id": pub.id},
+            )
             return None
         if not isinstance(data, dict):
             return None
@@ -361,7 +389,11 @@ def _real_douyin_probe(cookies_path: Path, video_id: str) -> dict | None:
                 return _parse_douyin_manage_html(html, video_id)
             finally:
                 browser.close()
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            f"douyin probe failed: {e!r}",
+            extra={"stage": "collect", "ref_id": f"douyin:{video_id}"},
+        )
         return None
 
 
@@ -393,7 +425,11 @@ def build_collector(platform: str, *, config: object) -> MetricsCollector | None
             from pipeline.publishers.x_api import load_x_credentials
             tok = load_x_credentials(x.accounts[0].credentials)
             return XMetricsCollector(bearer_token=tok)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"build_collector x failed: {e!r}",
+                extra={"stage": "collect", "ref_id": f"build:{platform}"},
+            )
             return None
     if platform == "toutiao":
         try:
@@ -403,7 +439,11 @@ def build_collector(platform: str, *, config: object) -> MetricsCollector | None
             return ToutiaoMetricsCollector(
                 cookies_path=Path(plat.accounts[0].cookies),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"build_collector toutiao failed: {e!r}",
+                extra={"stage": "collect", "ref_id": f"build:{platform}"},
+            )
             return None
     if platform == "xiaohongshu":
         return XiaohongshuMetricsCollector()
@@ -415,7 +455,11 @@ def build_collector(platform: str, *, config: object) -> MetricsCollector | None
             return DouyinMetricsCollector(
                 cookies_path=Path(plat.accounts[0].cookies),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"build_collector douyin failed: {e!r}",
+                extra={"stage": "collect", "ref_id": f"build:{platform}"},
+            )
             return None
     return None
 

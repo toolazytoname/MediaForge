@@ -24,6 +24,10 @@ from pipeline.metrics.collectors import (
     build_collector,
 )
 from pipeline.models import Publication, PublicationStatus
+from pipeline.utils.log import get_logger
+
+
+logger = get_logger(__name__)
 
 
 # ── 最小 age：published 距今 ≥ 24h 才抓（M6-1 验收） ─
@@ -119,8 +123,12 @@ def run_collect(
             continue
         try:
             snap = collector.collect(pub)
-        except Exception:
+        except Exception as e:
             # 编排层不阻断（metrics 是非关键路径）
+            logger.warning(
+                f"collect call failed: {e!r}",
+                extra={"stage": "collect", "ref_id": pub.id},
+            )
             failed += 1
             continue
         if snap is None:
@@ -129,7 +137,11 @@ def run_collect(
         try:
             _insert_snapshot(conn, snap)
             collected += 1
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"insert snapshot failed: {e!r}",
+                extra={"stage": "collect", "ref_id": pub.id},
+            )
             failed += 1
             continue
 
