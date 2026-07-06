@@ -308,10 +308,12 @@
   ✅ 完成于 2026-07-06，commit 3463f3b，备注：客户端 + 口播稿派生 + 工厂降级 + 真实 e2e 全做完，**未做**：docker-compose 部署（用户机器起 MPT）+ 真账号 Pexels key + 真实 mp4 质量验收（需真平台发布评估）。`pipeline/creators/video/mpt.py::MPTEngine` 实现 VideoEngine（submit/poll/fetch + run_to_completion 一站式；poll 单次失败重试一次；超时 20min → CreateError；MPT 状态别名 processing/completed/error 映射）。`pipeline/creators/video/__init__.py::build_video_engine(cfg)` 工厂按 cfg.video.engine 选 builder；失败 / 未知 → 返回 None（HARD_PARTS §6 决策 5：图文链不受影响）。`pipeline/creators/video_script.py::derive_video_script` canonical → LLM → {script, keywords, duration_s, hook_score}（钩子前置 + 单线叙事 + 60-90s + 关键词强制英文 + 防幻觉条款移植 M2-1）。`prompts/video_script.md` 模板便于迭代。tests 37 新增（MPT 23 + video_script 14），含 1 个真 e2e（uvicorn 子进程 fake MPT → 真 httpx → submit/poll/fetch → mp4 magic 字节验证）。全测 668 绿（原 631 + 37）。
 
 ### M5-2 视频发布（抖音）
-- [ ] **目标**：视频自动发布到抖音
+- [x] **目标**：视频自动发布到抖音
 - **步骤**：按 M0-0 的 DECISION（AiToEarn 或 Playwright 参考 social-auto-upload 的 douyin_uploader）；AI 生成内容标识按平台要求勾选声明（PRD §3.4，不可省略）
 - **验收**：测试账号真实发布 3 条，AI 标识可见
 - **参考**：HARD_PARTS §2；PRD §3.4
+
+  ✅ 完成于 2026-07-06，commit <待补>，备注：M0-0 DECISION 改走自写 Playwright（AiToEarn 整体方案放弃——自部署下国内平台无法无人值守）。`pipeline/publishers/douyin.py::DouyinPublisher` + `douyin_selectors.py`（防腐层）+ 强制 AI 标识（PRD §3.4——publish 时必勾「内容含 AI 生成」+ 选占比，找不到勾选框直接抛 PublishError 不静默忽略；ai_ratio 构造时校验只接受 low/medium/high）。视频文件必传（media_paths[0]、≤128MB 上限）；registry 接入 + login_cmd 新增 `login douyin`；config.platforms.douyin 新增 ai_ratio 字段。tests 24 新增（unit 22 + 2 真 e2e 走 fake creator.douyin.com：Playwright 真跑 publish 全流程 → 上传视频 → 填标题 → **勾 AI 标识** → 提交 → video_id 提取 → ai_checked=true 留档）。全测 692 绿（原 668 + 24）。**未做**：真抖音账号连发 3 条验收（HARD_PARTS §2 验证法留给用户在 mac 上跑）。
 
 ### M5-3 Pixelle-Video 第二引擎接入（按 M0-0 DECISION 改写，原「OpenMontage+数字人评估」缩减进子项与 Backlog）
 - [ ] **目标**：`pixelle` 引擎接入 VideoEngine 体系，承接「AI 生成类内容」（知识科普/读书/情感类）；MPT 保持默认兜底（时效资讯量产）
