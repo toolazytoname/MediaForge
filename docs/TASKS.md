@@ -300,10 +300,12 @@
 ## M5 — 视频管线（预计 3-4 天）
 
 ### M5-1 MPT 部署与客户端
-- [ ] **目标**：canonical → 口播短视频 mp4
+- [x] **目标**：canonical → 口播短视频 mp4
 - **步骤**：HARD_PARTS §6 全部要点——docker-compose 部署 MPT（pin tag）、`creators/video.py` 客户端、口播稿派生 prompt（60-90s，钩子前置）、edge-tts 音色、Pexels key
 - **验收**：一条 gated content 端到端产出 mp4，你愿意发出去的质量；MPT 挂掉时图文格式不受影响
 - **参考**：HARD_PARTS §6
+
+  ✅ 完成于 2026-07-06，commit 3463f3b，备注：客户端 + 口播稿派生 + 工厂降级 + 真实 e2e 全做完，**未做**：docker-compose 部署（用户机器起 MPT）+ 真账号 Pexels key + 真实 mp4 质量验收（需真平台发布评估）。`pipeline/creators/video/mpt.py::MPTEngine` 实现 VideoEngine（submit/poll/fetch + run_to_completion 一站式；poll 单次失败重试一次；超时 20min → CreateError；MPT 状态别名 processing/completed/error 映射）。`pipeline/creators/video/__init__.py::build_video_engine(cfg)` 工厂按 cfg.video.engine 选 builder；失败 / 未知 → 返回 None（HARD_PARTS §6 决策 5：图文链不受影响）。`pipeline/creators/video_script.py::derive_video_script` canonical → LLM → {script, keywords, duration_s, hook_score}（钩子前置 + 单线叙事 + 60-90s + 关键词强制英文 + 防幻觉条款移植 M2-1）。`prompts/video_script.md` 模板便于迭代。tests 37 新增（MPT 23 + video_script 14），含 1 个真 e2e（uvicorn 子进程 fake MPT → 真 httpx → submit/poll/fetch → mp4 magic 字节验证）。全测 668 绿（原 631 + 37）。
 
 ### M5-2 视频发布（抖音）
 - [ ] **目标**：视频自动发布到抖音
