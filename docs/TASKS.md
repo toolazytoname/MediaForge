@@ -316,7 +316,7 @@
   ✅ 完成于 2026-07-06，commit <待补>，备注：M0-0 DECISION 改走自写 Playwright（AiToEarn 整体方案放弃——自部署下国内平台无法无人值守）。`pipeline/publishers/douyin.py::DouyinPublisher` + `douyin_selectors.py`（防腐层）+ 强制 AI 标识（PRD §3.4——publish 时必勾「内容含 AI 生成」+ 选占比，找不到勾选框直接抛 PublishError 不静默忽略；ai_ratio 构造时校验只接受 low/medium/high）。视频文件必传（media_paths[0]、≤128MB 上限）；registry 接入 + login_cmd 新增 `login douyin`；config.platforms.douyin 新增 ai_ratio 字段。tests 24 新增（unit 22 + 2 真 e2e 走 fake creator.douyin.com：Playwright 真跑 publish 全流程 → 上传视频 → 填标题 → **勾 AI 标识** → 提交 → video_id 提取 → ai_checked=true 留档）。全测 692 绿（原 668 + 24）。**未做**：真抖音账号连发 3 条验收（HARD_PARTS §2 验证法留给用户在 mac 上跑）。
 
 ### M5-3 Pixelle-Video 第二引擎接入（按 M0-0 DECISION 改写，原「OpenMontage+数字人评估」缩减进子项与 Backlog）
-- [ ] **目标**：`pixelle` 引擎接入 VideoEngine 体系，承接「AI 生成类内容」（知识科普/读书/情感类）；MPT 保持默认兜底（时效资讯量产）
+- [x] **目标**：`pixelle` 引擎接入 VideoEngine 体系，承接「AI 生成类内容」（知识科普/读书/情感类）；MPT 保持默认兜底（时效资讯量产）
 - **步骤**：
   1. Docker Compose 部署 Pixelle-Video（`ATH-MaaS/Pixelle-Video`，pin image tag）；生图供应商 key（DashScope/RunningHub 按量）入 `secrets/` 与 config
   2. `creators/video/pixelle.py` 实现 VideoEngine：submit→`POST /api/video/generate/async`（**mode=fixed** 注入我方口播稿，文案主权在创作管道；显式传 title 避免其 LLM 代写）、poll→`GET /api/tasks/{id}`（**以 status 为准**，progress 对 video 任务未接线恒 null）、fetch→文件下载（**完成任务 24h 后被服务端清理，需及时取**）。适配要点：aspect→frame_template 尺寸目录；style→frame_template+prompt_prefix；duration_s 按语速预估校验；**轮询 404（其任务状态存内存，服务重启即丢）按 failed 处理+重提交**；脚本分段在我方预处理为段落（其 API 未暴露 split_mode，默认 paragraph = `\n\n` 双换行分镜边界）
@@ -326,6 +326,8 @@
 - **验收**：一条 gated content 经 pixelle 引擎端到端产出 mp4，视觉质量明显优于 MPT 同稿产出；pixelle 服务挂掉时 mpt 链路不受影响
 - **参考**：TECH_SPEC §5.6；evaluation-notes §4
 - 备注：OpenMontage 降级为远期观察（Backlog），Pixelle-Video 接管精品/差异化视觉定位
+
+  ✅ 完成于 2026-07-06，commit 731cc75，备注：`pipeline/creators/video/pixelle.py::PixelleEngine` 实现 VideoEngine（submit/poll/fetch + run_to_completion）。**契约要点**：mode=\"fixed\" 跳过 Pixelle LLM 写稿（文案主权）；title 走 req.style[\"title\"] 注入（VideoRequest 契约无 title 字段，TECH_SPEC §5.6 零改动）；aspect → frame_template 映射（9:16→1080x1920 等三种）；text 双换行分段 = 分镜边界；progress 强制 None（不被假象百分比骗，evaluation-notes §4 复核）；**404 → CreateError(\"task lost\") 让编排层立即重提交（不静默重试）**；COMPLETION_TTL_HOURS=24 警示。config 新增 PixelleConfig（base_url / poll_interval_s / timeout_s / voice / prompt_prefix）+ factory 接入 build_video_engine(cfg)。**未做**：docker-compose 部署 Pixelle-Video + 真账号 DashScope key + 真实 mp4 质量验收（用户上线前必做）。tests 30 新增（unit 29 + 1 真 e2e 走 fake Pixelle uvicorn），全测 722 绿（原 692 + 30）。**AIGCPanel 数字人速评留 Backlog**（M5-3 时间盒外）。
 
 **🏁 M5 里程碑验收**：视频 lane 稳定日更（MPT 引擎），扩展引擎有明确 DECISION。
 
