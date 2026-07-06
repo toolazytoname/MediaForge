@@ -206,3 +206,131 @@ def test_empty_source_list_is_noop(tmp_path) -> None:
     result = run_ingest(conn, [], now="2026-07-05T00:00:00+00:00")
 
     assert (result.fetched, result.new, result.dup) == (0, 0, 0)
+
+
+# ── 域名安全校验（M1-5 借鉴 Horizon/sansan0） ────────────────
+
+from pipeline.sources import safety as safety_mod
+
+
+def _url_items(titles_urls: list[tuple[str, str]]) -> list[RawItem]:
+    """按 (title, url) 元组构造 RawItem 列表。"""
+    return [
+        RawItem(title=t, url=u, summary=None, published_at=None)
+        for t, u in titles_urls
+    ]
+
+
+def test_safety_drops_bad_items_when_source_registered(
+    capsys, tmp_path,
+) -> None:
+    """源在 KNOWN_DOMAIN_RULES 登记 → URL 不匹配的条目被丢弃，dropped_safety>0。
+
+    注意：fetched/new/dup 三计数只计通过校验的条目（被丢弃的不入库）。
+    """
+    conn = _open_db(tmp_path)
+    # 测试结束后清理规则表（防止污染其他测试）
+    safety_mod.KNOWN_DOMAIN_RULES["test:demo"] = "demo.com"
+    try:
+        items = _url_items([
+            ("Good1", "https://demo.com/a"),
+            ("Bad", "https://attacker.com/b"),
+            ("Good2", "https://m.demo.com/c"),
+            ("Http", "http://demo.com/d"),
+            ("NoURL", ""),
+        ])
+        src = FakeSource("test:demo", items)
+
+        result = run_ingest(conn, [src], now="2026-07-05T00:00:00+00:00")
+
+        # 5 条 fetch，3 条通过（Good1/Good2/NoURL）入库，2 条丢弃
+        assert result.fetched == 3
+        assert result.new == 3
+        assert result.dup == 0
+        assert result.dropped_safety == 2
+        assert result.failed_sources == ()
+
+        # warn 日志到 stderr
+        captured = capsys.readouterr()
+        assert "test:demo" in captured.err
+        assert "dropped 2 item(s)" in captured.err
+    finally:
+        safety_mod.KNOWN_DOMAIN_RULES.pop("test:demo", None)
+
+
+def test_safety_no_op_when_source_not_registered(capsys, tmp_path) -> None:
+    """源未在 KNOWN_DOMAIN_RULES 登记 → 不校验，dropped_safety=0，warn 不打。"""
+    conn = _open_db(tmp_path)
+    # 不登记 'rss:demo' —— 应该全部放行
+    items = _url_items([
+        ("X", "https://attacker.com/a"),  # 任意域名都放行
+        ("Y", "http://insecure.example.com/b"),
+    ])
+    src = FakeSource("rss:demo", items)
+
+    result = run_ingest(conn, [src], now="2026-07-05T00:00:00+00:00")
+
+    assert result.fetched == 2
+    assert result.new == 2
+    assert result.dropped_safety == 0
+
+    captured = capsys.readouterr()
+    assert "dropped" not in captured.err  # 无 drop 时不打印 warn
+
+
+def test_safety_mixed_sources_independent_rules(
+    capsys, tmp_path,
+) -> None:
+    """多源独立校验：A 源登记规则、B 源未登记 → 各自行为独立。"""
+    conn = _open_db(tmp_path)
+    safety_mod.KNOWN_DOMAIN_RULES["test:has_rule"] = "good.com"
+    try:
+        a_items = _url_items([
+            ("A-good", "https://good.com/1"),
+            ("A-bad", "https://evil.com/2"),
+        ])
+        b_items = _url_items([
+            ("B-anything", "https://random.com/3"),  # B 源不校验
+        ])
+        a = FakeSource("test:has_rule", a_items)
+        b = FakeSource("rss:no_rule", b_items)
+
+        result = run_ingest(conn, [a, b], now="2026-07-05T00:00:00+00:00")
+
+        # A: 1 入库 + 1 drop；B: 1 入库
+        assert result.new == 2
+        assert result.dropped_safety == 1
+    finally:
+        safety_mod.KNOWN_DOMAIN_RULES.pop("test:has_rule", None)
+
+
+def test_safety_does_not_affect_dedup_count(tmp_path) -> None:
+    """dropped_safety 不影响 dup 计数（被丢弃的不参与后续 dedup）。"""
+    conn = _open_db(tmp_path)
+    safety_mod.KNOWN_DOMAIN_RULES["test:demo"] = "demo.com"
+    try:
+        items = _url_items([("Same", "https://demo.com/1")])
+        src = FakeSource("test:demo", items)
+
+        run_ingest(conn, [src], now="2026-07-05T00:00:00+00:00")
+        result = run_ingest(conn, [src], now="2026-07-05T00:01:00+00:00")
+
+        # 首次 1 入库，第二次 1 dup（content_hash 命中）
+        assert result.fetched == 1
+        assert result.new == 0
+        assert result.dup == 1
+        assert result.dropped_safety == 0
+    finally:
+        safety_mod.KNOWN_DOMAIN_RULES.pop("test:demo", None)
+
+
+def test_safety_default_value_in_ingest_result(tmp_path) -> None:
+    """IngestResult.dropped_safety 默认 0（旧调用方兼容）。"""
+    conn = _open_db(tmp_path)
+    src = FakeSource("rss:any", _url_items([("X", "https://anywhere.com/1")]))
+
+    result = run_ingest(conn, [src], now="2026-07-05T00:00:00+00:00")
+
+    # 字段存在且为 0
+    assert hasattr(result, "dropped_safety")
+    assert result.dropped_safety == 0

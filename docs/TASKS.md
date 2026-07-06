@@ -113,6 +113,21 @@
 
 ---
 
+### M1-5 域名安全校验（防数据投毒，借鉴 Horizon/sansan0）
+- [x] **目标**：源若声明"返回 URL 的预期域名"，则丢弃 URL 不匹配的条目 + log warning；防 API 被投毒或代理被劫持时假数据进库
+- **步骤**：
+  1. `pipeline/sources/safety.py` 新增纯函数：`check_url(url, expected_domain) -> str | None`（None=通过，str=拒绝原因）；`validate_items(items, expected_domain) -> (kept, dropped_count, dropped_reasons)`；`KNOWN_DOMAIN_RULES: dict[str, str]`（source_name → expected_domain，默认 RSS 不在表里不校验）
+  2. `pipeline/ingest.py::run_ingest` 在 `src.fetch()` 之后调 `validate_items(items, resolve_expected_domain(src.name))`；被丢弃的计入 `IngestResult.dropped_safety`（新增字段，frozen dataclass 兼容旧代码用 `field(default=0)`）
+  3. RSS 默认无规则（feed items 合法地链到任意站）；DailyHotApi 等 board 类适配器落地时填表即生效
+  4. **契约不变**：SourceAdapter/RawItem/TECH_SPEC §3 schema/config.pydantic 字段一律不动；规则是 side-channel 数据，管理员改 safety.py 文件加条目
+  5. 测试：safety 纯函数全覆盖（scheme/domain/case/www/subdomain/none URL/无规则透传）；ingest 集成（单源有规则→drop 计数；warn 日志；不影响 fetched/new/dup 三计数）
+- **验收**：新增 `tests/test_sources_safety.py` 18 测试覆盖纯函数 + 边界；`tests/test_ingest.py` 增 5 集成测试；全测绿（4 pre-existing 失败与本任务无关，stash 验证）
+- **参考**：HARD_PARTS §7（数据源备选登记）；evaluation-notes §6（待落地）
+
+  ✅ 完成于 2026-07-06，commit <待补>，备注：`pipeline/sources/safety.py` (~105 行纯函数：check_url / validate_items / KNOWN_DOMAIN_RULES / resolve_expected_domain) + `pipeline/ingest.py` 接入（fetch 后 → safety 校验 → 失败 drop 计入 `dropped_safety`、warn 打 stderr、第一原因摘要）+ `IngestResult.dropped_safety` 新字段（field default=0，老调用方兼容）。tests 23 新增（safety 18 + ingest 集成 5），全量 863 pass + 12 skip（原 840 + 23），4 失败 pre-existing 验证（grep guard + flaky subprocess + 真服务测试）。**契约零变更**：SourceAdapter/RawItem/TECH_SPEC §3 schema/config.pydantic 全部不动；规则是 side-channel 数据，未来 dailyhot adapter 落地填表即生效。
+
+---
+
 ## M2 — 创作与门禁（预计 3-5 天，系统灵魂）
 
 ### M2-1 canonical 创作管道
