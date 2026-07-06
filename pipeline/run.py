@@ -551,6 +551,28 @@ def cmd_webui(args: argparse.Namespace) -> int:
     return webui_main()
 
 
+def cmd_login(args: argparse.Namespace) -> int:
+    """登录态获取 / 刷新（M4-3 决策 1）。
+
+    用法：`python -m pipeline.run login <platform> <account>`
+
+    头条：开有头 chromium 让人扫码 → 保存 storage_state JSON
+    小红书：提示用户在 mac 上按 XiaohongshuSkills README 完成登录
+            → 创建占位 JSON 让 pipeline 校验通过
+    """
+    from pipeline.publishers.login_cmd import run_login
+
+    platform = args.platform
+    account = args.account
+    try:
+        out_path = run_login(platform, account)
+    except Exception as e:
+        print(f"login: FAIL {platform}/{account}: {e}", file=sys.stderr)
+        return 1
+    print(f"login: {platform}/{account} OK → {out_path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m pipeline.run",
@@ -599,6 +621,17 @@ def build_parser() -> argparse.ArgumentParser:
         "webui", help="启动本地 Web 控制台（默认 127.0.0.1:8787）"
     )
 
+    login_p = sub.add_parser(
+        "login",
+        help="登录态获取/刷新（保存 storage_state 到 secrets/cookies/）",
+    )
+    login_p.add_argument(
+        "platform", help="平台: toutiao | xiaohongshu | ...",
+    )
+    login_p.add_argument(
+        "account", help="账号别名（config 里 accounts[].id）",
+    )
+
     return parser
 
 
@@ -616,6 +649,7 @@ COMMANDS = {
     "status": cmd_status,
     "reset": cmd_reset,
     "webui": cmd_webui,
+    "login": cmd_login,
 }
 
 
