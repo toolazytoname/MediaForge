@@ -149,54 +149,119 @@ def test_login_toutiao_timeout_raises_publish_error(
             login_toutiao("main", timeout_s=1)
 
 
-# ── 小红书（占位 + 提示） ─────────────────────────────────
+# ── 小红书（真 subprocess 调 cdp_publish.py login） ──────
 
 
-def test_login_xiaohongshu_creates_placeholder_first_time(
-    tmp_path: Path, monkeypatch, capsys,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    out_path = login_xiaohongshu("main")
-    assert out_path.exists()
-    assert out_path.name == "xiaohongshu_main.json"
-    loaded = json.loads(out_path.read_text(encoding="utf-8"))
-    assert "Placeholder" in loaded.get("_comment", "")
-    assert "cookies" in loaded
-    # 提示信息打印到 stdout
-    captured = capsys.readouterr()
-    assert "XiaohongshuSkills" in captured.out
-
-
-def test_login_xiaohongshu_does_not_overwrite_existing(
+def test_login_xiaohongshu_runs_cdp_publish_login(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """已存在 cookie 文件 → 不覆盖（保留用户/工具写入的真实状态）。"""
+    """注入 fake cdp_publish.py login：CLI exit 0 → marker 落盘。"""
     monkeypatch.chdir(tmp_path)
-    DEFAULT_COOKIES_DIR.mkdir(parents=True, exist_ok=True)
-    existing = DEFAULT_COOKIES_DIR / "xiaohongshu_main.json"
-    existing.write_text(
-        json.dumps({
-            "cookies": [{"name": "real_session", "value": "x"}],
-            "origins": [],
-        }),
+    skills = tmp_path / "xhs-skills"
+    (skills / "scripts").mkdir(parents=True)
+    (skills / "scripts" / "cdp_publish.py").write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.exit(0)\n",
         encoding="utf-8",
     )
-    out_path = login_xiaohongshu("main")
-    # 内容不被覆盖
+    out_path = login_xiaohongshu("main", skills_path=skills)
+    assert out_path.exists()
     loaded = json.loads(out_path.read_text(encoding="utf-8"))
-    assert "real_session" in str(loaded["cookies"])
+    assert "XiaohongshuSkills login completed" in loaded["_comment"]
+    assert loaded["account"] == "main"
+    assert str(skills) in loaded["skills_path"]
 
 
-def test_login_xiaohongshu_respects_skills_path_env(
-    tmp_path: Path, monkeypatch, capsys,
+def test_login_xiaohongshu_passes_account_and_headless(
+    tmp_path: Path, monkeypatch,
 ) -> None:
-    """XHS_SKILLS_PATH 环境变量 → 提示信息含正确路径。"""
+    """--account / --headless 参数透传。"""
     monkeypatch.chdir(tmp_path)
-    custom = "/opt/my-xhs-skills"
-    monkeypatch.setenv("XHS_SKILLS_PATH", custom)
-    login_xiaohongshu("main")
-    captured = capsys.readouterr()
-    assert custom in captured.out
+    skills = tmp_path / "xhs-skills"
+    (skills / "scripts").mkdir(parents=True)
+    (skills / "scripts" / "cdp_publish.py").write_text(
+        "#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n",
+        encoding="utf-8",
+    )
+
+    received: dict = {}
+
+    def fake_run(cmd, **kw):
+        received["cmd"] = cmd
+        received["timeout"] = kw.get("timeout")
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return _R()
+
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "run", fake_run)
+    login_xiaohongshu("alt", skills_path=skills, headless=True, timeout_s=42)
+    cmd = received["cmd"]
+    assert cmd[0] == "python"
+    assert "cdp_publish.py" in cmd[1]
+    assert "login" in cmd
+    assert "--account" in cmd
+    assert "alt" in cmd
+    assert "--headless" in cmd
+    assert received["timeout"] == 42
+
+
+def test_login_xiaohongshu_missing_cli_raises(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """skills_path 不存在 → PublishError，不调 subprocess。"""
+    monkeypatch.chdir(tmp_path)
+    bad = tmp_path / "no-such"
+    with pytest.raises(PublishError, match="CLI not found"):
+        login_xiaohongshu("main", skills_path=bad)
+
+
+def test_login_xiaohongshu_cli_nonzero_exit_raises(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """CLI exit != 0 → PublishError（带 stderr 摘要）。"""
+    monkeypatch.chdir(tmp_path)
+    skills = tmp_path / "xhs-skills"
+    (skills / "scripts").mkdir(parents=True)
+    (skills / "scripts" / "cdp_publish.py").write_text(
+        "#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n",
+        encoding="utf-8",
+    )
+
+    def fake_run(cmd, **kw):
+        class _R:
+            returncode = 2
+            stdout = ""
+            stderr = "cookie expired"
+        return _R()
+
+    import subprocess as _sp
+    monkeypatch.setattr(_sp, "run", fake_run)
+    with pytest.raises(PublishError, match="CLI failed"):
+        login_xiaohongshu("main", skills_path=skills)
+
+
+def test_login_xiaohongshu_timeout_raises(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """subprocess 超时 → PublishError。"""
+    monkeypatch.chdir(tmp_path)
+    skills = tmp_path / "xhs-skills"
+    (skills / "scripts").mkdir(parents=True)
+    (skills / "scripts" / "cdp_publish.py").write_text(
+        "#!/usr/bin/env python3\n", encoding="utf-8",
+    )
+
+    import subprocess as _sp
+    def fake_run(cmd, **kw):
+        raise _sp.TimeoutExpired(cmd, kw.get("timeout", 0))
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    with pytest.raises(PublishError, match="login timeout"):
+        login_xiaohongshu("main", skills_path=skills, timeout_s=1)
 
 
 # ── cmd_login 入口（run.py） ────────────────────────────────
