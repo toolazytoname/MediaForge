@@ -609,6 +609,41 @@ def cmd_login(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    """生成周报（M6-2）。
+
+    用法：`python -m pipeline.run report weekly [--output path]`
+
+    输出：output/weekly-report.md（含 4 个 section：概览 / 平台表现 /
+    LLM 成本 / 门禁校准 — HARD_PARTS §3 要点 4）。
+    """
+    from datetime import datetime, timezone
+
+    from pipeline.report import write_weekly_report
+
+    subcmd = getattr(args, "report_command", None)
+    if subcmd != "weekly":
+        print(
+            f"report: unknown subcommand {subcmd!r}; "
+            "use 'report weekly'",
+            file=sys.stderr,
+        )
+        return 1
+
+    output_path = getattr(args, "output", None) or "output/weekly-report.md"
+    now = datetime.now(timezone.utc)
+
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        path = write_weekly_report(conn, output_path=output_path, now=now)
+    finally:
+        conn.close()
+
+    print(f"report weekly: written to {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m pipeline.run",
@@ -668,6 +703,21 @@ def build_parser() -> argparse.ArgumentParser:
         "account", help="账号别名（config 里 accounts[].id）",
     )
 
+    report_p = sub.add_parser(
+        "report",
+        help="生成报告（weekly — 周报与门禁校准）",
+    )
+    report_sub = report_p.add_subparsers(
+        dest="report_command", required=True,
+    )
+    report_weekly_p = report_sub.add_parser(
+        "weekly", help="生成 output/weekly-report.md",
+    )
+    report_weekly_p.add_argument(
+        "--output", default=None,
+        help="输出文件路径（默认 output/weekly-report.md）",
+    )
+
     return parser
 
 
@@ -686,6 +736,7 @@ COMMANDS = {
     "reset": cmd_reset,
     "webui": cmd_webui,
     "login": cmd_login,
+    "report": cmd_report,
 }
 
 
