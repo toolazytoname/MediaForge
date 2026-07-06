@@ -116,10 +116,20 @@ class MPTConfig(BaseModel):
     timeout_s: int = 1200
 
 
+class PixelleConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_url: str = "http://127.0.0.1:9000"
+    poll_interval_s: int = 30
+    timeout_s: int = 1800
+    voice: str = "zh-CN-YunxiNeural"
+    prompt_prefix: str = ""     # 全局风格提示
+
+
 class VideoConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     engine: Literal["mpt", "openmontage", "aigcpanel", "pixelle"] = "mpt"
     mpt: MPTConfig = Field(default_factory=MPTConfig)
+    pixelle: PixelleConfig = Field(default_factory=PixelleConfig)
 
 
 # ── Publish ───────────────────────────────────────────────

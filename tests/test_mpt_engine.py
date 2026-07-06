@@ -355,12 +355,16 @@ def test_build_video_engine_returns_engine_when_ok() -> None:
 
 
 def test_build_video_engine_unknown_engine_returns_none() -> None:
-    """未知 engine 名 → None（图链不断）。"""
+    """未知 engine 名 → None（图链不断）。
+
+    aigcpanel 是 TECH_SPEC §6 Literal 中预留但本项目未实现的引擎名（M5-3
+    后才评估 AIGCPanel 数字人）。用它断言未知 engine 降级路径。
+    """
     cfg = AppConfig.model_validate({
         "pillars": [{"id": "ai_daily", "name": "x",
                      "description": "y", "scoring_hint": "z"}],
         "llm": {"tiers": {"cheap": "h", "creative": "s", "critical": "s"}},
-        "video": {"engine": "pixelle"},   # M5-3 才会实现
+        "video": {"engine": "aigcpanel"},   # 未实现 → None
     })
     eng = build_video_engine(cfg)
     assert eng is None
