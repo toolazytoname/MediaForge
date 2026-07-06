@@ -139,9 +139,41 @@
 - **验收**：全测绿
 - **参考**：HARD_PARTS §7；evaluation-notes §6
 
-  ✅ 完成于 2026-07-06，commit <待补>，备注：`pipeline/topics/url_dedup.py` (~95 行纯函数) + `pipeline/topics/runner.py` 接入 `merge_by_url` + `ScoreRunResult.duplicates_merged` 新字段 + `cmd_score` 打印新计数。tests 22 新增（url_dedup 18 + runner 集成 4），全量 885 pass + 12 skip（原 863 + 22），4 失败 pre-existing 不变。**契约零变更**；in-memory 合并，DB 中重复条目下次 cron 仍会被再次合并（少量 LLM 浪费），彻底解决需 schema 加 `merged_into_topic_id` 字段（动契约，留 TODO）。
+  ✅ 完成于 2026-07-06，commit 188c311，备注：`pipeline/topics/url_dedup.py` (~95 行纯函数) + `pipeline/topics/runner.py` 接入 `merge_by_url` + `ScoreRunResult.duplicates_merged` 新字段 + `cmd_score` 打印新计数。tests 22 新增（url_dedup 18 + runner 集成 4），全量 885 pass + 12 skip（原 863 + 22），4 失败 pre-existing 不变。**契约零变更**；in-memory 合并，DB 中重复条目下次 cron 仍会被再次合并（少量 LLM 浪费），彻底解决需 schema 加 `merged_into_topic_id` 字段（动契约，留 TODO）。
+
+### M1-7 AI 语义主题去重（借鉴 Horizon）
+- [ ] **目标**：score 后、selector 前用 LLM 识别"同主题不同 URL/不同标题"的条目并去重，避免同一事件多角度报道占满 daily_quota
+- **步骤**：
+  1. `pipeline/topics/topic_dedup.py` 新增纯函数 `dedup_topics(items, ai_client) -> (reps, dups)`：单次 AI 调用，prompt 移植 Horizon `src/ai/prompts.py` 的 `TOPIC_DEDUP_SYSTEM/USER`（MIT License）；失败静默 fallback（返回 (items, [])）
+  2. 复用 `creators/llm.py::complete_json`（已有 JSON fence + 自动重试）
+  3. 接入 `pipeline/topics/runner.py::score_all`：在 `merge_by_url` 之后、`score_topic` 之前（顺序：URL dedup → 语义 dedup → score）
+  4. **契约不变**：不动 schema/models；in-memory 合并（与 M1-6 同模式）
+  5. 测试：纯函数（mock LLM：成功返回分组、失败 fallback、边界如空列表/单条）+ runner 集成
+- **验收**：全测绿；同主题两条（不同 URL 不同 title）经 AI 去重只占一个 quota
+- **参考**：Horizon `src/orchestrator.py:433-504` + `src/ai/prompts.py:3-13`
+
+### M1-8 AI 智能筛选预筛（评估任务，借鉴 sansan0/TrendRadar filter.py）
+- [ ] **目标**：评估"两阶段 AI 筛选"（A: 兴趣描述→标签；B: 标题批量分类+relevance）作为 M1-4 score 前的预筛是否值得做
+- **步骤**：
+  1. 设计 spec 草案：`pipeline/topics/prefilter.py` 设计 + cost 估算（每次 ingest 多 N 次 LLM 调用 vs 减少下游 score 调用量）+ threshold 策略
+  2. 评估 ROI：score 阶段 cheap 档 ≈ $0.001/条，预筛再 cheap ≈ $0.001/条；预筛只对"高 relevance"的条目进入 score 才能摊薄；50% 命中率才能打平，70%+ 才有正收益
+  3. 决策：写评估到 `docs/research/evaluation-notes.md` §6.2，得出 `DECISION: 落地 / 推迟 / 放弃`
+- **验收**：决策记录 + 若 DECISION=落地 则转正式任务 P2-M1-8
+- **参考**：sansan0/TrendRadar `trendradar/ai/filter.py`（GPL-3.0 仅参考设计）
+
+### M1-9 多 provider 坑结构化收编（借鉴 Horizon ai/client.py）
+- [ ] **目标**：把 `creators/llm.py::MiniMaxProvider` 散落的特殊 case（NO_RESPONSE_FORMAT / TEMP_CLAMP / JSON fence）提到 `PROVIDER_SPECS` 注册表，新增 provider 不用改 llm.py 主逻辑
+- **步骤**：
+  1. `pipeline/creators/llm.py` 新增 `PROVIDER_SPECS: dict[str, ProviderSpec]` 注册表（fields: supports_response_format / min_temperature / extra_fence_strip / 价格等）
+  2. 各 provider 创建时按 spec 读配置
+  3. **契约不变**：TECH_SPEC §5.3 接口不动；只重构内部 provider 注册
+  4. 测试：新增 Anthropic/MiniMax/OpenAI 各 provider 都从 spec 正确初始化；删 MiniMax 散落 case 后行为不变
+- **验收**：全测绿；llm.py 行数变少或结构更清晰
+- **参考**：Horizon `src/ai/client.py:174-337`（MIT）；M1-3 已完成基线
 
 ---
+
+## M2 — 创作与门禁（预计 3-5 天，系统灵魂）
 
 ## M2 — 创作与门禁（预计 3-5 天，系统灵魂）
 
