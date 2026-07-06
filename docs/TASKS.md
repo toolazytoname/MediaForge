@@ -344,12 +344,12 @@
   ✅ 完成于 2026-07-06，commit fe94a04，备注：`pipeline/metrics/collectors.py` 4 个 collector + `runner.py` 编排。X API v2 走公共指标解析（impression_count → views；shares = retweet+quote）；头条/抖音走 Playwright + storage_state 抓创作者后台；小红书占位（XiaohongshuSkills 未公开标准化 metrics 命令，无 probe_fn 时 collect 返回 None，等 XHS 项目公开标准化命令时接入）。**失败语义**：401/403/429/网络异常 → 静默返回 None → 编排层不阻断其他 publication；明日 cron 再试（HARD_PARTS §5 metrics 表天然时间序列幂等）。`cmd_collect` 替换 M0-1 占位。tests 26 新增（X 7 + 中文平台 5 + 工厂 4 + 编排 5 + 候选 2 + 边界 3），含「多次 collect 时间序列幂等」「单条失败不阻断」验证。全测 748 绿（原 722 + 26）。**集成 TODO**（用户上线前）：① 头条/抖音/小红书的真实后台页面改版时修订 `_parse_*_manage_html` 启发式；② 抖音视频发布时间 1h 内的发布应在 24h 后才有足够数据。
 
 ### M6-2 周报与门禁校准
-- [ ] **目标**：每周一自动生成 `output/weekly-report.md`
-- **步骤**：内容：发布数/门禁通过率/丢弃率、各平台 top3 与 bottom3、LLM 成本、门禁分与实际表现的相关性散点（文本表格即可）；门禁分数直方图（HARD_PARTS §3 要点 4）
+- [x] **目标**：每周一自动生成 `output/weekly-report.md`
+- **步骤**：内容：发布数/门禁通过率/丢弃率，各平台 top3 与 bottom3，LLM 成本，门禁分与实际表现的相关性散点（文本表格即可）；门禁分数直方图（HARD_PARTS §3 要点 4）
 - **验收**：真实数据生成一份周报，能指导下周选题
 - **参考**：HARD_PARTS §3 §4
 
-### M6-3 免审直发（可选，运营 1 个月后）
+  ✅ 完成于 2026-07-06，commit 8339f4d，备注：`pipeline/report/weekly.py::collect_weekly_report` + `render_markdown` + `write_weekly_report`。4 个 section：① 概览（topics/contents/gate_pass_rate/discard_rate 含除零保护）② 各平台 top3 + bottom3（按 views，views=0 占位显示）③ LLM 成本按 stage 分组 + 排序 ④ 门禁校准（HARD_PARTS §3 要点 4）— ASCII 直方图（5 buckets）+ Pearson r（|r|<0.2 提示重新校准锚点，样本<2 返 None）。`cmd_report weekly` 子命令默认写 `output/weekly-report.md`（`--output` 可覆盖）；flock 复用 stage_lock('collect')。空数据兜底（直方图全 0 / 相关性 None / 平台 ranking 空 dict）。tests 16 新增（overview 2 + 平台 2 + LLM 2 + 直方图 2 + 相关性 3 + 渲染 3 + 落盘 2），全测 764 绿（原 748 + 16）。**集成 TODO**（用户上线前）：配置 launchd/cron 每周一自动跑 `python -m pipeline.run report weekly`。### M6-3 免审直发（可选，运营 1 个月后）
 - [ ] **目标**：`review.policy: auto_above:27` 生效
 - **前置**：过去 30 天人审通过率 ≥ 85% 且无平台违规记录，否则不开
 - **验收**：高分内容跳过人审直接 approved，日志清晰标注 auto-approved
