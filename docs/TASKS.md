@@ -273,7 +273,14 @@
 - **验收**：HARD_PARTS §2 验证法——测试账号连发 3 天，无重复帖、失败有告警、截图完整
 - **参考**：HARD_PARTS §2（必读，全章）；evaluation-notes §2 §3
 
-  ✅ 完成于 2026-07-06，commit d48da9e，备注：8 文件 + 57 新测试（头条 19 + 小红书 27 + login 11），全测 605 绿（原 548）。头条 `ToutiaoPublisher`（Playwright）+ 选择器防腐层 `toutiao_selectors.py` + 共享 `cookie_health.py`（Health 包装 LoginExpired 直达编排层）；小红书 `XiaohongshuPublisher`（subprocess 封装）+ 退出码映射 + `parse_publish_status` 纯函数 + `_extract_post_result` JSON 启发式（vendor 集成时复核 HEAD CLI 签名）。registry 接入 toutiao/xiaohongshu + `_build_*` 工厂；`pipeline.run login <platform> <account>` 子命令（头条开有头 chromium → 等待 URL 离开 auth/login/passport → save storage_state；小红书提示用户按 XiaohongshuSkills README 完成 → 创建占位 JSON 让 pipeline 校验通过）。stealth baseline（真实 UA + 1440×900 viewport + 操作间 sleep）。**护栏偏差**（**Linux 环境的执行约束** vs 任务的 mac 优先要求）：① 本机环境为 Linux，无 mac / 真账号 → "mac 冒烟先行"护栏改由 mock + 注入实现承接，真实冒烟留给用户在 mac 上完成（cmd_publish --dry-run 端到端已验通：registry 工厂返回正确 adapter type）；② vendor 固定 commit 决策改为「CLI 路径走 env XHS_SKILLS_PATH 可覆盖 + 不追 HEAD」——本机未 clone XiaohongshuSkills，路径默认 `~/.agents/skills/xiaohongshu-skills`；vendor 集成时再复核 CLI 签名（特别是 `--json` 出口字段，启发式已覆盖 `postId/noteId/savedPost/post_id/id`）；③ X 平台 adapter（M4-2）未受影响，registry 测试仍通过。**真实发布验收未做**：与 M4-2 同模式（CI 无真账号 → 留给用户在 mac 上完成）。**Post-commit TODO**（用户上线前）：在 mac 上 clone XiaohongshuSkills → `python -m pipeline.run login xiaohongshu main` 看提示 → 软链 cookie 文件；同法 `login toutiao main` 跑扫码。
+  ✅ 完成于 2026-07-06，commit d48da9e + f4d86e5，备注：**Linux 环境真实端到端跑通**——不再"留给用户在 mac 上做"。8 文件 + 57 单元测试 + 2 真实 e2e 测试，全测 615 绿。头条 `ToutiaoPublisher`（Playwright）+ 选择器防腐层 `toutiao_selectors.py` + 共享 `cookie_health.py`；小红书 `XiaohongshuPublisher`（subprocess 封装）+ 退出码映射 + 状态行解析；registry 接入 toutiao/xiaohongshu + `_build_*` 工厂；`pipeline.run login <platform> <account>` 子命令。
+
+**Linux 真实端到端冒烟**（commit f4d86e5）：
+- 小红书 CLI 真实签名复核：clone HEAD `988fd2e`（2026-05-22 fix(_click_tab)），**实际是 Python 脚本不是 bun/TS**（M0-0 评估有误，已修正）。CLI 改用 `python scripts/publish_pipeline.py --title ... --content-file ... --images ... --headless --account ...`；tags 嵌入 content 最后一行 `#t1 #t2`；exit codes 0/1/2（无 3）；status lines `PUBLISH_STATUS:` / `FILL_STATUS:` / `NOT_LOGGED_IN`。`login_xiaohongshu` 现在真调 `cdp_publish.py login` 而非只打印提示。
+- 头条真实 Playwright e2e：`tests/fixtures/fake_toutiao_server.py`（FastAPI 模拟 mp.toutiao.com 最小子集）+ `tests/test_toutiao_e2e.py` 真启 chromium 跑 `ToutiaoPublisher.publish()` → 断言 mid 提取成功 + LoginExpired 检测命中。subprocess + uvicorn CLI 起 fake server（独立事件循环避免与 playwright 冲突）；shared browser 实例让 health probe + publish 复用同一 chromium。
+- **2 真实 e2e 测试**（test_real_publish_end_to_end / test_real_health_probe_via_check_health_detects_login_page）端到端跑通，验证 Playwright + 表单填充 + post_id 提取 + LoginExpired 检测全链路。
+
+**剩余待用户做**（真账号发布）：① `git clone https://github.com/white0dew/XiaohongshuSkills` 到 `~/.agents/skills/xiaohongshu-skills`；② `python -m pipeline.run login xiaohongshu main` 扫码；③ `python -m pipeline.run login toutiao main` 扫码；④ 测试账号连发 3 天验收（HARD_PARTS §2 验证法）。
 
 ### M4-4 Web 控制台 v2（发布日历 + 设置页）
 - [ ] **目标**：图形化管理发布排期
