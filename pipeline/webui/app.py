@@ -100,22 +100,23 @@ def create_app() -> FastAPI:
         _init_c.close()
 
     # /output 静态目录（只读）—— 工厂时挂载（同步，幂等）
+    # R7-2 修复：移除 `if exists` 条件，启动时自动 mkdir；这样流水线后建
+    # 的图卡 PNG 无需重启 webui 即可访问（M2-4 派生阶段产出后场景）。
     output_dir = Path("output")
-    if output_dir.exists():
-        app.mount(
-            "/output",
-            StaticFiles(directory=str(output_dir)),
-            name="output",
-        )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/output",
+        StaticFiles(directory=str(output_dir)),
+        name="output",
+    )
 
-    # 静态 vendor (pico.css)
+    # 静态 vendor (pico.css) — 仓库自带资产，正常存在；去掉 if 条件直接挂
     static_dir = base / "static"
-    if static_dir.exists():
-        app.mount(
-            "/static",
-            StaticFiles(directory=str(static_dir)),
-            name="static",
-        )
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(static_dir)),
+        name="static",
+    )
 
     # ── Dashboard / API ────────────────────────────────────
 
