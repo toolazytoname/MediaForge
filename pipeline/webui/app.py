@@ -233,17 +233,27 @@ def create_app() -> FastAPI:
             except Exception as e:
                 return _alert(f"{decision} 失败：{e}")
 
-    # ── 发布日历 ───────────────────────────────────────────
+    # ── 发布日历（M4-4 周视图） ────────────────────────────────
 
     @app.get("/calendar", response_class=HTMLResponse)
-    def calendar(request: Request) -> HTMLResponse:
+    def calendar(
+        request: Request, week: str | None = None,
+    ) -> HTMLResponse:
+        """周视图日历（htmx 换周）。
+
+        ?week=YYYY-MM-DD 为周锚定日（缺省 = 今天 UTC）。
+        hx-get="/calendar?week=..." hx-target="#calendar-grid" hx-swap="innerHTML"
+        """
+        from pipeline.webui.calendar import bucket_week
+
         with _db() as conn:
             pubs = []
             for st in PublicationStatus:
                 pubs.extend(db.get_publications_by_status(conn, st.value))
+            bucket = bucket_week(pubs, anchor_iso=week)
             return templates.TemplateResponse(
                 request, "calendar.html",
-                {"publications": pubs},
+                {"bucket": bucket, "week": week or bucket.this_week},
             )
 
     @app.post(
@@ -345,9 +355,18 @@ def create_app() -> FastAPI:
             err = None
         # 脱敏：把 webhook_url 等敏感字段值替换为 "***"
         sanitized = sanitize_config(cfg.model_dump()) if cfg else {}
+        # cookie 健康状态（轻量级：只校验文件存在 + 格式合法；不实际探活）
+        cookie_health = []
+        if cfg is not None:
+            from pipeline.webui.cookie_health_views import collect_cookie_health
+            cookie_health = collect_cookie_health(cfg)
         return templates.TemplateResponse(
             request, "settings.html",
-            {"config": sanitized, "err": err},
+            {
+                "config": sanitized,
+                "err": err,
+                "cookie_health": cookie_health,
+            },
         )
 
     return app
