@@ -657,7 +657,7 @@
   ✅ 完成于 2026-07-07，commit <本 commit sha>，备注：cmd_reset 按 id 前缀（t_/c_/p_）分发表，读当前 status，走 db.transition 状态机；捕获 IllegalTransition/StaleState 各自 exit 1 + 清晰错误；成功写 warning 级审计日志（stage=reset + ref_id=id）；非法前缀/不存在 id 也 exit 1。tests/test_reset_cmd.py 9 用例覆盖合法/非法/不存在/审计/三表分发/状态机红线 6 路径。
 
 ### S8-3 新增 `doctor` 体检命令（MEDIUM，上线前自检）
-- [ ] **目标**：一条命令告诉用户「现在缺什么才能真跑起来」，免得逐项踩坑
+- [x] **目标**：一条命令告诉用户「现在缺什么才能真跑起来」，免得逐项踩坑
 - **背景**：本番初始化涉及多个易漏项（config.yaml 存在？state.db 建了？secrets/ 目录？LLM key env？playwright chromium？）。给一个体检命令，输出清单式报告，是"能用起来"的关键脚手架
 - **怎么改**：
   1. 新增 `pipeline/doctor.py::run_doctor(config_path) -> list[CheckResult]`（纯函数，每项返回 `(name, ok: bool, hint: str)`），检查项至少含：① `config.yaml` 是否存在且能 `load_config` 通过 ② `state.db` 是否存在（不存在提示先 `init-db`）③ `secrets/` 目录是否存在 ④ LLM key 环境变量是否设置（`ANTHROPIC_API_KEY` 或 `MINIMAX_API_KEY`，**只检查存在与否，绝不打印值**）⑤ `budget.monthly_usd` 是否 > 0 ⑥ `publish.enabled` 当前值（提示：true=会真发）
@@ -666,6 +666,8 @@
 - **验收标准**：缺 config.yaml 时 `doctor` 报 ❌ 并提示 `cp config.example.yaml config.yaml`；齐全时全 ✅ exit 0；新增 `tests/test_doctor.py` 用 tmp_path 造齐全/缺项两种环境断言结果
 - **红线**：**绝不打印密钥值**（§9 凭据安全，只报"已设置/未设置"）；doctor 不写任何文件、不改 config、不建库
 - **参考**：TECH_SPEC §6；HARD_PARTS §9；CLAUDE.md 常用命令段
+
+  ✅ 完成于 2026-07-07，commit 08e8af3，备注：`pipeline/doctor.py` 209 行（纯函数 run_doctor + 6 检查项 + CheckResult frozen dataclass）+ `pipeline/run.py` 接入 cmd_doctor（@_stage_lock + 解析 + COMMANDS 字典 +28 行）+ `tests/test_doctor.py` 26 测试。**设计决策**：① 检查项顺序固定 config→state.db→secrets→llm_key→budget→publish.enabled——按「启动流水线之前最常被绊倒的项」排序；② publish.enabled=true 不 fail 只 warn（"⚠️ 真发"），因它不是错误而是「知情确认」；③ config 加载失败时 budget/publish 检查返回 ❌ 提示「先修 config」而非各自独立报错；④ cmd_doctor 用 CWD 相对路径（secrets_dir="secrets"、args.config 透传），与其它 cmd 模式一致；⑤ doctor.run_doctor 不调 db.connect/init_db（仅 Path.exists + load_config），严格遵守「只读不创建任何文件」红线——tests/test_doctor.py::TestReadOnly 验证。全测 1035 绿（4 pre-existing 失败不变）。契约零变更：models.py / SQL schema / Adapter 签名 / argparse 现有签名 / webui 行为全部不动；run.py 880 行（S8-2 基线 852，+28 全在 S8-3 新增 cmd + parser + COMMANDS 字典项内）。
 
 ### S8-4 上线引导文档 + 真实 LLM 跑通一轮（MEDIUM，需用户参与 key）
 - [ ] **目标**：一份 `docs/GETTING_STARTED.md`，照着走能从零到「ingest→score→create→gate→review」真实跑通一轮，并记录成本 baseline
