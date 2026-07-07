@@ -152,6 +152,8 @@
 - **验收**：全测绿；同主题两条（不同 URL 不同 title）经 AI 去重只占一个 quota
 - **参考**：Horizon `src/orchestrator.py:433-504` + `src/ai/prompts.py:3-13`
 
+  ✅ 完成于 2026-07-07，commit 2b4df08，备注：topic_dedup.py 243 行（prompt MIT 搬运 commit 3e21c04 + 失败 fallback 静默 + keyword-only ai_client）+ runner.py 接入顺序 URL→语义→score + ScoreRunResult.duplicates_semantic_merged + cmd_score 打印 + tests 25（纯函数 20 + 集成 5），全测 940 绿/12 skip（2 pre-existing 失败已 stash 验证）。verify PASS 10/10。
+
 ### M1-8 AI 智能筛选预筛（评估任务，借鉴 sansan0/TrendRadar filter.py）
 - [ ] **目标**：评估"两阶段 AI 筛选"（A: 兴趣描述→标签；B: 标题批量分类+relevance）作为 M1-4 score 前的预筛是否值得做
 - **步骤**：
