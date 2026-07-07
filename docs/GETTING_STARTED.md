@@ -73,7 +73,7 @@ mkdir -p secrets
 
 LLM 是创作管道（`create`）和门禁（`gate`）的核心，**没设 key 跑不动真 LLM**。
 
-两种 provider 二选一（实际读取逻辑见 `pipeline/creators/llm.py::setup_provider_from_env`）：
+三种 provider 可叠加（实际读取逻辑见 `pipeline/creators/llm.py::setup_provider_from_env` + `pipeline/creators/image_gen.py::setup_provider_from_env`）：
 
 ### 优先：MiniMax-M3（Anthropic 兼容协议，便宜）
 
@@ -89,6 +89,18 @@ export MINIMAX_MODEL=MiniMax-M3                              # 默认值
 ```bash
 export ANTHROPIC_API_KEY=<your-key>
 ```
+
+### 图生成（M-x，MiniMax image-01）
+
+```bash
+export MINIMAX_IMAGE_API_KEY=<your-key>     # 可与 MINIMAX_API_KEY 同 key
+# 可选：
+export MINIMAX_IMAGE_BASE_URL=https://api.minimaxi.com/v1   # 默认
+export MINIMAX_IMAGE_MODEL=image-01                         # 默认
+export MINIMAX_IMAGE_TIMEOUT_S=90                           # 默认（docs 推荐 60–360s）
+```
+
+不设 `MINIMAX_IMAGE_*` 时 fallback 到 `MINIMAX_API_KEY`——一个 key 同时跑 chat + image。
 
 > `MINIMAX_API_KEY` 和 `ANTHROPIC_API_KEY` 同时设置时优先 MiniMax。
 > **别把 key 写进 config.yaml 或任何文件**——只走环境变量。
@@ -160,6 +172,12 @@ python -m pipeline.run review
 # 产出 output/<date>/REVIEW.md，每条 gated 内容一行
 # 人工在 REVIEW.md 里把 `[ ] approve` 改成 `[x] approve`（或 `[-] reject: 原因`）
 # 然后再跑一次 `python -m pipeline.run review` 让标记入 DB
+
+# 6) 生成封面 + 文中插图（仅对 approved 内容，discarded 跳过省 $0.003/张）
+python -m pipeline.run generate-images
+# 读 canonical.md 里的 [IMAGE: ...] 占位 → 调 MiniMax image-01
+# 落盘 output/<date>/<id>/cover.png + images/inline-N.png
+# 写回 contents.cover_path / inline_images
 ```
 
 **单条失败不阻断整批**（HARD_PARTS §5）——比如 gate 阶段一条 discarded 是正常流程，
@@ -206,6 +224,7 @@ python -m pipeline.run webui
 | 2026-07-05 | MiniMax-M3 (Anthropic 协议) | 38 | 5 | 3/2 | 0/3 | $0.0267 | 失败 2 条为 outline JSON 结构性错误；discarded 3 条 critic 抓 fact blocker |
 | 2026-07-05（重试后）| MiniMax-M3 | 38 | 5 | 5/0 | 1/4 | — | 二次冒烟，complete_json 自动重试生效 |
 | **2026-07-07** | **Agnes-AI agnes-2.0-flash** | **36** | **5** | **4/1** | **0/4** | **$0.42** | M9-1 接入；topic_dedup 29KB 超 agnes 上下文 404 走 M1-7 静默 fallback；timeout 1 条；4 条全 discarded（占位锚点严） |
+| **2026-07-07** | **MiniMax image-01** | — | — | — | — | **$0/张（限时） / $0.003/张（标准）** | **M-x 接入**（commit 585b8f2）；独立 `pipeline/creators/image_gen.py`；只为 approved 内容生成（discarded 不调 API 省 $0.003 × 80% discard 率）；封面 16:9 + 文中插图 1:1 |
 
 **M1-8 预筛评估（commit 5c74f0a）**：实测 score 单条 $0.000534、prefilter A $0.000294、prefilter B=10 $0.000181。
 **结论**：
