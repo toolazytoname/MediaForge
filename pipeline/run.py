@@ -19,6 +19,22 @@ from pipeline.utils.flock import LockHeld, acquire, release
 
 _LOCKS_DIR = Path("locks")
 
+# 默认可被测试 monkeypatch；与 webui/app.py::_DB_PATH 同模式
+_DB_PATH = "state.db"
+
+
+# 三表各自的合法状态全集（按枚举顺序打印——空库也能列全 0）。
+# 与 db._STATE_TABLES 同源但解耦：枚举值此处硬编码，不 import models，
+# 避免循环导入风险。
+_TOPIC_STATUSES = ("raw", "scored", "selected", "consumed", "rejected")
+_CONTENT_STATUSES = (
+    "draft", "gated", "approved",
+    "rejected_by_human", "discarded", "failed", "done",
+)
+_PUBLICATION_STATUSES = (
+    "queued", "publishing", "published", "failed", "cancelled",
+)
+
 
 def _stage_lock(stage: str):
     """装饰器：子命令入口加 flock（HARD_PARTS §8 cron 重叠防护）。
@@ -561,7 +577,36 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 @_stage_lock("status")
 def cmd_status(args: argparse.Namespace) -> int:
-    return _not_implemented("status")
+    """打印各状态计数表 + 本月 LLM 花费（TECH_SPEC §2 契约）。
+
+    只读：3 表 status 分组计数 + llm_calls 本月 SUM(cost_usd)，不写库。
+    空库 → 三表各状态=0 + llm=$0.0000，不报错。
+    默认 db 路径 `_DB_PATH`（'state.db'）；测试可 monkeypatch。
+    """
+    conn = db.connect(_DB_PATH)
+    try:
+        db.init_db(conn)
+        # db.count_by_status 抽公共 SELECT；与 webui 各走一份（红线：不改 webui）
+        counts = {
+            t: db.count_by_status(conn, t)
+            for t in ("topics", "contents", "publications")
+        }
+        llm_month_usd = db.sum_llm_cost_this_month(conn)
+    finally:
+        conn.close()
+
+    # 三表各自打印一段：枚举全集顺序，确保空库也列全
+    table_statuses = {
+        "topics": _TOPIC_STATUSES,
+        "contents": _CONTENT_STATUSES,
+        "publications": _PUBLICATION_STATUSES,
+    }
+    for table in ("topics", "contents", "publications"):
+        row = counts.get(table, {})
+        parts = [f"{st}={row.get(st, 0)}" for st in table_statuses[table]]
+        print(f"{table}: " + " ".join(parts))
+    print(f"llm: this_month=${llm_month_usd:.4f}")
+    return 0
 
 
 @_stage_lock("reset")

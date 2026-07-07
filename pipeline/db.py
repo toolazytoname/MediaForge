@@ -414,6 +414,52 @@ def insert_llm_call(conn: sqlite3.Connection, **fields) -> int:
     return cur.lastrowid or 0
 
 
+# ── 只读查询助手（CLI status / webui dashboard 共用） ────────
+#
+# S8-1 引入：仅 SELECT，不写库；为 status / future dashboard 提供
+# 复用的查询入口（不留 SQLite 散落的副本）。
+
+
+def count_by_status(conn: sqlite3.Connection, table: str) -> dict[str, int]:
+    """统计指定表按 status 分组的行数。
+
+    只读 SELECT。空表 → 空 dict（由调用方按需补 0）。
+    table 仅接受 "topics" / "contents" / "publications"。
+    """
+    if table not in _STATE_TABLES:
+        raise ValueError(
+            f"count_by_status: table must be one of "
+            f"{sorted(_STATE_TABLES)}, got {table!r}"
+        )
+    rows = conn.execute(
+        f'SELECT status, COUNT(*) AS n FROM "{table}" GROUP BY status'
+    ).fetchall()
+    return {r["status"]: int(r["n"]) for r in rows}
+
+
+def sum_llm_cost_this_month(
+    conn: sqlite3.Connection, *, now: datetime | None = None
+) -> float:
+    """本月 LLM 花费（USD）。空表 / 本月无调用 → 0.0。
+
+    「本月」按 ISO 月份前缀匹配（YYYY-MM），等价于
+    `created_at >= <当月1号ISO>`，因为 llm_calls.created_at 是 ISO8601 UTC。
+
+    Args:
+        now: 用于判断「本月」的参考时间；缺省 = `datetime.now(timezone.utc)`。
+             测试可注入固定 `now` 以断言。
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    month_prefix = now.strftime("%Y-%m")
+    row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0) AS used "
+        "FROM llm_calls WHERE substr(created_at, 1, 7) = ?",
+        (month_prefix,),
+    ).fetchone()
+    return float(row["used"])
+
+
 # ── 状态机 ─────────────────────────────────────────────────
 
 def transition(
