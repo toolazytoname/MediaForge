@@ -440,7 +440,7 @@
 > **执行者注意（弱模型必读）**：每个任务已写明「错在哪（文件:行号）/ 怎么改 / 红线（不许动什么）」。严格照做，**不要顺手改契约**（models.py 字段、SQL schema、Adapter 方法签名、TECH_SPEC §3/§4/§5 一律不动）。改动前先 `git pull` 确认行号，行号漂移就用「错误代码原文」定位。每个任务做完单独 commit，跑 `python -m pytest tests/ -q` 全绿才算完成。
 
 ### R7-1 修 webui 连接与时间 API 三处隐患（低风险，先做热身）
-- [ ] **目标**：消除 webui 每请求重开连接、每请求跑 DDL、以及弃用的 `utcnow()`
+- [x] **目标**：消除 webui 每请求重开连接、每请求跑 DDL、以及弃用的 `utcnow()`
 - **错在哪**：
   1. `pipeline/webui/app.py:50-53` `_conn()` 每次请求都 `db.init_db(c)`——`init_db` 会执行全部 `CREATE TABLE IF NOT EXISTS` DDL，**每个 HTTP 请求跑一遍建表语句**，纯浪费且拖慢页面
   2. `pipeline/webui/app.py:123` 用了 `datetime.utcnow()`——本项目跑在 Python 3.14，该 API 已 deprecated，会打 warning 且未来移除
@@ -451,8 +451,10 @@
 - **红线**：不要改 `db.py` 的 `init_db` 本身；不要改路由签名
 - **参考**：TECH_SPEC §7
 
+  ✅ 完成于 2026-07-07，commit a842678，备注：`_conn()` 删 init_db、create_app 内一次性 `db.init_db(_init_c)`（lines 96-100），`dashboard` 路由改 `datetime.now(timezone.utc).isoformat()`（line 130）。tests/test_webui_r7_1.py 6 用例全绿。
+
 ### R7-2 修 /output 与 /static 挂载时机 → 图卡/预览 404（HIGH，影响审核体验）
-- [ ] **目标**：`output/` 目录在 webui 启动后才生成时，图卡 PNG 仍能被访问
+- [x] **目标**：`output/` 目录在 webui 启动后才生成时，图卡 PNG 仍能被访问
 - **错在哪**：`pipeline/webui/app.py:97-112`——`/output` 和 `/static` 用 `if output_dir.exists(): app.mount(...)` 挂载。若启动 webui 时 `output/` 还不存在（新机器、当天还没 create），之后流水线生成了图卡，**这些图片永远 404，直到重启 webui**。审核台/详情页的 `<img>` 全裂
 - **怎么改**：
   1. 挂载前确保目录存在：把条件挂载改成 `output_dir.mkdir(parents=True, exist_ok=True)` 后**无条件** `app.mount("/output", StaticFiles(directory=str(output_dir)), name="output")`
@@ -461,8 +463,10 @@
 - **红线**：`/output` 必须只读（StaticFiles 默认只读，别加写路由）；不要把 `output/` 加进 git（`.gitignore` 已忽略，别动）
 - **参考**：TECH_SPEC §7「/output 挂静态目录，只读」
 
+  ✅ 完成于 2026-07-07，commit 71e9703，备注：`output_dir.mkdir(parents=True, exist_ok=True)` 后无条件 `app.mount("/output", ...)`（lines 105-111），`/static` 同样去掉 if 条件。tests/test_webui_r7_2.py 5 用例全绿。
+
 ### R7-3 webui 直写 SQL 违反 §7 契约 → 抽到 db.py 助手函数（MEDIUM）
-- [ ] **目标**：消除 UI 层里的裸 `UPDATE` SQL，遵守 TECH_SPEC §7「**UI 不得直接写 SQL**」
+- [x] **目标**：消除 UI 层里的裸 `UPDATE` SQL，遵守 TECH_SPEC §7「**UI 不得直接写 SQL**」
 - **错在哪**：TECH_SPEC §7 明文规定「读走 db.py 查询函数，写走 transition() 与既有编排函数」。但：
   1. `pipeline/webui/app.py:215-221` reject 分支直接 `conn.execute("UPDATE contents SET gate_verdict=?, updated_at=? WHERE id=? AND status=?")`
   2. `pipeline/webui/app.py:272-278` reschedule 直接 `conn.execute("UPDATE publications SET scheduled_at=?, updated_at=? WHERE id=? AND status=?")`
@@ -476,8 +480,10 @@
 - **红线**：**不要改 SQL 语义**（字段、WHERE 条件一字不改，只是搬家）；不要改 schema；`transition()` 已有的状态转移调用（app.py 里 approve/promote/cancel/retry 那些）保持不动，它们已经合规
 - **参考**：TECH_SPEC §7、§8
 
+  ✅ 完成于 2026-07-07，commit 2788fd4，备注：db.py 新增 `set_gate_verdict` / `reschedule_publication` 两个纯函数（保留 SQL 语义，字段/WHERE 一字不改），app.py reject 分支 (line 223-228) 与 reschedule 分支 (line 278-285) 改为调助手。tests/test_webui_r7_3.py 7 用例全绿。
+
 ### R7-4 metrics 裸吞异常违反 §8 → 补结构化日志（MEDIUM）
-- [ ] **目标**：让「失败静默重试次日」的 metrics 路径留下可排障日志，遵守 §8「禁止裸 except: pass」
+- [x] **目标**：让「失败静默重试次日」的 metrics 路径留下可排障日志，遵守 §8「禁止裸 except: pass」
 - **错在哪**：TECH_SPEC §8 规定「任何 except 分支必须要么 re-raise 要么 log.warning 以上级别记录」。但 `pipeline/metrics/collectors.py` 与 `pipeline/metrics/runner.py:122,130` 有大量 `except Exception:` 后只 `failed += 1; continue`，**一个字都不记**。线上 metrics 抓不到数时无从排障
 - **怎么改**：
   1. 用 `pipeline/utils/log.py` 的结构化 logger（其它模块的用法照抄），在每个 `except Exception as e:` 分支加一行 `logger.warning(...)`，**必带 `stage="collect"` 与 `ref_id=<publication_id>`**（§8 要求每条日志带 stage+ref_id），message 含 `repr(e)`
@@ -487,8 +493,10 @@
 - **红线**：**不要改控制流**——失败仍是 `failed += 1; continue`（§8 允许「记录后继续」，metrics 是非关键路径，不能因单条失败阻断编排）；不要 re-raise
 - **参考**：TECH_SPEC §8；HARD_PARTS §5（collect 幂等）
 
+  ✅ 完成于 2026-07-07，commit 42e0c53，备注：collectors.py 11 处 + runner.py 2 处 `except Exception` 全部补 `logger.warning(... extra={"stage": "collect", "ref_id": pub.id})`，控制流不变（仍是 failed+=1; continue）。tests/test_metrics.py 全测绿。
+
 ### R7-5 补 tests/test_e2e_dryrun.py（§9 必测项缺失，HIGH）
-- [ ] **目标**：补上 TECH_SPEC §9 明确要求但**至今不存在**的端到端 dry-run 集成测试
+- [x] **目标**：补上 TECH_SPEC §9 明确要求但**至今不存在**的端到端 dry-run 集成测试
 - **错在哪**：TECH_SPEC §9 白纸黑字：「集成测试 `tests/test_e2e_dryrun.py`：造一个假 topic，全流程跑到 publish --dry-run」。现仓库只有 `test_toutiao_e2e.py`/`test_douyin_e2e.py`（单平台），**没有全链路 dry-run 测试**。这是里程碑级验收漏洞
 - **怎么改**：新建 `tests/test_e2e_dryrun.py`：
   1. 用临时 db（`db.connect(":memory:")` 或 tmp_path 下的 state.db）+ `db.init_db`
@@ -498,6 +506,8 @@
 - **验收标准**：`pytest tests/test_e2e_dryrun.py -q` 绿；测试内断言覆盖「全链路状态推进正确」+「dry-run 下 PublisherAdapter.publish 真实动作未发生」（§9 必测第 4 条）
 - **红线**：**mock LLM/平台可以，绝不 mock 状态机**（HARD_PARTS §10 第 3 条）——状态转移必须走真实 `db.transition`；不要为了让测试过而改生产代码逻辑
 - **参考**：TECH_SPEC §9；HARD_PARTS §5、§10
+
+  ✅ 完成于 2026-07-07，commit 19e5d0c，备注：tests/test_e2e_dryrun.py 455 行——临时 db + MockProvider + MockPublisherAdapter 跑全链路 raw→scored→draft→gated→approved→queued→dry_run；断言状态推进正确 + publish 真动作未触发。状态机全程走真实 db.transition（不 mock 状态机，红线遵守）。
 
 ### R7-6 文档 commit 补齐 + mypy 声明对齐现实（LOW，卫生）
 - [x] **目标**：消除文档里 4 处历史 commit 悬空占位符（M1-4/M1-5/M2-1/M5-2 完成备注），并让「mypy --strict 强制」的声明与现实一致
