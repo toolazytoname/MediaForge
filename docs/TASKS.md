@@ -597,6 +597,126 @@
 
 ---
 
+## M8 — 从「测试全绿」到「你能亲手运营」（2026-07-07 追加，用户驱动）
+
+> **本节缘起**：用户通读进度后提出核心诉求——「每个环节我都想可视化掌控一下，能增删改查、可调度、可编辑，别让我全程敲 terminal」。评估发现：M0–M6 代码主干齐全（985 测试通过），但**从没真正本番开机过**（无 config.yaml / state.db / secrets），且 `status`/`reset` 两个子命令至今是占位符。本节补两件事：**S 组**=让系统真能开机（补占位 + 上线引导）；**A 组**=把只读看板升级为可增删改查的管理后台。
+>
+> **配置编辑范围（用户已拍板）**：config 编辑本轮**只做只读展示 + 当前值高亮**（U7-1 已覆盖），不做 UI 改 config.yaml。A 组聚焦「选题 / 内容 / 排期」的 CRUD。
+>
+> **执行者注意（弱模型必读）**：同 M7 规则——严格照「怎么改」做，**不许顺手改契约**（models.py 字段、SQL schema、Adapter 签名、TECH_SPEC §3/§4/§5 一律不动）。改动前 `git pull` 对齐行号，行号漂移就用「错误代码原文」定位。每个任务独立 commit + `python -m pytest tests/ -q` 全绿才算完成。
+
+### 🧭 M7 + M8 全局执行顺序（总纲）
+
+```
+第一梯队（健壮性打底，先做）：  R7-1 → R7-2 → R7-3 → R7-4 → R7-5
+第二梯队（让它真能开机）：      S8-1 → S8-2 → S8-3 → S8-4
+第三梯队（摆脱 terminal）：     U7-1（驾驶舱）→ U7-2（运行台）
+第四梯队（管理后台 CRUD）：     A8-1 → A8-2 → A8-3 → A8-4
+第五梯队（体验收尾）：          U7-3 → U7-4 → U7-5
+第六梯队（UI 发布，最高危，最后）：U7-6
+```
+
+> 依赖关系：A 组依赖 U7-2 的后台执行框架与 U7-1 的导航；U7-3 依赖 R7-2 的 `/output` 修复；U7-6 依赖 U7-2 框架 + R7-2 图片可显示。**按梯队顺序做最省返工。**
+
+---
+
+### S8-1 补实 `status` 子命令（当前是占位符，HIGH，运维基础）
+- [ ] **目标**：`python -m pipeline.run status` 打印真实的各状态计数表，而非占位串
+- **错在哪**：`pipeline/run.py:562-564` `cmd_status` 仍 `return _not_implemented("status")`——实跑输出 `status: not implemented (M0-1 placeholder)`。但 TECH_SPEC §2 契约明列该命令要「打印各状态计数表」，M0-1 完成备注也声称 `status→exit 0`（**当时只是占位打印，未真实计数，属文档夸大**）。webui 里已有现成的计数逻辑 `pipeline/webui/app.py:_status_counts` 可参照
+- **怎么改**：
+  1. `cmd_status`：`db.connect(<db_path>)` 后，对 `topics`/`contents`/`publications` 三表各 `SELECT status, COUNT(*) GROUP BY status`（**只读 SELECT，不新增 schema**），按 TECH_SPEC §2 摘要风格打印，例如每表一段 `topics: raw=12 scored=5 selected=3`。db_path 从 `args.config` 加载的 config 或默认 `state.db` 取（与其它 cmd 一致，抄 `cmd_ingest` 的 config 加载方式）
+  2. 保留 `@_stage_lock("status")` 装饰器不动；成功 `return 0`
+  3. 顺带在同一输出追加「本月 LLM 花费」一行（`SELECT COALESCE(SUM(cost_usd),0) FROM llm_calls WHERE created_at >= <当月1号ISO>`）——与 U7-1 的成本可见性对齐，运维一眼看到花了多少
+- **验收标准**：`python -m pipeline.run status` 打印三表计数 + 本月花费且 exit 0；新增 `tests/test_status_cmd.py`：插入若干 topic/content 后调 `cmd_status`，capsys 断言输出含各 status 计数；空库时打印全 0 不报错
+- **红线**：**只读**——status 绝不写库；不改 `_status_counts`（那是 webui 的，本任务是 CLI 侧，可各自实现或抽公共函数到 `db.py`，但别改 webui 行为）；不加 schema 字段
+- **参考**：TECH_SPEC §2；HARD_PARTS §3 要点 4（分数分布可放 U7-1，本任务先出计数）
+
+### S8-2 补实 `reset` 子命令（唯一逆向操作，HIGH，卡死救命）
+- [ ] **目标**：`python -m pipeline.run reset <id> <status>` 真正把一条记录逆向重置，而非占位打印
+- **错在哪**：`pipeline/run.py:568-575` `cmd_reset` 仍是占位（只打印不落库）。TECH_SPEC §2 明列 reset 是「**唯一允许的逆向操作**」；TECH_SPEC §4 转移表里 `publications: "failed": {"queued"}` 注明「仅 reset 命令可走」。没有它，一条 failed publication 卡死后无法从 CLI 救回（只能手改 DB，违背契约）
+- **怎么改**：
+  1. `cmd_reset`：根据 `<id>` 前缀判定表（`t_`→topics / `c_`→contents / `p_`→publications），读当前记录，走 `db.transition(conn, <table>, id, <current_status>, <target_status>)`——**必须走状态机**，非法逆向由 `transition` 的转移表拦截抛 `IllegalTransition`（reset 只能走转移表允许的边，如 `failed→queued`；不允许任意乱跳）
+  2. 若目标状态非法：捕获 `IllegalTransition`，打印清晰错误（「reset 不允许 X→Y，转移表未定义此边」）+ exit 1
+  3. 记录一条 warning 级审计日志（`stage="reset" ref_id=<id>`，§8 要求带 stage+ref_id），便于事后追溯谁重置了什么
+- **验收标准**：造一条 `failed` publication，`reset p_xxx queued` 后其 status=queued；`reset` 一个非法目标（如 `published→queued`）返回 exit 1 且不改库；新增 `tests/test_reset_cmd.py` 覆盖合法逆向 + 非法拒绝两条路径
+- **红线**：**必须走 `db.transition`**——绝不裸 `UPDATE` 绕过转移表（否则 reset 变成任意改状态的后门，破坏状态机不变式）；不改转移表定义（TECH_SPEC §4 冻结）；reset 不触发任何发布/创作副作用，只改状态
+- **参考**：TECH_SPEC §2、§4；HARD_PARTS §10 第 3 条（不 mock/绕过状态机）
+
+### S8-3 新增 `doctor` 体检命令（MEDIUM，上线前自检）
+- [ ] **目标**：一条命令告诉用户「现在缺什么才能真跑起来」，免得逐项踩坑
+- **背景**：本番初始化涉及多个易漏项（config.yaml 存在？state.db 建了？secrets/ 目录？LLM key env？playwright chromium？）。给一个体检命令，输出清单式报告，是"能用起来"的关键脚手架
+- **怎么改**：
+  1. 新增 `pipeline/doctor.py::run_doctor(config_path) -> list[CheckResult]`（纯函数，每项返回 `(name, ok: bool, hint: str)`），检查项至少含：① `config.yaml` 是否存在且能 `load_config` 通过 ② `state.db` 是否存在（不存在提示先 `init-db`）③ `secrets/` 目录是否存在 ④ LLM key 环境变量是否设置（`ANTHROPIC_API_KEY` 或 `MINIMAX_API_KEY`，**只检查存在与否，绝不打印值**）⑤ `budget.monthly_usd` 是否 > 0 ⑥ `publish.enabled` 当前值（提示：true=会真发）
+  2. `run.py` 注册 `doctor` 子命令（`sub.add_parser("doctor", ...)` + `cmd_doctor` 映射），逐行打印 `✅/❌ <name>：<hint>`，有任一 ❌ 则 exit 1（方便脚本/CI 判断）
+  3. `doctor` **只读**，不创建任何文件（是"体检"不是"治疗"；创建交给用户或 S8-4 引导文档）
+- **验收标准**：缺 config.yaml 时 `doctor` 报 ❌ 并提示 `cp config.example.yaml config.yaml`；齐全时全 ✅ exit 0；新增 `tests/test_doctor.py` 用 tmp_path 造齐全/缺项两种环境断言结果
+- **红线**：**绝不打印密钥值**（§9 凭据安全，只报"已设置/未设置"）；doctor 不写任何文件、不改 config、不建库
+- **参考**：TECH_SPEC §6；HARD_PARTS §9；CLAUDE.md 常用命令段
+
+### S8-4 上线引导文档 + 真实 LLM 跑通一轮（MEDIUM，需用户参与 key）
+- [ ] **目标**：一份 `docs/GETTING_STARTED.md`，照着走能从零到「ingest→score→create→gate→review」真实跑通一轮，并记录成本 baseline
+- **怎么改**：
+  1. 写 `docs/GETTING_STARTED.md`：分步骤——① `cp config.example.yaml config.yaml` 并按注释改 ② `mkdir -p secrets` ③ 设置 LLM key 环境变量（说明 Anthropic 与 MiniMax 两种，指向 `pipeline/creators/llm.py::setup_provider_from_env` 的实际读取逻辑，**别写死具体 key**）④ `python -m pipeline.run init-db` ⑤ `python -m pipeline.run doctor`（S8-3）确认全绿 ⑥ 依次 `ingest→score→create→gate→review` ⑦ `python -m pipeline.run webui` 打开控制台
+  2. **真实跑通一轮**（需用户提供 key，若无 key 则标 `⚠️ BLOCKED: 待用户提供 LLM key` 跳过后半）：跑一轮 ingest→gate，把「N 条 ingest / N 过门禁 / 本轮 LLM 成本 $X」记进 GETTING_STARTED.md 的"成本 baseline"节，作为 budget.monthly_usd 是否合理的现实依据
+  3. 文档里显式标注「发布（M4/M5）默认关闭，需人工登录 + config `publish.enabled: true` 才真发」，引导用户不要误触高危路径
+- **验收标准**：一个空白环境的人照 GETTING_STARTED.md 能跑到 webui 打开；成本 baseline 有真实数字（或明确标注 BLOCKED 待 key）
+- **红线**：文档任务——**不改 pipeline/ 代码逻辑**；不把任何真实 key/cookie 写进文档或提交；真实跑通**不碰 publish**（只到 review 为止）
+- **参考**：CLAUDE.md 会话重启指引；TECH_SPEC §2；HARD_PARTS §4（成本）
+
+---
+
+### A8-1 选题手动录入（MEDIUM，管理后台 CRUD 第一块）
+- [ ] **目标**：在 Web 控制台手动新增一条选题（用户自己发现的热点），不必等 RSS 抓
+- **背景**：现在 topics 只能由 `ingest` 从数据源抓入。用户要「增」的能力——手动录入一条 title/url，进入正常 score 流程
+- **怎么改**：
+  1. 后端 `app.py`：新增 `GET /topics/new`（返回一个表单片段/页：title 必填、url 选填、summary 选填、source 固定填 `manual`、pillar 选填下拉）与 `POST /topics`（接 Form 字段）
+  2. 入库**走 db 层不裸 SQL**：复用 `pipeline/topics/dedup.py` 计算 `content_hash`（`normalize(title)+domain`，抄 `pipeline/ingest.py` 里 M1-2 的算法）→ 调 `db.try_insert_topic(conn, Topic(...))`（已存在，INSERT OR IGNORE 天然防重）。status 一律 `raw`（走正常 score/dedup，不许手动直接塞 selected 跳过评分）
+  3. 重复（content_hash 已存在）→ 返回 `role=alert` 提示「该选题已存在」；成功 → 返回成功片段 + 链到 `/topics?status=raw`
+  4. `templates/topic_new.html` + base.html 导航「选题池」旁加「+ 新增选题」入口
+- **验收标准**：UI 提交一条 title → `/topics?status=raw` 出现该条，source=manual，status=raw；重复提交同 title 返回"已存在"不重复入库；新增测试覆盖入库成功 + 去重两条路径
+- **红线**：**不裸写 SQL**（用 `db.try_insert_topic`）；**不加 schema 字段**；手动录入的 topic **必须走 raw→score 正常流程**，不许 UI 直接造 selected/consumed 跳过评分与门禁；`content_hash` 用现有 dedup 函数算，别自己重写哈希
+- **参考**：TECH_SPEC §3（topics 表）、§7；HARD_PARTS §5（幂等/去重）；M1-2 ingest 入库逻辑
+
+### A8-2 内容在线编辑（HIGH，用户「可编辑」核心诉求）
+- [ ] **目标**：在 Web 控制台直接编辑生成的正文（canonical.md 及派生稿），存回文件——不用去命令行 vim 改
+- **背景**：这是用户「可编辑」诉求的核心。LLM 产出的 canonical.md / 头条稿 / 小红书 caption / X thread 常需人工微调，现在只能开文件改。给 UI 一个编辑器
+- **怎么改**：
+  1. 后端 `app.py`：新增 `GET /contents/{id}/edit`——读 `content.canonical_path` 原文 + 探测派生文件（`output/<date>/<id>/toutiao.md`、`xiaohongshu/caption.md`、`x/thread.md`，存在才显示）填入各 `<textarea>`；`POST /contents/{id}/edit`——把提交文本**原子写回**对应文件（先写 `<file>.tmp` 再 `os.replace` 覆盖，HARD_PARTS §5 tmp→rename 模式），不存在的派生文件跳过不新建
+  2. **只改文件、不改 DB 状态**——编辑不动 `contents` 表任何字段（正文在文件里，不在库里）。保存后返回提示「正文已更新；若该内容已过门禁，建议重新 `gate` 或人工复核后再发」
+  3. **可编辑状态白名单**：只允许 `status in {draft, gated, approved, rejected_by_human}` 的内容编辑；`published`/`done` 的禁止编辑（已发出去改文件是误导）——非法状态返回 `role=alert`
+  4. `templates/content_edit.html`；content_detail.html 加「✏️ 编辑」入口
+- **验收标准**：编辑一条 gated content 的 canonical 正文并保存 → 文件内容变更、DB 状态不变；编辑 published 内容被拒；派生文件不存在时只显示 canonical 且保存不报错；新增测试覆盖「写回成功且原子」「published 拒绝」
+- **红线**：**不改 contents 表 schema、不动 DB 状态**（编辑纯文件操作）；**写文件必须 tmp→rename 原子**（避免半截写坏正文）；不允许编辑图卡 PNG（二进制，本任务只做文本）；路径必须限定在 `output/` 下该 content 目录内（**防路径穿越**：校验解析后的绝对路径以该 content 目录为前缀，拒绝 `../` 逃逸）
+- **参考**：TECH_SPEC §7；HARD_PARTS §5（原子写）、§9（不越权访问文件系统）；ARCHITECTURE §8（输出目录约定）
+
+### A8-3 手动排期管理（MEDIUM，「可调度」诉求）
+- [ ] **目标**：在 UI 手动为一条 approved 内容排一个「平台 + 时间」的发布计划，补足自动 schedule 之外的手动掌控
+- **背景**：`schedule` 命令自动为 approved 内容按黄金时段排 publication。用户想手动掌控——「这条我要指定发某平台、某时间」。现有 UI 只能 reschedule/cancel 已存在的排期，不能新建
+- **怎么改**：
+  1. 后端 `app.py`：内容详情页对 `status=approved` 的内容，新增 `POST /contents/{id}/schedule`（Form: platform、account_id、scheduled_at ISO）→ 走 `db.insert_publication(conn, Publication(status='queued', ...))`（**走 db 层**，`UNIQUE(content_id, platform, account_id)` 天然防重复排期）
+  2. platform 必须在 `config.platforms` 已配置的集合内（否则 `role=alert`）；scheduled_at 存 UTC ISO（HARD_PARTS §8，展示层才转本地）
+  3. 与现有 `/calendar` 的 reschedule/cancel 打通：新建的 queued 记录立即出现在日历对应周
+  4. `templates/content_detail.html` 加「📅 手动排期」表单（platform 下拉 + datetime-local 输入）
+- **验收标准**：对一条 approved 内容手动排 X 平台某时间 → `/calendar` 该周出现一条 queued；重复排同 (content,platform,account) 被 UNIQUE 拒绝并提示；平台不在 config 内被拒；新增测试覆盖成功 + UNIQUE 冲突 + 非法平台
+- **红线**：**不裸 SQL**（用 `db.insert_publication`）；**不绕过 `UNIQUE(content_id,platform,account_id)`**（防重复发布最后防线，HARD_PARTS §1）；排期**不等于发布**——本任务只造 queued 记录，真实发布仍由 publish 阶段 + 三重锁控制，UI 排期绝不触发真实 publish；不改 publications schema
+- **参考**：TECH_SPEC §3、§7；HARD_PARTS §1、§8；M3-1 scheduler
+
+### A8-4 后台信息架构整合（MEDIUM，让零散页面变成一个后台）
+- [ ] **目标**：把 Dashboard/运行台/选题池/审核台/内容/发布日历/日志/设置 用统一导航串成一个像样的管理后台，每页有清晰的 CRUD 入口
+- **错在哪**：`pipeline/webui/templates/base.html:20-26` 导航只有 5 个平铺链接（选题池/审核台/发布日历/设置 + 首页），U7-2 运行台、U7-5 日志、A8 的新增页面都没进导航；页面之间跳转靠猜。用户要「管理后台」的整体感，不是散落的页面
+- **怎么改**：
+  1. base.html 导航补全为完整后台菜单：`Dashboard(/) · 运行台(/runs) · 选题池(/topics) · 审核台(/review) · 发布日历(/calendar) · 日志(/logs) · 设置(/settings)`（运行台/日志分别依赖 U7-2/U7-5 已建；**若那两个任务未做，先占位链接并注释 TODO**，别报错）
+  2. 用 pico.css 的既有类做成顶部导航条 + 高亮当前页（当前 path 匹配则加 `aria-current="page"`）；整体视觉统一（配合 U7-4 的 app.css 合并）
+  3. 各列表页的行/计数尽量可点钻取（topics 计数→列表、review→详情、calendar→详情），把「看板」和「操作」缝合起来
+  4. 首页 Dashboard（U7-1 已升级为驾驶舱）顶部放「今日待办」快捷入口指向各页
+- **验收标准**：任意页面都能通过顶部导航到达其它所有页面；当前页高亮；点 dashboard 的「待审 N 篇」跳 `/review`；断言导航含全部 7 个入口（测试 GET `/` 检查导航链接）
+- **红线**：**不引入 npm/前端构建链**（TECH_SPEC §7）；不改路由契约（只加导航链接，不改后端语义）；导航里**不放任何触发真实发布的直达按钮**（发布入口只在 U7-6 的受控流程里）
+- **参考**：TECH_SPEC §7；U7-1/U7-2/U7-5（各页面来源）
+
+> **M8 建议执行顺序**：S8-1 → S8-2 → S8-3 → S8-4（先能开机），再在 U7-1/U7-2 之后做 A8-1 → A8-2 → A8-3 → A8-4（管理后台 CRUD）。每任务独立 commit，`feat: S8-x/A8-x <描述>` 或 `fix: ...`。**A 组依赖 U7-2 运行台框架与 U7-1 驾驶舱导航，务必先完成那两个再动 A 组。**
+
+---
+
 ## 后续 Backlog（不排期）
 
 - **数字人口播 lane**（AIGCPanel 引擎，走 VideoEngine 接口）：好物分享/带货方向；前提=M5-3 评估通过 + 账号过带货门槛 + 平台虚拟人报备完成
