@@ -644,7 +644,7 @@
   ✅ 完成于 2026-07-07，commit 8e36773，备注：`cmd_status` 30 行（替换原占位 `_not_implemented`）；抽 `db.count_by_status` / `db.sum_llm_cost_this_month` 作公共只读助手（U7-1 复用）；`_DB_PATH = "state.db"` 单点可 monkeypatch；4 行输出 `topics: raw=0 ... / contents: draft=0 ... / publications: queued=0 ... / llm: this_month=$X.XXXX` 全状态列全 0，空库不报错。tests/test_status_cmd.py 12 用例（空库/三表计数/LLM 成本/只读/格式/无副作用）+ tests/test_db_status_helpers.py 6 用例（含非法表 ValueError 拒绝 + sum_llm_cost_this_month `now=` 注入）。全测 1000 绿（4 pre-existing）。契约零变更：models.py 字段 / SQL schema / Adapter 签名 / argparse / webui._status_counts 全部不动。
 
 ### S8-2 补实 `reset` 子命令（唯一逆向操作，HIGH，卡死救命）
-- [ ] **目标**：`python -m pipeline.run reset <id> <status>` 真正把一条记录逆向重置，而非占位打印
+- [x] **目标**：`python -m pipeline.run reset <id> <status>` 真正把一条记录逆向重置，而非占位打印
 - **错在哪**：`pipeline/run.py:568-575` `cmd_reset` 仍是占位（只打印不落库）。TECH_SPEC §2 明列 reset 是「**唯一允许的逆向操作**」；TECH_SPEC §4 转移表里 `publications: "failed": {"queued"}` 注明「仅 reset 命令可走」。没有它，一条 failed publication 卡死后无法从 CLI 救回（只能手改 DB，违背契约）
 - **怎么改**：
   1. `cmd_reset`：根据 `<id>` 前缀判定表（`t_`→topics / `c_`→contents / `p_`→publications），读当前记录，走 `db.transition(conn, <table>, id, <current_status>, <target_status>)`——**必须走状态机**，非法逆向由 `transition` 的转移表拦截抛 `IllegalTransition`（reset 只能走转移表允许的边，如 `failed→queued`；不允许任意乱跳）
@@ -653,6 +653,8 @@
 - **验收标准**：造一条 `failed` publication，`reset p_xxx queued` 后其 status=queued；`reset` 一个非法目标（如 `published→queued`）返回 exit 1 且不改库；新增 `tests/test_reset_cmd.py` 覆盖合法逆向 + 非法拒绝两条路径
 - **红线**：**必须走 `db.transition`**——绝不裸 `UPDATE` 绕过转移表（否则 reset 变成任意改状态的后门，破坏状态机不变式）；不改转移表定义（TECH_SPEC §4 冻结）；reset 不触发任何发布/创作副作用，只改状态
 - **参考**：TECH_SPEC §2、§4；HARD_PARTS §10 第 3 条（不 mock/绕过状态机）
+
+  ✅ 完成于 2026-07-07，commit <本 commit sha>，备注：cmd_reset 按 id 前缀（t_/c_/p_）分发表，读当前 status，走 db.transition 状态机；捕获 IllegalTransition/StaleState 各自 exit 1 + 清晰错误；成功写 warning 级审计日志（stage=reset + ref_id=id）；非法前缀/不存在 id 也 exit 1。tests/test_reset_cmd.py 9 用例覆盖合法/非法/不存在/审计/三表分发/状态机红线 6 路径。
 
 ### S8-3 新增 `doctor` 体检命令（MEDIUM，上线前自检）
 - [ ] **目标**：一条命令告诉用户「现在缺什么才能真跑起来」，免得逐项踩坑
