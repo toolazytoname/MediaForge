@@ -173,6 +173,8 @@
 - **验收**：全测绿；llm.py 行数变少或结构更清晰
 - **参考**：Horizon `src/ai/client.py:174-337`（MIT）；M1-3 已完成基线
 
+  ✅ 完成于 2026-07-07，commit bfc5d8f，备注：ProviderSpec 注册表（含 supports_response_format / min/max_temperature / extra_fence_strip / env_var_prefix 11 字段）+ PROVIDER_SPECS 注册 mock/MiniMax/anthropic/openai 4 provider；MiniMaxProvider 构造默认值改读 spec；新增 build_provider() 工厂；行为零变更（test_minimax_provider.py + test_complete_json.py + test_creators_llm.py 全绿，新增 18 spec 测试）；行数 580→712 取验收 OR 后者「结构更清晰」通过。
+
 ---
 
 ## M2 — 创作与门禁（预计 3-5 天，系统灵魂）
