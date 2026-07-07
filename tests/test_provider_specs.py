@@ -1,13 +1,14 @@
 """PROVIDER_SPECS 注册表 + build_provider 工厂 测试（M1-9）。
 
 覆盖：
-  - PROVIDER_SPECS 有 4 个条目：mock / MiniMax / anthropic / openai
+  - PROVIDER_SPECS 有 5 个条目：mock / MiniMax / anthropic / openai / agnes
   - 各 spec 关键字段（protocol / supports_response_format / temperature 上下限 /
     extra_fence_strip / env_var_prefix）
   - MiniMaxProvider 默认值 = spec.default_*
   - 显式参数覆盖 spec 默认值
   - MiniMaxProvider.from_env() 行为完全等价（MINIMAX_* 优先，回退 ANTHROPIC_*）
   - build_provider("MiniMax", api_key="x") ≡ MiniMaxProvider(api_key="x")
+  - build_provider("agnes", api_key="x") ≡ OpenAIProvider(spec=spec, api_key="x")
   - build_provider("anthropic", ...) → NotImplementedError
 """
 from __future__ import annotations
@@ -24,8 +25,10 @@ from pipeline.creators.llm import (
 
 # ── ProviderSpec 注册表结构 ─────────────────────────────────
 
-def test_provider_specs_has_four_entries() -> None:
-    assert set(PROVIDER_SPECS.keys()) == {"mock", "MiniMax", "anthropic", "openai"}
+def test_provider_specs_has_five_entries() -> None:
+    assert set(PROVIDER_SPECS.keys()) == {
+        "mock", "MiniMax", "anthropic", "openai", "agnes",
+    }
 
 
 def test_each_value_is_provider_spec() -> None:
@@ -67,6 +70,36 @@ def test_openai_spec_fields() -> None:
     assert spec.min_temperature == 0.0
     assert spec.max_temperature == 2.0
     assert spec.env_var_prefix == "OPENAI"
+
+
+def test_agnes_spec_fields() -> None:
+    """Agnes-AI：OpenAI 兼容网关，base_url 是 apihub（非 api.）子域。
+
+    真实 API hub 域名通过实测从 https://agnes-ai.com/zh-Hans/docs/agnes-20-flash
+    文档与 /v1/models 端点确认（api.agnes-ai.com 是 404 营销站，apihub.agnes-ai.com
+    才是真正的 API server）。
+    """
+    spec = PROVIDER_SPECS["agnes"]
+    assert spec.protocol == "openai"
+    assert spec.supports_response_format is True
+    assert spec.min_temperature == 0.0
+    assert spec.max_temperature == 2.0
+    assert spec.env_var_prefix == "AGNES"
+    # 关键 URL 字段
+    assert spec.default_base_url == "https://apihub.agnes-ai.com/v1"
+    assert "apihub" in spec.default_base_url  # 反向断言：绝不能用 api. 子域
+    assert spec.default_model == "agnes-2.0-flash"
+    assert spec.default_timeout_s == 60.0
+
+
+def test_agnes_model_has_price_entry() -> None:
+    """MODEL_PRICES 必须包含 agnes 默认模型（否则 _cost_usd 走 0 兜底无审计）。"""
+    from pipeline.creators.llm import MODEL_PRICES
+    spec = PROVIDER_SPECS["agnes"]
+    assert spec.default_model in MODEL_PRICES, (
+        f"{spec.default_model} not in MODEL_PRICES; "
+        f"update llm.MODEL_PRICES to track cost"
+    )
 
 
 def test_mock_spec_has_no_temperature_limits() -> None:
@@ -193,9 +226,38 @@ def test_build_provider_anthropic_not_implemented() -> None:
         build_provider("anthropic", api_key="x")
 
 
-def test_build_provider_openai_not_implemented() -> None:
-    with pytest.raises(NotImplementedError):
-        build_provider("openai", api_key="x")
+def test_build_provider_openai_returns_openai_provider() -> None:
+    """openai spec 实装 → build_provider 返回 OpenAIProvider。"""
+    from pipeline.creators.llm import OpenAIProvider
+    p = build_provider("openai", api_key="x")
+    assert isinstance(p, OpenAIProvider)
+    assert p._api_key == "x"  # noqa: SLF001
+    assert p._base_url == PROVIDER_SPECS["openai"].default_base_url.rstrip("/")  # noqa: SLF001
+    assert p._model == PROVIDER_SPECS["openai"].default_model  # noqa: SLF001
+
+
+def test_build_provider_agnes_returns_openai_provider() -> None:
+    """agnes spec 实装 → build_provider 返回 OpenAIProvider(spec=agnes)。
+
+    验证 base_url 用 agnes 的（apihub.agnes-ai.com），不是 openai 的。
+    """
+    from pipeline.creators.llm import OpenAIProvider
+    p = build_provider("agnes", api_key="x")
+    assert isinstance(p, OpenAIProvider)
+    assert p._spec.name == "agnes"  # noqa: SLF001
+    assert p._base_url == "https://apihub.agnes-ai.com/v1"  # noqa: SLF001
+    assert p._model == "agnes-2.0-flash"  # noqa: SLF001
+
+
+def test_build_provider_agnes_passes_overrides() -> None:
+    p = build_provider(
+        "agnes",
+        api_key="x",
+        base_url="https://custom.example/v1",
+        model="custom-agnes",
+    )
+    assert p._base_url == "https://custom.example/v1"  # noqa: SLF001
+    assert p._model == "custom-agnes"  # noqa: SLF001
 
 
 def test_build_provider_unknown_raises_keyerror() -> None:

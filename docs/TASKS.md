@@ -745,3 +745,25 @@
 - 多账号矩阵（同平台第二账号 = 不同支柱人设）
 - 英文内容线（Medium/dev.to）
 - n8n 迁移（当 launchd 管理复杂度超阈值时）
+
+---
+
+## M9 — Provider 实装补完（M1-3 DECISION 落地）
+
+### M9-1 Agnes-AI provider 接入（OpenAI 兼容网关）
+
+- [x] **目标**：把 M1-3 留的 "DECISION NEEDED" 落地——接 Agnes-AI（OpenAI 兼容）作为生产 provider，替换默认 Mock
+- **步骤**：
+  1. 探查 API：营销站 `agnes-ai.com` Next.js 不暴露 API；真 API hub 在 `apihub.agnes-ai.com`（`api.agnes-ai.com` 是 404 误域）。`/v1/models` 列出 5 个模型；聊天走 `/v1/chat/completions`，鉴权 `Authorization: Bearer <key>`
+  2. 写通用 `OpenAIProvider`（覆盖任何 OpenAI 兼容网关），加入 `PROVIDER_SPECS` 注册表的 `agnes` 条目（`env_var_prefix="AGNES"`，`default_base_url="https://apihub.agnes-ai.com/v1"`，`default_model="agnes-2.0-flash"`）
+  3. `MODEL_PRICES` 加 `agnes-2.0-flash` 占位 0（价格待 agnes 官方公布）
+  4. `build_provider` 增加 OpenAI 协议分支（`openai` + `agnes` 都走 `OpenAIProvider`）
+  5. `setup_provider_from_env` 加 AGNES 优先级（AGNES > MiniMax > OPENAI > Mock）
+  6. doctor 也认 `AGNES_API_KEY`（之前只认 MiniMax/Anthropic）
+  7. secrets/agnes.env 落盘 key（chmod 600，gitignore 已盖）
+  8. config.yaml llm.tiers 改 `agnes-2.0-flash`（cheap/creative/critical）
+- **验收**：单元测试 + 真实链路 ingest→score→create→gate 全跑通
+- **参考**：M1-3 DECISION NEEDED；TECH_SPEC §5.3；HARD_PARTS §4
+
+  ✅ 完成于 2026-07-07，commit <本 commit>，备注：tests/test_openai_provider.py 新增 18 用例（构造 5 + from_env 6 + call 7）+ test_provider_specs.py 5 条更新（4→5 entries、agni spec/price/build）+ test_doctor.py 加 agnes_env_passes + test_minimax_provider 3 个 setup 测试加 delenv AGNES/OPENAI 兜底。**真实冒烟**：ingest 36 → score 14 processed / 5 selected（topic_dedup 29KB 超 agnes 上下文 404，**M1-7 设计的静默 fallback 兜住，正常继续**）→ create 4 ok / 1 fail (timeout) → gate 4 discarded（占位锚点严，全部 < 24 分）。**0.42 USD / 完整 round-trip**（4 篇 3541-4109 字 canonical 产出）。**契约零变更**：models.py / SQL schema / Adapter 签名 / TECH_SPEC §3/4/5 一律不动；只动 llm.py + config.yaml + 三个测试文件。**已知限制**：agni 上下文窗口较小（topic_dedup 一次性喂 36 条超限），M1-8 评估文档建议过按需 chunk；当下语义去重静默 fallback 兜底，单调降级不阻塞。
+

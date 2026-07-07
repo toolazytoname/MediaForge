@@ -9,7 +9,8 @@
   1. config       — config.yaml 存在 + load_config 通过
   2. state.db     — state.db 文件存在
   3. secrets      — secrets/ 目录存在（空目录也算过）
-  4. llm_key      — MINIMAX_API_KEY 或 ANTHROPIC_API_KEY 至少一个
+  4. llm_key      — AGNES_API_KEY / MINIMAX_API_KEY / ANTHROPIC_API_KEY
+                   / OPENAI_API_KEY 至少一个（与 setup_provider_from_env 优先级一致）
   5. budget       — config.budget.monthly_usd > 0
   6. publish.enabled — 当前值（true 提示「⚠️ 真发」，不 fail 只 warn）
 """
@@ -26,7 +27,9 @@ from pipeline.config import load_config
 
 
 # 关键 env var 名集中常量（与 llm.py::setup_provider_from_env 同源）
-_LLM_ENV_VARS = ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY")
+_LLM_ENV_VARS = (
+    "AGNES_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+)
 
 
 @dataclass(frozen=True)
@@ -110,15 +113,15 @@ def _check_secrets(secrets_dir: str) -> CheckResult:
 
 
 def _check_llm_key() -> CheckResult:
-    """env 至少设置 MINIMAX_API_KEY 或 ANTHROPIC_API_KEY 一个（绝不打印值）。"""
+    """env 至少设置 AGNES/MINIMAX/ANTHROPIC/OPENAI_API_KEY 之一（绝不打印值）。"""
     set_vars = [v for v in _LLM_ENV_VARS if os.environ.get(v)]
     if not set_vars:
         return CheckResult(
             name="llm_key",
             ok=False,
             hint=(
-                "未设置 LLM API key；请 export MINIMAX_API_KEY=<your-key> "
-                "或 export ANTHROPIC_API_KEY=<your-key>"
+                "未设置 LLM API key；请 export AGNES_API_KEY=<your-key> "
+                "或 MINIMAX_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY"
             ),
         )
     # 不打印具体值，只报「已设置哪些 env var」

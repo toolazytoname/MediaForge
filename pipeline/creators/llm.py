@@ -11,6 +11,8 @@
 Providers（M2-2 真实冒烟接入）：
   - MockProvider：默认（无 key 环境的开发/测试）
   - MiniMaxProvider：MiniMax M3（OpenAI 兼容 /chat/completions）
+  - OpenAIProvider：通用 OpenAI chat completions 协议
+    （覆盖 OpenAI 官方 + 任何 OpenAI 兼容网关：Agnes-AI / OpenRouter / 国产中转等）
   - AnthropicProvider：占位（M4-2 再接），本期不实现
 
 所有模块禁止直接 import anthropic——CI 守门（tests/test_creators_llm.py
@@ -34,11 +36,13 @@ from pipeline.utils.errors import BudgetExceeded, PipelineError
 # ── 价格表（USD / 百万 token）────────────────────────────
 # 占位用——Anthropic Sonnet 4.x / Haiku 4.x 牌价写在此。
 # MiniMax 价格是国产模型参考价位，待真实冒烟后校准。
+# agnes-2.0-flash 价格占位 0（平台可能免费期间，真实价格见 https://agnes-ai.com 公告）。
 
 MODEL_PRICES: dict[str, dict[str, float]] = {
     "claude-sonnet-5": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
     "MiniMax-M3": {"input": 0.30, "output": 1.20},
+    "agnes-2.0-flash": {"input": 0.0, "output": 0.0},  # TODO: 以 agnes-ai.com 官方为准
 }
 
 # 月度预算硬顶（USD）。生产从 config.budget.monthly_usd 读；测试可 patch。
@@ -138,6 +142,21 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         max_temperature=2.0,
         extra_fence_strip=False,
         env_var_prefix="OPENAI",
+    ),
+    "agnes": ProviderSpec(
+        name="agnes",
+        protocol="openai",
+        # https://agnes-ai.com/zh-Hans/docs/agnes-20-flash
+        # 实测验证：api.agnes-ai.com 是 404，真实 API hub 在 apihub.agnes-ai.com
+        default_base_url="https://apihub.agnes-ai.com/v1",
+        default_model="agnes-2.0-flash",
+        default_timeout_s=60.0,
+        default_api_version=None,
+        supports_response_format=True,
+        min_temperature=0.0,
+        max_temperature=2.0,
+        extra_fence_strip=False,
+        env_var_prefix="AGNES",
     ),
 }
 
@@ -357,25 +376,196 @@ class MiniMaxProvider(LLMProvider):
         )
 
 
+class OpenAIProvider(LLMProvider):
+    """通用 OpenAI chat completions 协议 provider。
+
+    覆盖任何兼容 OpenAI /v1/chat/completions 协议的端点：
+      - OpenAI 官方（base_url=https://api.openai.com/v1）
+      - Agnes-AI（base_url=https://apihub.agnes-ai.com/v1，模型 agnes-2.0-flash）
+      - 其他 OpenAI 兼容网关（OpenRouter / 国产中转 / 私有部署）
+
+    配置（env 注入，避免硬编码凭据——HARD_PARTS §9）：
+      - <PREFIX>_API_KEY    必填；PREFIX 来自 spec.env_var_prefix
+        （OPENAI_API_KEY / AGNES_API_KEY）
+      - <PREFIX>_BASE_URL   默认走 spec.default_base_url
+      - <PREFIX>_MODEL      默认走 spec.default_model
+      - <PREFIX>_TIMEOUT_S  默认走 spec.default_timeout_s
+
+    异常映射：
+      - HTTP 429 / 5xx      → RetryableError（wrapper 重试）
+      - HTTP 4xx（除 429）  → ValueError（契约错误，立即抛）
+      - 网络异常 / 超时     → RetryableError（瞬时错误）
+      - 响应 JSON 残缺      → ValueError（不可重试）
+
+    所有默认值从 PROVIDER_SPECS[name] 读取（不写死在此处）；
+    新增兼容 provider 只需在注册表加条目 + build_provider 分支。
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        model: str | None = None,
+        timeout_s: float | None = None,
+        spec: ProviderSpec | None = None,
+    ) -> None:
+        if not api_key:
+            raise ValueError(
+                "OpenAIProvider: api_key is required "
+                "(set <PREFIX>_API_KEY env var, e.g. AGNES_API_KEY)"
+            )
+        # 默认 spec = "openai"（保持向后兼容）
+        if spec is None:
+            spec = PROVIDER_SPECS["openai"]
+        if spec.protocol != "openai":
+            raise ValueError(
+                f"OpenAIProvider requires protocol='openai', "
+                f"got spec.protocol={spec.protocol!r} for name={spec.name!r}"
+            )
+        self._spec = spec
+        self._api_key = api_key
+        self._base_url = (
+            base_url if base_url is not None else spec.default_base_url
+        ).rstrip("/")
+        self._model = model if model is not None else spec.default_model
+        self._timeout_s = (
+            timeout_s if timeout_s is not None else spec.default_timeout_s
+        )
+
+    @classmethod
+    def from_env(cls, name: str = "openai") -> "OpenAIProvider":
+        """从 env 构造；找不到 key 抛 ValueError（不静默回退）。
+
+        Args:
+            name: PROVIDER_SPECS 中的 key（决定读哪组 env var）
+        """
+        if name not in PROVIDER_SPECS:
+            raise KeyError(
+                f"unknown provider: {name!r}; "
+                f"registered: {sorted(PROVIDER_SPECS.keys())}"
+            )
+        spec = PROVIDER_SPECS[name]
+        if spec.protocol != "openai":
+            raise ValueError(
+                f"OpenAIProvider.from_env({name!r}): spec.protocol="
+                f"{spec.protocol!r} is not 'openai'"
+            )
+        prefix = spec.env_var_prefix
+        if not prefix:
+            raise ValueError(
+                f"OpenAIProvider.from_env({name!r}): spec.env_var_prefix is None"
+            )
+        api_key = os.environ.get(f"{prefix}_API_KEY")
+        if not api_key:
+            raise ValueError(
+                f"OpenAIProvider.from_env: {prefix}_API_KEY env var not set"
+            )
+        return cls(
+            api_key=api_key,
+            base_url=os.environ.get(f"{prefix}_BASE_URL", spec.default_base_url),
+            model=os.environ.get(f"{prefix}_MODEL", spec.default_model),
+            timeout_s=float(
+                os.environ.get(f"{prefix}_TIMEOUT_S", spec.default_timeout_s)
+            ),
+            spec=spec,
+        )
+
+    def call(
+        self, prompt: str, model: str, max_tokens: int
+    ) -> CompletionResult:
+        # 延迟 import httpx（让 mock 单测不必装 httpx）
+        try:
+            import httpx  # type: ignore[import-not-found]
+        except ImportError as e:  # pragma: no cover
+            raise RuntimeError(
+                "OpenAIProvider requires httpx; install requirements.txt"
+            ) from e
+
+        url = f"{self._base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self._model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+
+        try:
+            resp = httpx.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=self._timeout_s,
+            )
+        except httpx.RequestError as e:
+            # 网络瞬时错误（DNS / TCP / 超时）→ 可重试
+            raise RetryableError(
+                f"OpenAI({self._spec.name}) network error: "
+                f"{type(e).__name__}: {e}"
+            ) from e
+
+        # 429 / 5xx → 可重试
+        if resp.status_code == 429 or resp.status_code >= 500:
+            raise RetryableError(
+                f"OpenAI({self._spec.name}) HTTP {resp.status_code}: "
+                f"{resp.text[:200]}"
+            )
+        if resp.status_code >= 400:
+            raise ValueError(
+                f"OpenAI({self._spec.name}) HTTP {resp.status_code}: "
+                f"{resp.text[:500]}"
+            )
+
+        try:
+            data = resp.json()
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"OpenAI({self._spec.name}) response not JSON: {e}; "
+                f"body={resp.text[:200]}"
+            ) from e
+
+        try:
+            text = data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+            input_tokens = int(usage.get("prompt_tokens", 0))
+            output_tokens = int(usage.get("completion_tokens", 0))
+        except (KeyError, TypeError, ValueError, IndexError) as e:
+            raise ValueError(
+                f"OpenAI({self._spec.name}) response malformed: {e}; "
+                f"keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}"
+            ) from e
+
+        return CompletionResult(
+            text=str(text),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+
 # ── Provider 工厂（M1-9：注册表驱动，新增 provider 不改主逻辑）──
 
 def build_provider(name: str, *, api_key: str, **overrides: Any) -> LLMProvider:
     """按 PROVIDER_SPECS 注册表名构造 provider。
 
-    当前实装：
+    实装：
       - "MiniMax" → MiniMaxProvider（Anthropic 兼容 /v1/messages）
+      - "openai" / "agnes" → OpenAIProvider（OpenAI /v1/chat/completions）
 
-    其他 provider（anthropic / openai）→ NotImplementedError：
+    其他 provider（anthropic）→ NotImplementedError：
     spec 已就位等待 DECISION 拍板后实装对应类。
 
     Args:
         name: PROVIDER_SPECS 中的 key
-        api_key: provider API key（MiniMax 必填）
+        api_key: provider API key
         **overrides: 透传给 provider 构造函数的 kwargs
 
     Raises:
         KeyError: 未知 provider 名
         NotImplementedError: spec 已注册但 build_provider 尚未实装该 provider
+        ValueError: spec.protocol 与 provider 类不匹配
     """
     if name not in PROVIDER_SPECS:
         raise KeyError(
@@ -385,6 +575,9 @@ def build_provider(name: str, *, api_key: str, **overrides: Any) -> LLMProvider:
     spec = PROVIDER_SPECS[name]
     if name == "MiniMax":
         return MiniMaxProvider(api_key=api_key, **overrides)
+    if spec.protocol == "openai":
+        # openai / agnes / 其他 OpenAI 兼容
+        return OpenAIProvider(api_key=api_key, spec=spec, **overrides)
     raise NotImplementedError(
         f"provider {name!r} registered in PROVIDER_SPECS but "
         f"build_provider() not implemented yet "
@@ -411,16 +604,29 @@ def set_provider(provider: LLMProvider) -> None:
 
 
 def setup_provider_from_env() -> LLMProvider:
-    """CLI 启动时调用：env 有 MINIMAX_API_KEY（或 ANTHROPIC_API_KEY）
-    → 用 MiniMax Provider（Anthropic 兼容），否则 Mock。
+    """CLI 启动时调用：按 env 优先级选择 provider。
+
+    优先级（先匹配先返回）：
+      1. AGNES_API_KEY  → OpenAIProvider.from_env("agnes")
+      2. MINIMAX_API_KEY 或 ANTHROPIC_API_KEY → MiniMaxProvider.from_env()
+      3. OPENAI_API_KEY → OpenAIProvider.from_env("openai")
+      4. 都没设 → MockProvider（无 key 环境的开发/测试）
 
     Returns:
-        实际使用的 provider（Mock / MiniMax）
+        实际使用的 provider
     """
+    if os.environ.get("AGNES_API_KEY"):
+        provider = OpenAIProvider.from_env("agnes")
+        set_provider(provider)
+        return provider
     if os.environ.get("MINIMAX_API_KEY") or os.environ.get(
         "ANTHROPIC_API_KEY"
     ):
         provider = MiniMaxProvider.from_env()
+        set_provider(provider)
+        return provider
+    if os.environ.get("OPENAI_API_KEY"):
+        provider = OpenAIProvider.from_env("openai")
         set_provider(provider)
         return provider
     # 默认 Mock；不打 warning（M0 时代就靠这个无 key 跑）

@@ -7,7 +7,7 @@
     1. config.yaml 存在 + load_config 通过（pydantic ValidationError 兜住）
     2. state.db 存在（db_path）
     3. secrets/ 目录存在（空目录也算过）
-    4. LLM key env（MINIMAX_API_KEY 或 ANTHROPIC_API_KEY 至少一个）
+    4. LLM key env（AGNES/MINIMAX/ANTHROPIC/OPENAI_API_KEY 至少一个）
     5. budget.monthly_usd > 0
     6. publish.enabled 当前值（true 时 hint 含「真发」字样；不 fail 只 warn）
   - **绝不打印密钥值**（§9）
@@ -240,7 +240,10 @@ class TestLlmKeyCheck:
         from pipeline.doctor import run_doctor
 
         # 清掉所有可能的 env var
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
 
         cfg = tmp_path / "config.yaml"
@@ -262,8 +265,34 @@ class TestLlmKeyCheck:
         """env 有 MINIMAX_API_KEY → llm_key ✅。"""
         from pipeline.doctor import run_doctor
 
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        for k in (
+            "ANTHROPIC_API_KEY", "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
+            monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
+
+        cfg = tmp_path / "config.yaml"
+        _write_minimal_config(cfg)
+
+        results = run_doctor(
+            config_path=str(cfg),
+            db_path=str(tmp_path / "state.db"),
+            secrets_dir=str(tmp_path / "secrets"),
+        )
+        llm_check = next(r for r in results if r.name == "llm_key")
+        assert llm_check.ok is True
+
+    def test_agnes_env_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """env 有 AGNES_API_KEY → llm_key ✅（新增 provider，doctor 也认）。"""
+        from pipeline.doctor import run_doctor
+
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+        ):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("AGNES_API_KEY", "sk-agnes-12345")
 
         cfg = tmp_path / "config.yaml"
         _write_minimal_config(cfg)
@@ -282,7 +311,10 @@ class TestLlmKeyCheck:
         """env 有 ANTHROPIC_API_KEY → llm_key ✅。"""
         from pipeline.doctor import run_doctor
 
-        monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+        for k in (
+            "MINIMAX_API_KEY", "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
+            monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-12345")
 
         cfg = tmp_path / "config.yaml"
@@ -307,7 +339,10 @@ class TestBudgetCheck:
         """budget.monthly_usd = 0 → budget ❌。"""
         from pipeline.doctor import run_doctor
 
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -329,7 +364,10 @@ class TestBudgetCheck:
         """budget.monthly_usd > 0 → budget ✅。"""
         from pipeline.doctor import run_doctor
 
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -355,7 +393,10 @@ class TestPublishEnabledCheck:
         """publish.enabled=true → publish ✅ + hint 含「真发」字样。"""
         from pipeline.doctor import run_doctor
 
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -377,7 +418,10 @@ class TestPublishEnabledCheck:
         """publish.enabled=false → publish ✅ + hint 提示关闭。"""
         from pipeline.doctor import run_doctor
 
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -406,7 +450,10 @@ class TestFullEnvironment:
         """齐全环境：config + state.db + secrets/ + LLM key → 全 ✅。"""
         from pipeline.doctor import run_doctor
 
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -436,7 +483,10 @@ class TestNoSecretLeakage:
 
         # 一个看起来像真 key 的值（含 sk- 前缀 + 32 字符 hex）
         fake_key = "sk-" + "a1b2c3d4e5f6" * 4  # sk- + 48 hex
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("ANTHROPIC_API_KEY", fake_key)
 
@@ -466,7 +516,10 @@ class TestNoSecretLeakage:
         from pipeline.doctor import CheckResult, run_doctor
 
         fake_key = "sk-" + "deadbeef" * 4
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", fake_key)
 
@@ -486,7 +539,10 @@ class TestCmdDoctorOutput:
     ) -> None:
         """cmd_doctor 输出：✅/❌ <name>：<hint> 格式。"""
         _patch_db_path(monkeypatch, tmp_db_path)
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -523,7 +579,10 @@ class TestCmdDoctorExitCode:
     ) -> None:
         """有 ❌ → exit 1。"""
         _patch_db_path(monkeypatch, tmp_db_path)
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
 
         import pipeline.run as run_mod
@@ -540,7 +599,10 @@ class TestCmdDoctorExitCode:
     ) -> None:
         """全 ✅ → exit 0。"""
         _patch_db_path(monkeypatch, tmp_db_path)
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -569,7 +631,10 @@ class TestReadOnly:
         """run_doctor 不创建 db / secrets / config / log 等任何文件。"""
         from pipeline.doctor import run_doctor
 
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -599,7 +664,10 @@ class TestReadOnly:
 
         db_path = tmp_path / "state.db"
         _patch_db_path(monkeypatch, db_path)
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -655,7 +723,10 @@ class TestCheckOrderAndCount:
         """run_doctor 至少返回 6 项检查（spec 要求）。"""
         from pipeline.doctor import run_doctor
 
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 
@@ -677,7 +748,10 @@ class TestCheckOrderAndCount:
         """检查项顺序：config → state.db → secrets → llm_key → budget → publish.enabled。"""
         from pipeline.doctor import run_doctor
 
-        for k in ("MINIMAX_API_KEY", "ANTHROPIC_API_KEY"):
+        for k in (
+            "MINIMAX_API_KEY", "ANTHROPIC_API_KEY",
+            "AGNES_API_KEY", "OPENAI_API_KEY",
+        ):
             monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key-12345")
 

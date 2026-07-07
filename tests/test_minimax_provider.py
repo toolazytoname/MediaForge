@@ -189,6 +189,8 @@ def test_call_missing_content_blocks_raises() -> None:
 def test_setup_provider_uses_minimax_when_key_set(monkeypatch) -> None:
     monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AGNES_API_KEY", raising=False)  # 防 shell 环境命中 agnes
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     set_provider(MockProvider())  # 重置
     p = setup_provider_from_env()
     assert isinstance(p, MiniMaxProvider)
@@ -198,6 +200,8 @@ def test_setup_provider_falls_back_to_anthropic_key(monkeypatch) -> None:
     """MINIMAX_API_KEY 未设但 ANTHROPIC_API_KEY 设了 → 仍走 MiniMax。"""
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.delenv("AGNES_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     set_provider(MockProvider())
     p = setup_provider_from_env()
     assert isinstance(p, MiniMaxProvider)
@@ -206,6 +210,8 @@ def test_setup_provider_falls_back_to_anthropic_key(monkeypatch) -> None:
 def test_setup_provider_falls_back_to_mock_when_no_key(monkeypatch) -> None:
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AGNES_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     set_provider(MockProvider())
     p = setup_provider_from_env()
     assert isinstance(p, MockProvider)

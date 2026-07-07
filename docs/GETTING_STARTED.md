@@ -187,35 +187,35 @@ python -m pipeline.run webui
 
 ## §10 成本 baseline
 
-> ⚠️ **BLOCKED：待用户提供 LLM API key**
+> ✅ **已解锁（2026-07-07）**：Agnes-AI 真实跑通
 >
-> 当前 sandbox 环境无 key，无法跑真实 LLM 冒烟。
-> 用户提供 key 后，把冒烟实测填入下表：
+> 关键发现：API host 是 `apihub.agnes-ai.com`（不是 `api.agnes-ai.com`，后者是 404 误域）。模型 `agnes-2.0-flash`，OpenAI 兼容协议。详见 M9-1（commit <TBD>）。
 
 **冒烟复现脚本**：
 
 ```bash
-# 在跑完 §8 全部 5 步后：
-python -m pipeline.run status
-# 取末行 `llm: this_month=$X.XXXX` 即为累计成本
+# 1) source key（已 gitignore）：set -a; source secrets/agnes.env; set +a
+# 2) 跑流水线：python -m pipeline.run ingest → score → create → gate
+# 3) 取末行成本：python -m pipeline.run status | grep llm
 ```
 
-**基线参考**（M2-2 真实冒烟，2026-07-05，commit 63154d4）：
+**基线参考**：
 
-| 日期 | ingest N | score selected | create ok/fail | gate gated/discarded | LLM 成本 | 备注 |
-|------|----------|----------------|----------------|----------------------|----------|------|
-| 2026-07-05 | 38 | 5 | 3/2 | 0/3 | $0.0267 | 失败 2 条为 outline JSON 结构性错误；discarded 3 条 critic 抓 fact blocker（验证门禁真在工作） |
-| 2026-07-05（重试后）| 38 | 5 | 5/0 | 1/4 | — | 二次冒烟，complete_json 自动重试生效 |
+| 日期 | Provider | ingest N | score selected | create ok/fail | gate gated/discarded | LLM 成本 | 备注 |
+|------|----------|----------|----------------|----------------|----------------------|----------|------|
+| 2026-07-05 | MiniMax-M3 (Anthropic 协议) | 38 | 5 | 3/2 | 0/3 | $0.0267 | 失败 2 条为 outline JSON 结构性错误；discarded 3 条 critic 抓 fact blocker |
+| 2026-07-05（重试后）| MiniMax-M3 | 38 | 5 | 5/0 | 1/4 | — | 二次冒烟，complete_json 自动重试生效 |
+| **2026-07-07** | **Agnes-AI agnes-2.0-flash** | **36** | **5** | **4/1** | **0/4** | **$0.42** | M9-1 接入；topic_dedup 29KB 超 agnes 上下文 404 走 M1-7 静默 fallback；timeout 1 条；4 条全 discarded（占位锚点严） |
 
 **M1-8 预筛评估（commit 5c74f0a）**：实测 score 单条 $0.000534、prefilter A $0.000294、prefilter B=10 $0.000181。
-**结论**：当前 prefilter 不落地，score 阶段单日 50 条 baseline $0.0267，月度 ≤ $1.0，距 $80 月预算远低于阈值。
+**结论**：
+- MiniMax-M3 baseline $0.0267/日，月度 ≤ $1.0
+- Agnes agnes-2.0-flash **实际价 0**（MODEL_PRICES 占位，平台可能免费期间），$0.42 是 placeholder 数字，真实成本按 agnes 牌价 / 实际扣费为准
+- 若 agnes 仍免费，$80 月预算极宽松；若按 0.30/1.20 USD/Mtoken 计价（与 MiniMax 同档），$0.42 对应 ~6000 token 输出 + ~30000 token 输入
 
-**回填格式**（用户提供 key 后）：
-
-| 日期 | ingest N | score selected | create ok/fail | gate gated/discarded | LLM 成本 | 关键观察 |
-|------|----------|----------------|----------------|----------------------|----------|----------|
-| _待填_ | | | | | | |
-| _待填_ | | | | | | |
+**已知限制**：
+- Agnes agnes-2.0-flash 上下文窗口较小：M1-7 一次性喂 36 条 topic（29KB prompt）超限 → 静默 fallback 跳过语义去重。**M1-8 评估文档建议过按需 chunk**；当下单调降级不阻塞
+- 网络抖动偶发 timeout（1/5 = 20%），RetryableError 自动重试 3 次（指数退避 1/2/4s）
 
 ## §11 ⚠️ 发布相关警告
 
