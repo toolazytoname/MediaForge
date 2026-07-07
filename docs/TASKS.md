@@ -631,7 +631,7 @@
 ---
 
 ### S8-1 补实 `status` 子命令（当前是占位符，HIGH，运维基础）
-- [ ] **目标**：`python -m pipeline.run status` 打印真实的各状态计数表，而非占位串
+- [x] **目标**：`python -m pipeline.run status` 打印真实的各状态计数表，而非占位串
 - **错在哪**：`pipeline/run.py:562-564` `cmd_status` 仍 `return _not_implemented("status")`——实跑输出 `status: not implemented (M0-1 placeholder)`。但 TECH_SPEC §2 契约明列该命令要「打印各状态计数表」，M0-1 完成备注也声称 `status→exit 0`（**当时只是占位打印，未真实计数，属文档夸大**）。webui 里已有现成的计数逻辑 `pipeline/webui/app.py:_status_counts` 可参照
 - **怎么改**：
   1. `cmd_status`：`db.connect(<db_path>)` 后，对 `topics`/`contents`/`publications` 三表各 `SELECT status, COUNT(*) GROUP BY status`（**只读 SELECT，不新增 schema**），按 TECH_SPEC §2 摘要风格打印，例如每表一段 `topics: raw=12 scored=5 selected=3`。db_path 从 `args.config` 加载的 config 或默认 `state.db` 取（与其它 cmd 一致，抄 `cmd_ingest` 的 config 加载方式）
@@ -640,6 +640,8 @@
 - **验收标准**：`python -m pipeline.run status` 打印三表计数 + 本月花费且 exit 0；新增 `tests/test_status_cmd.py`：插入若干 topic/content 后调 `cmd_status`，capsys 断言输出含各 status 计数；空库时打印全 0 不报错
 - **红线**：**只读**——status 绝不写库；不改 `_status_counts`（那是 webui 的，本任务是 CLI 侧，可各自实现或抽公共函数到 `db.py`，但别改 webui 行为）；不加 schema 字段
 - **参考**：TECH_SPEC §2；HARD_PARTS §3 要点 4（分数分布可放 U7-1，本任务先出计数）
+
+  ✅ 完成于 2026-07-07，commit 8e36773，备注：`cmd_status` 30 行（替换原占位 `_not_implemented`）；抽 `db.count_by_status` / `db.sum_llm_cost_this_month` 作公共只读助手（U7-1 复用）；`_DB_PATH = "state.db"` 单点可 monkeypatch；4 行输出 `topics: raw=0 ... / contents: draft=0 ... / publications: queued=0 ... / llm: this_month=$X.XXXX` 全状态列全 0，空库不报错。tests/test_status_cmd.py 12 用例（空库/三表计数/LLM 成本/只读/格式/无副作用）+ tests/test_db_status_helpers.py 6 用例（含非法表 ValueError 拒绝 + sum_llm_cost_this_month `now=` 注入）。全测 1000 绿（4 pre-existing）。契约零变更：models.py 字段 / SQL schema / Adapter 签名 / argparse / webui._status_counts 全部不动。
 
 ### S8-2 补实 `reset` 子命令（唯一逆向操作，HIGH，卡死救命）
 - [ ] **目标**：`python -m pipeline.run reset <id> <status>` 真正把一条记录逆向重置，而非占位打印
