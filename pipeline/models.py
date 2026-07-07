@@ -87,6 +87,9 @@ class Content:
     status: str
     created_at: str
     updated_at: str
+    # M-x：封面图 + 文中插图（仅对最终要发布的内容生成，详见 HARD_PARTS §10.x）
+    cover_path: str | None = None    # output/.../cover.png 相对路径；None = 未生成
+    inline_images: tuple[str, ...] = ()  # output/.../images/inline-N.png 路径列表
 
 
 @dataclass(frozen=True)

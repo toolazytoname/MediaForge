@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import argparse
 import functools
+import json
 import sys
 from pathlib import Path
 
 from pipeline import db
+from pipeline.creators import llm as llm_mod
 from pipeline.utils.flock import LockHeld, acquire, release
 
 
@@ -280,6 +282,153 @@ def cmd_review(args: argparse.Namespace) -> int:
         f"review: {result.generated} generated, "
         f"{result.applied} approved, {result.rejected} rejected"
     )
+    return 0
+
+
+def cmd_generate_images(args: argparse.Namespace) -> int:
+    """为 approved 内容生成封面 + 文中插图（M-x）。
+
+    设计（HARD_PARTS §10.x）：
+      - 只对 status='approved'（人审通过）的内容生成图
+      - discarded / rejected_by_human 永不调 image API（节省 $0.003/张 × 80% discard 率）
+      - 单条失败 → skip 该条 + log warning（不阻断整批）
+      - BudgetExceeded → 终止整批（保护成本）
+      - 已生成过的不重做（cover_path 非空 AND inline_images 非空 → skip）
+
+    输出：
+      output/<date>/<content_id>/cover.png                1792x1024（16:9 横版封面）
+      output/<date>/<content_id>/images/inline-N.png       1024x1024（方形插图，N 从 1 开始）
+
+    审计：每次图片生成写 llm_calls 表，stage='create_cover' 或 'create_image'。
+    """
+    import re
+    import sys
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from pipeline.config import load_config
+    from pipeline.creators import image_gen
+    from pipeline.creators.image_gen import generate_image
+    from pipeline.models import ContentStatus
+    from pipeline.utils.errors import BudgetExceeded
+
+    # 1. 加载配置 + 初始化
+    cfg = load_config(args.config)
+    output_root = Path(getattr(args, "output", None) or "output")
+    conn = db.connect("state.db")
+    try:
+        db.init_db(conn)
+        image_gen.setup_provider_from_env()
+        llm_mod.init_db_conn(conn)  # generate_image 写 llm_calls 用
+
+        # 2. 取已批准 + 未生成图的内容
+        approved = db.get_contents_by_status(conn, ContentStatus.APPROVED.value)
+        todo = [
+            c for c in approved
+            if not c.cover_path or not c.inline_images
+        ]
+        if not todo:
+            print("generate-images: 0 pending (all approved content already has images)")
+            return 0
+        print(f"generate-images: {len(todo)} pending", file=sys.stderr)
+
+        ok_count = 0
+        fail_count = 0
+        skipped_count = 0
+        now = datetime.now(timezone.utc).isoformat()
+
+        # 3. 处理每条
+        _IMAGE_PLACEHOLDER_RE = re.compile(r"\[IMAGE:\s*([^\]]+?)\s*\]")
+        for c in todo:
+            content_dir = Path(c.canonical_path).parent
+            if not content_dir.exists():
+                print(f"  ✗ {c.id}: canonical dir missing: {content_dir}", file=sys.stderr)
+                fail_count += 1
+                continue
+
+            try:
+                # ── 封面图 ──
+                cover_out = content_dir / "cover.png"
+                cover_prompt = (
+                    f"{c.title}. Minimal flat-design cover illustration, "
+                    f"wide 16:9 composition, no text, no border, "
+                    f"clean editorial style."
+                )
+                if not c.cover_path:
+                    generate_image(
+                        cover_prompt,
+                        out_path=cover_out,
+                        aspect_ratio="16:9",
+                        n=1,
+                        stage="create_cover",
+                        ref_id=c.id,
+                        conn=conn,
+                    )
+
+                # ── 文中插图（解析 [IMAGE: ...] 占位）──
+                canonical_md = (content_dir / "canonical.md").read_text(encoding="utf-8")
+                inline_markers = _IMAGE_PLACEHOLDER_RE.findall(canonical_md)[:4]  # 最多 4 张
+                images_dir = content_dir / "images"
+                inline_paths: list[str] = []
+
+                # 已存在的 inline 路径（重跑场景）
+                if c.inline_images:
+                    inline_paths = list(c.inline_images)
+
+                if inline_markers and not c.inline_images:
+                    for i, marker_prompt in enumerate(inline_markers, start=1):
+                        inline_out = images_dir / f"inline-{i}.png"
+                        # 占位文本拼成完整 prompt
+                        full_prompt = (
+                            f"{marker_prompt}. Flat-design technical illustration, "
+                            f"square 1:1 composition, no text labels, "
+                            f"clean vector style, neutral palette."
+                        )
+                        generate_image(
+                            full_prompt,
+                            out_path=inline_out,
+                            aspect_ratio="1:1",
+                            n=1,
+                            stage="create_image",
+                            ref_id=c.id,
+                            conn=conn,
+                        )
+                        inline_paths.append(str(inline_out.relative_to(output_root)))
+
+                # 4. 写回 contents（封面 + inline 路径）
+                with conn:
+                    conn.execute(
+                        """
+                        UPDATE contents
+                        SET cover_path = ?, inline_images = ?, updated_at = ?
+                        WHERE id = ? AND status = ?
+                        """,
+                        (
+                            str(cover_out.relative_to(output_root)),
+                            json.dumps(inline_paths, ensure_ascii=False),
+                            now,
+                            c.id,
+                            ContentStatus.APPROVED.value,
+                        ),
+                    )
+                ok_count += 1
+                print(f"  ✓ {c.id}: cover + {len(inline_paths)} inline", file=sys.stderr)
+
+            except BudgetExceeded as e:
+                print(f"generate-images: budget exceeded: {e}", file=sys.stderr)
+                return 2
+            except Exception as e:  # noqa: BLE001
+                # 单条失败不阻断整批（HARD_PARTS §5）
+                fail_count += 1
+                print(f"  ✗ {c.id}: {type(e).__name__}: {e}", file=sys.stderr)
+                continue
+
+        print(
+            f"generate-images: {ok_count} ok, {fail_count} failed, "
+            f"{skipped_count} skipped"
+        )
+    finally:
+        conn.close()
     return 0
 
 
@@ -801,6 +950,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--notify", action="store_true", help="通过 webhook 通知"
     )
     sub.add_parser("schedule", help="为 approved 内容排期")
+    sub.add_parser(
+        "generate-images",
+        help="为 approved 内容生成封面 + 文中插图（M-x）",
+    )
     publish_p = sub.add_parser("publish", help="发布到期的 publication")
     publish_p.add_argument(
         "--dry-run", action="store_true", help="只走流程，不实际发布"
@@ -859,6 +1012,7 @@ COMMANDS = {
     "derivative": cmd_derivative,
     "review": cmd_review,
     "schedule": cmd_schedule,
+    "generate-images": cmd_generate_images,
     "publish": cmd_publish,
     "collect": cmd_collect,
     "status": cmd_status,

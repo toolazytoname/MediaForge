@@ -62,7 +62,10 @@ CREATE TABLE IF NOT EXISTS contents (
     gate_verdict     TEXT,
     status           TEXT NOT NULL DEFAULT 'draft',
     created_at       TEXT NOT NULL,
-    updated_at       TEXT NOT NULL
+    updated_at       TEXT NOT NULL,
+    -- M-x：封面图 + 文中插图路径
+    cover_path       TEXT,
+    inline_images    TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS publications (
@@ -124,7 +127,23 @@ def connect(path: str | Path = "state.db") -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     """幂等建表，多次调用无副作用。"""
     conn.executescript(_SCHEMA)
+    _migrate_add_cover_path(conn)  # M-x：老库平滑升级
     conn.commit()
+
+
+def _migrate_add_cover_path(conn: sqlite3.Connection) -> None:
+    """M-x 迁移：老 state.db 加 cover_path / inline_images 列（若缺）。
+
+    SQLite 不支持 IF NOT EXISTS on ADD COLUMN——靠 PRAGMA table_info 检测。
+    """
+    cur = conn.execute("PRAGMA table_info(contents)")
+    cols = {row[1] for row in cur.fetchall()}
+    if "cover_path" not in cols:
+        conn.execute("ALTER TABLE contents ADD COLUMN cover_path TEXT")
+    if "inline_images" not in cols:
+        conn.execute(
+            "ALTER TABLE contents ADD COLUMN inline_images TEXT NOT NULL DEFAULT '[]'"
+        )
 
 
 def now_utc() -> str:
@@ -165,6 +184,13 @@ def _row_to_content(row: sqlite3.Row) -> Content:
         status=row["status"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        # M-x：图路径字段，老库 SELECT 没这些列时取空
+        cover_path=row["cover_path"] if "cover_path" in row.keys() else None,
+        inline_images=tuple(
+            json.loads(row["inline_images"])
+            if "inline_images" in row.keys() and row["inline_images"]
+            else []
+        ),
     )
 
 
