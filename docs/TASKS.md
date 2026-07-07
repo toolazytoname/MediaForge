@@ -670,7 +670,7 @@
   ✅ 完成于 2026-07-07，commit 08e8af3，备注：`pipeline/doctor.py` 209 行（纯函数 run_doctor + 6 检查项 + CheckResult frozen dataclass）+ `pipeline/run.py` 接入 cmd_doctor（@_stage_lock + 解析 + COMMANDS 字典 +28 行）+ `tests/test_doctor.py` 26 测试。**设计决策**：① 检查项顺序固定 config→state.db→secrets→llm_key→budget→publish.enabled——按「启动流水线之前最常被绊倒的项」排序；② publish.enabled=true 不 fail 只 warn（"⚠️ 真发"），因它不是错误而是「知情确认」；③ config 加载失败时 budget/publish 检查返回 ❌ 提示「先修 config」而非各自独立报错；④ cmd_doctor 用 CWD 相对路径（secrets_dir="secrets"、args.config 透传），与其它 cmd 模式一致；⑤ doctor.run_doctor 不调 db.connect/init_db（仅 Path.exists + load_config），严格遵守「只读不创建任何文件」红线——tests/test_doctor.py::TestReadOnly 验证。全测 1035 绿（4 pre-existing 失败不变）。契约零变更：models.py / SQL schema / Adapter 签名 / argparse 现有签名 / webui 行为全部不动；run.py 880 行（S8-2 基线 852，+28 全在 S8-3 新增 cmd + parser + COMMANDS 字典项内）。
 
 ### S8-4 上线引导文档 + 真实 LLM 跑通一轮（MEDIUM，需用户参与 key）
-- [ ] **目标**：一份 `docs/GETTING_STARTED.md`，照着走能从零到「ingest→score→create→gate→review」真实跑通一轮，并记录成本 baseline
+- [x] **目标**：一份 `docs/GETTING_STARTED.md`，照着走能从零到「ingest→score→create→gate→review」真实跑通一轮，并记录成本 baseline
 - **怎么改**：
   1. 写 `docs/GETTING_STARTED.md`：分步骤——① `cp config.example.yaml config.yaml` 并按注释改 ② `mkdir -p secrets` ③ 设置 LLM key 环境变量（说明 Anthropic 与 MiniMax 两种，指向 `pipeline/creators/llm.py::setup_provider_from_env` 的实际读取逻辑，**别写死具体 key**）④ `python -m pipeline.run init-db` ⑤ `python -m pipeline.run doctor`（S8-3）确认全绿 ⑥ 依次 `ingest→score→create→gate→review` ⑦ `python -m pipeline.run webui` 打开控制台
   2. **真实跑通一轮**（需用户提供 key，若无 key 则标 `⚠️ BLOCKED: 待用户提供 LLM key` 跳过后半）：跑一轮 ingest→gate，把「N 条 ingest / N 过门禁 / 本轮 LLM 成本 $X」记进 GETTING_STARTED.md 的"成本 baseline"节，作为 budget.monthly_usd 是否合理的现实依据
@@ -678,6 +678,8 @@
 - **验收标准**：一个空白环境的人照 GETTING_STARTED.md 能跑到 webui 打开；成本 baseline 有真实数字（或明确标注 BLOCKED 待 key）
 - **红线**：文档任务——**不改 pipeline/ 代码逻辑**；不把任何真实 key/cookie 写进文档或提交；真实跑通**不碰 publish**（只到 review 为止）
 - **参考**：CLAUDE.md 会话重启指引；TECH_SPEC §2；HARD_PARTS §4（成本）
+
+  ✅ 完成于 2026-07-07，commit <本 commit sha>，备注：`docs/GETTING_STARTED.md` 12 节：前置条件 → 克隆venv → 复制config → 建secrets → 设LLM key（MiniMax 优先 / Anthropic 备选）→ init-db → doctor → 跑流水线 5 步 → webui → 成本 baseline（BLOCKED 待 key，含 M2-2 真实冒烟参考 2026-07-05 $0.0267/day） → ⚠️ 发布警告（HARD_PARTS §1 三重锁 + §9 凭据）→ 下一步 → 故障排除表。未改任何 pipeline/ 代码（红线遵守）；真实跑通不碰 publish。
 
 ---
 
