@@ -97,9 +97,14 @@ def reset_llm_state():
 # ── 端到端 ─────────────────────────────────────────
 
 def test_end_to_end_score_and_select(db_with_raw) -> None:
-    """4 条 raw → 评分 → 选 top 2 (quota=2, min_score=6.0)。"""
+    """4 条 raw → 评分 → 选 top 2 (quota=2, min_score=6.0)。
+
+    M1-7 起，score 编排先调一次 AI 语义 dedup；LLM 返回无 duplicate → 不合并，
+    4 条全部进 score。
+    """
     conn = db_with_raw
     set_provider(ScriptedProvider([
+        json.dumps({"duplicates": []}),  # M1-7 semantic dedup
         json.dumps({"pillar": "ai", "score": 8.5, "reason": "good"}),
         json.dumps({"pillar": "ai", "score": 5.0, "reason": "ok"}),
         json.dumps({"pillar": "ai", "score": 9.0, "reason": "great"}),
@@ -126,10 +131,14 @@ def test_end_to_end_score_and_select(db_with_raw) -> None:
 
 
 def test_idempotent_second_run(db_with_raw) -> None:
-    """二次跑：processed=0，selected=0（无 raw，且上轮留下的也全 <min_score）。"""
+    """二次跑：processed=0，selected=0（无 raw，且上轮留下的也全 <min_score）。
+
+    M1-7 起第一行是 dedup response（第二跑无 raw 不调 dedup，但有 4 score 备用）。
+    """
     conn = db_with_raw
     # 全 4 条都评 5.0（< min_score 6.0）→ 第一轮全保持 scored，0 selected
     set_provider(ScriptedProvider([
+        json.dumps({"duplicates": []}),  # M1-7 semantic dedup
         json.dumps({"pillar": "ai", "score": 5.0, "reason": "low"}),
         json.dumps({"pillar": "ai", "score": 5.0, "reason": "low"}),
         json.dumps({"pillar": "ai", "score": 5.0, "reason": "low"}),
@@ -169,9 +178,14 @@ def test_all_retryable_failure_rejects_all(db_with_raw) -> None:
 
 
 def test_llm_call_recorded(db_with_raw) -> None:
-    """每次评分调用都写一条 llm_calls 行（ref_id = topic.id）。"""
+    """每次评分调用都写一条 llm_calls 行（ref_id = topic.id）+ 一次 dedup。
+
+    M1-7 起 score 前先调一次 dedup → 多一条 stage='score_dedup' 行；
+    这里只断言 score 行的属性（M1-7 行另行覆盖）。
+    """
     conn = db_with_raw
     set_provider(ScriptedProvider([
+        json.dumps({"duplicates": []}),  # M1-7 semantic dedup
         json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
         json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
         json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
@@ -184,9 +198,11 @@ def test_llm_call_recorded(db_with_raw) -> None:
     )
 
     rows = conn.execute("SELECT * FROM llm_calls").fetchall()
-    assert len(rows) == 4
-    for row in rows:
-        assert row["stage"] == "score"
+    score_rows = [r for r in rows if r["stage"] == "score"]
+    dedup_rows = [r for r in rows if r["stage"] == "score_dedup"]
+    assert len(score_rows) == 4
+    assert len(dedup_rows) == 1  # M1-7：dedup 调一次
+    for row in score_rows:
         assert row["model"] == "claude-haiku-4-5-20251001"
         assert row["cost_usd"] > 0
 
@@ -328,3 +344,184 @@ def test_url_dedup_logs_warning_when_dup_found(
 
     captured = capsys.readouterr()
     assert "M1-6 merged 1 duplicate(s)" in captured.err
+
+
+# ── M1-7 AI 语义去重（score runner 集成） ──────────────────
+
+
+def test_semantic_dedup_merges_same_event_different_urls(tmp_path: Path) -> None:
+    """M1-7 集成：两条不同 URL 不同 title 但同事件 → 语义去重 → processed=1。
+
+    注意：score 调用次数也会从 2 降到 1。
+    """
+    p = tmp_path / "state.db"
+    conn = db.connect(p)
+    db.init_db(conn)
+    now = "2026-07-07T00:00:00+00:00"
+    _insert_topic_with_url(
+        conn, id="t1", title="GPT-5 released today",
+        url="https://news.example.com/gpt5", now=now,
+    )
+    _insert_topic_with_url(
+        conn, id="t2", title="OpenAI announces GPT-5 launch",
+        url="https://other.example.com/openai-gpt5", now=now,
+    )
+
+    # 第一条 LLM 调用是 semantic dedup，第二条才是 score
+    set_provider(ScriptedProvider([
+        json.dumps({"duplicates": [[0, 1]]}),  # semantic dedup
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),  # score
+    ]))
+
+    result = runner.score_all(
+        conn, pillars=_pillars(), quota=2, min_score=6.0,
+        now="2026-07-07T02:00:00+00:00",
+    )
+
+    assert result.processed == 1  # 只评代表条
+    assert result.duplicates_merged == 0  # M1-6 没合并
+    assert result.duplicates_semantic_merged == 1  # M1-7 合并了 1 条
+    assert result.selected == 1
+
+    # LLM 调了 2 次（1 dedup + 1 score），不是 3 次
+    rows = conn.execute("SELECT * FROM llm_calls").fetchall()
+    assert len(rows) == 2
+
+
+def test_semantic_dedup_no_merge_when_events_differ(tmp_path: Path) -> None:
+    """M1-7 集成：事件不同（LLM 返回空 duplicates）→ 不合并，processed=N。"""
+    p = tmp_path / "state.db"
+    conn = db.connect(p)
+    db.init_db(conn)
+    now = "2026-07-07T00:00:00+00:00"
+    _insert_topic_with_url(
+        conn, id="t1", title="AI news", url="https://a.com/1", now=now,
+    )
+    _insert_topic_with_url(
+        conn, id="t2", title="Sports news", url="https://b.com/2", now=now,
+    )
+
+    set_provider(ScriptedProvider([
+        json.dumps({"duplicates": []}),  # semantic dedup: no merge
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+        json.dumps({"pillar": "ai", "score": 7.5, "reason": "ok"}),
+    ]))
+
+    result = runner.score_all(
+        conn, pillars=_pillars(), quota=2, min_score=6.0,
+        now="2026-07-07T02:00:00+00:00",
+    )
+
+    assert result.processed == 2
+    assert result.duplicates_semantic_merged == 0
+
+
+def test_semantic_dedup_failure_falls_back_no_block(tmp_path: Path) -> None:
+    """M1-7 集成：LLM 持续 RetryableError → fallback，全部 processed，不阻塞。"""
+    p = tmp_path / "state.db"
+    conn = db.connect(p)
+    db.init_db(conn)
+    now = "2026-07-07T00:00:00+00:00"
+    _insert_topic_with_url(
+        conn, id="t1", title="A", url="https://a.com/1", now=now,
+    )
+    _insert_topic_with_url(
+        conn, id="t2", title="B", url="https://b.com/2", now=now,
+    )
+
+    # dedup 失败 → fallback，score 仍正常进行
+    set_provider(ScriptedProvider([
+        "garbage 1", "garbage 2",  # dedup: complete_json 重试 2 次都失败
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+        json.dumps({"pillar": "ai", "score": 7.5, "reason": "ok"}),
+    ]))
+
+    result = runner.score_all(
+        conn, pillars=_pillars(), quota=2, min_score=6.0,
+        now="2026-07-07T02:00:00+00:00",
+    )
+
+    # fallback：dedup 没合并，2 条都进 score
+    assert result.processed == 2
+    assert result.duplicates_semantic_merged == 0
+    assert result.selected == 2
+
+
+def test_semantic_dedup_logs_warning_when_dup_found(
+    tmp_path: Path, capsys,
+) -> None:
+    """M1-7 集成：有 semantic duplicate → 打 stderr 'M1-7 merged N duplicate(s)'。"""
+    p = tmp_path / "state.db"
+    conn = db.connect(p)
+    db.init_db(conn)
+    now = "2026-07-07T00:00:00+00:00"
+    _insert_topic_with_url(
+        conn, id="t1", title="GPT-5 released",
+        url="https://a.com/1", now=now,
+    )
+    _insert_topic_with_url(
+        conn, id="t2", title="OpenAI GPT-5 launch",
+        url="https://b.com/2", now=now,
+    )
+
+    set_provider(ScriptedProvider([
+        json.dumps({"duplicates": [[0, 1]]}),
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+    ]))
+
+    runner.score_all(
+        conn, pillars=_pillars(), quota=2, min_score=6.0,
+        now="2026-07-07T02:00:00+00:00",
+    )
+
+    captured = capsys.readouterr()
+    assert "M1-7 merged 1 duplicate(s)" in captured.err
+
+
+def test_semantic_dedup_runs_after_url_dedup(tmp_path: Path) -> None:
+    """M1-7 集成：URL dedup 先跑（同 URL 合并），然后语义 dedup 跑（不同 URL 同事件合并）。
+
+    4 条 raw：
+      - t1/t2 同 URL → URL dedup 合并 1 条
+      - t1（代表）+ t3 不同 URL 但同事件 → 语义 dedup 合并 1 条
+      - 最终 1 条进 score
+    """
+    p = tmp_path / "state.db"
+    conn = db.connect(p)
+    db.init_db(conn)
+    now = "2026-07-07T00:00:00+00:00"
+    # t1/t2 同 URL
+    _insert_topic_with_url(
+        conn, id="t1", title="GPT-5 released", url="https://a.com/gpt5",
+        now=now,
+    )
+    _insert_topic_with_url(
+        conn, id="t2", title="GPT-5", url="https://a.com/gpt5", now=now,
+    )
+    # t3 不同 URL 但同事件（与 t1 同事件）
+    _insert_topic_with_url(
+        conn, id="t3", title="OpenAI GPT-5 launch", url="https://b.com/openai",
+        now=now,
+    )
+    # t4 完全无关
+    _insert_topic_with_url(
+        conn, id="t4", title="Sports news", url="https://c.com/sports",
+        now=now,
+    )
+
+    # 4 raw → URL dedup 后 3 条 → 语义 dedup 后 2 条 → score 2 次
+    # 输入到语义 dedup 的顺序：t1（URL 代表）, t3, t4（输入顺序）
+    set_provider(ScriptedProvider([
+        json.dumps({"duplicates": [[0, 1]]}),  # 语义 dedup：t1 (idx 0) vs t3 (idx 1)
+        json.dumps({"pillar": "ai", "score": 8.0, "reason": "ok"}),
+        json.dumps({"pillar": "ai", "score": 7.0, "reason": "ok"}),
+    ]))
+
+    result = runner.score_all(
+        conn, pillars=_pillars(), quota=2, min_score=6.0,
+        now="2026-07-07T02:00:00+00:00",
+    )
+
+    assert result.processed == 2  # t1 (URL+语义代表) + t4
+    assert result.duplicates_merged == 1  # t2 被 URL dedup
+    assert result.duplicates_semantic_merged == 1  # t3 被语义 dedup

@@ -127,7 +127,8 @@ def cmd_score(args: argparse.Namespace) -> int:
     print(
         f"score: {result.processed} processed, "
         f"{result.selected} selected, {result.rejected} rejected, "
-        f"{result.duplicates_merged} url_dup_merged"
+        f"{result.duplicates_merged} url_dup_merged, "
+        f"{result.duplicates_semantic_merged} semantic_dup_merged"
     )
     return 0
 
