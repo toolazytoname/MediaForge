@@ -611,13 +611,68 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 @_stage_lock("reset")
 def cmd_reset(args: argparse.Namespace) -> int:
-    """reset 是唯一允许的逆向操作，需接收位置参数 id + target status。
-    M0-1 仅占位，M1 起接 db.reset_state() 实现。"""
-    print(
-        f"reset: id={args.id} -> {args.status}: "
-        "not implemented (M0-1 placeholder)"
-    )
-    return 0
+    """reset 是唯一允许的逆向操作（TECH_SPEC §2 + §4）。
+
+    按 id 前缀分发表（t_/c_/p_），读当前 status，走 db.transition 状态机
+    校验转移合法性。**绝不绕过转移表**——HARD_PARTS §10 第 3 条红线：
+    reset 是任意改状态后门，破坏状态机不变式。
+
+    不触发任何发布/创作副作用，仅改 status + 写审计日志。
+    """
+    from pipeline.utils.errors import IllegalTransition, StaleState
+    from pipeline.utils.log import get_logger
+
+    logger = get_logger("pipeline.reset")
+
+    row_id = args.id
+    target = args.status
+
+    if row_id.startswith("t_"):
+        table = "topics"
+        getter = db.get_topic
+    elif row_id.startswith("c_"):
+        table = "contents"
+        getter = db.get_content
+    elif row_id.startswith("p_"):
+        table = "publications"
+        getter = db.get_publication
+    else:
+        print(
+            f"reset: id={row_id} 非法前缀（须 t_/c_/p_）"
+        )
+        return 1
+
+    conn = db.connect(_DB_PATH)
+    try:
+        db.init_db(conn)
+        row = getter(conn, row_id)
+        if row is None:
+            print(f"reset: id={row_id} 不存在")
+            return 1
+        current = row.status
+        try:
+            db.transition(conn, table, row_id, current, target)
+        except IllegalTransition:
+            print(
+                f"reset: id={row_id} 不允许 {current}->{target} "
+                f"（转移表未定义此边）"
+            )
+            return 1
+        except StaleState as e:
+            print(
+                f"reset: id={row_id} 状态已变化 "
+                f"（expected={e.expected_status} actual={e.actual_status}）"
+            )
+            return 1
+        # 审计：谁重置了什么——§8 要求 warning 级 + stage+ref_id
+        logger.warning(
+            f"reset: {current}->{target}",
+            extra={"stage": "reset", "ref_id": row_id},
+        )
+        print(f"reset: id={row_id} {current}->{target} ok")
+        return 0
+    finally:
+        conn.close()
 
 
 def cmd_webui(args: argparse.Namespace) -> int:
