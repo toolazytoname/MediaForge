@@ -163,6 +163,8 @@
 - **验收**：决策记录 + 若 DECISION=落地 则转正式任务 P2-M1-8
 - **参考**：sansan0/TrendRadar `trendradar/ai/filter.py`（GPL-3.0 仅参考设计）
 
+  ✅ 完成于 2026-07-07，commit <待填>，备注：**DECISION = 推迟**（不落地也不放弃）。评估文档落入 `docs/research/evaluation-notes.md` §6.3，2 方案设计 + ROI 数学（实测 score_cost $0.000534 / prefilter A $0.000294 / prefilter B=10 $0.000181 per-item，N=50 baseline $0.0267/日；持平点 A=45.1% / B=66.2%；典型 H=50% 时 A +5% / B −16%）。推迟依据 4 条：① 绝对金额小（最坏 +45% 也月度 $1.2）② H 数值未知无 ground truth ③ M1-7 已用一次 LLM、再插预筛与 score 引入抖动风险 ④ min_score=6.0 已现成过滤低 relevance。**4 条触发重新评估条件**：30d_avg_raw>200 且月度成本占比>60% / review 耗时突增 / daily_quota 扩到 ≥20 / score JSON 解析失败率>5%。**回看窗**：M6 完成 + 30 天；最迟 M6+60 天复评。pipeline 代码零变更（红线遵守）。
+
 ### M1-9 多 provider 坑结构化收编（借鉴 Horizon ai/client.py）
 - [ ] **目标**：把 `creators/llm.py::MiniMaxProvider` 散落的特殊 case（NO_RESPONSE_FORMAT / TEMP_CLAMP / JSON fence）提到 `PROVIDER_SPECS` 注册表，新增 provider 不用改 llm.py 主逻辑
 - **步骤**：

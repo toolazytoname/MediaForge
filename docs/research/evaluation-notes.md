@@ -151,3 +151,127 @@
 3. **AiToEarn**：全部核心声明属实（含 electron 四文件行数逐一吻合）。措辞微调：抖音「扫码」严格属授权环节，发布确认是用户在 App 内打开 handoff schema；Relay serverUrl 理论可自建但无开源 relay 服务端。
 4. **Pixelle-Video 适配层新增三个已证实约束**（已并入 §4 适配要点）：完成任务 24h 后清理需及时 fetch；`progress` 字段对 video 任务未接线、轮询以 status 为准；mode=fixed 非零 LLM（应显式传 title）。分段协议确认 = `\n\n` 双换行。
 5. **baoyu-skills**：provider 实为 12 家（漏了 Agnes）；「本机落后 HEAD」版本对照表因本机 2026-07-05 晨已全量同步而作废；「仅 3 个纯 CLI」低估（compress-image/youtube-transcript 等亦可 subprocess 化）；`--json` 出口确认返回 `savedImage` 文件路径、API key 走 env 无需 EXTEND.md、`npx -y bun` 实测可跑。M2-4.5 集成命令可信度升级为「已实测」。
+
+---
+
+## 6 选题层强化项评估
+
+> 本节聚焦「选题 raw → score」这条链路上是否值得再加一道闸。M1-6/M1-7 是已落地的去重项；M1-8 是本次评估，借鉴 sansan0/TrendRadar `trendradar/ai/filter.py` 的「cheap LLM 预筛」设计思想（GPL-3.0 仅参考设计，不复用源码）。
+
+### 6.1 M1-6 跨源 URL 去重（已落地，commit 188c311）
+
+`pipeline/topics/url_dedup.py::merge_by_url(items)` 纯函数，URL normalize 后将多源转载的代表条合并到 score 队列。
+
+**效果**：`ScoreRunResult.duplicates_merged` 新字段 + cmd_score 打印 + tests 22（url_dedup 18 + runner 集成 4），全量 885 pass。**契约零变更**（TECH_SPEC §3 models / SQL schema / Adapter 签名未动）。
+
+**已知限制**（留 TODO，不在本任务修）：in-memory 合并不写回 DB，下次 cron 重跑仍会再合并一次（少量 LLM 浪费）；彻底解决需 schema 加 `merged_into_topic_id` 字段（动契约，留 TODO）。详见 M1-6 完成记录与 `runner.py:8-9` 注释。
+
+### 6.2 M1-7 AI 语义主题去重（已落地，commit 2b4df08）
+
+借鉴 Horizon `src/orchestrator.py:433-504` + `src/ai/prompts.py:3-13`（MIT License 已合法移植）的 `TOPIC_DEDUP_SYSTEM/USER` prompt，单次 LLM 调用按"同事件聚类"返回分组代表条。
+
+**关键决策**：
+- 顺序 = URL dedup → 语义 dedup → score（与 M1-6 同模式，in-memory 不动 DB）
+- 失败静默 fallback（AI 抛异常返回 `(items, [])`，不阻塞主流程）
+- keyword-only `ai_client` 注入（测试用 mock，集成用 `complete_json`）
+
+**效果**：`pipeline/topics/topic_dedup.py` 243 行 + tests 25（纯函数 20 + 集成 5），全量 940 绿/12 skip，verify PASS 10/10。
+
+### 6.3 M1-8 两阶段 AI 预筛评估（本节）
+
+#### 评估问题
+score 前是否值得插一层 cheap 档 LLM 预筛（relevance 0-10 + tags）？借鉴 TrendRadar `trendradar/ai/filter.py` 的「先打分后入主流程」设计（GPL-3.0 不复制源码，仅复用 prompt 结构思想）。
+
+#### 数据基线（实测自本仓库）
+
+读自 `pipeline/creators/llm.py`、`pipeline/topics/scorer.py`、`pipeline/config.py`、`config.example.yaml`：
+
+| 项 | 值 | 来源 |
+|---|---|---|
+| cheap 档模型（默认） | `claude-haiku-4-5-20251001` | `llm.py:38-42` + `config.example.yaml` `llm.tiers` |
+| cheap 档价格（USD/Mtok） | input 0.80 / output 4.00 | `MODEL_PRICES` |
+| score prompt input 字符 | 552（中文字符为主） | `_SCORE_PROMPT` 单条实际渲染（含 1 条示例 topic + 2 个 Pillar） |
+| score prompt est tokens | ~368（中文 1.5 字符/token 启发式） | 换算 |
+| score prompt output tokens | ~60（`{"pillar","score","reason"}` JSON） | `_SCORE_PROMPT` 与 JsonResponseFormat |
+| score `max_tokens` | 512（远高于实际输出） | `scorer.py:165` |
+| **score 单次成本** | **$0.000534** | 计算 |
+| prefilter prompt est tokens | ~167（更短：只 title+summary+输出 JSON） | 估算 |
+| prefilter output tokens | ~40 | 估算 |
+| **prefilter 单条成本** | **$0.000294** | 计算 |
+| prefilter batch (B=10) per-item cost | $0.000181（摊薄 system prompt） | 计算 |
+| `daily_quota` | 5（`topics.daily_quota`） | `config.example.yaml:35` |
+| `min_score` | 6.0 | `config.example.yaml:36` |
+| `BUDGET_LIMIT_USD` | 80 | `llm.py:45` + config `budget.monthly_usd` |
+| 典型 N（每日 raw topic） | 50（hnrss 30 + github_trending 25 = 55，但去重后≈50；dailyhot 启用后 +20） | `config.example.yaml` `sources[*].max_items` |
+| 月度 score 调用估算 | N × quota 占满可能做 min(quota, raw) = 实际 score 调用 = N（每 raw 都评） ≈ 1500/月（30 天 × 50） | 由 runner 流程推 |
+
+#### 方案设计
+
+**A 逐条**：`relevance_one(item) -> prefilter_score`，每条 cheap LLM 独立调；阈值 `THRESHOLD`（建议初值 5/10，对齐 `min_score`）后没过线 → 直接标 `rejected:low_relevance`。
+
+**B 批处理 (B=10)**：单次 prompt 喂 N 条，输出 `[{idx, relevance, tags}, ...]`；按 system prompt 摊薄 60% 成本。批大小 10 是经验值（M1-7 dedup 经验：单 prompt 过 10 条 JSON 仍稳定）。
+
+**两方案共同**：
+- 复用 `complete_json()`（已有 JSON fence + 1 次 retry）
+- 复用 `MODEL_PRICES` + 月度预算硬顶（HARD_PARTS §4）
+- 失败静默 fallback 为「全部放过，让下游 score 兜底」（不能因预筛坏了全卡死）
+
+#### ROI 数学（基于实测单价）
+
+**公式**（N=每日 raw、H=命中率=通过预筛能进 score 的占比）：
+- baseline cost = N × score_cost
+- A cost = N × pre_cost + N × H × score_cost
+- B cost = (N/B) × (B × pre_batch_per_item_cost) + N × H × score_cost
+
+**单条视角：持平点（prefilter 与 baseline 同成本）**
+- A: H ≤ 1 − pre_cost/score_cost = 1 − 0.000294/0.000534 = **45.1%**
+- B: H ≤ 1 − 0.000181/0.000534 = **66.2%**
+
+含义：A 在 H < 45% 才省钱；B 在 H < 66% 才省钱。**H 越高（预筛漏过越多），越贵**。
+
+**典型日 @ N=50（baseline $0.0267）**
+
+| 命中率 H | A 逐条 | 偏差 | B 批 (B=10) | 偏差 |
+|---|---|---|---|---|
+| 30% | $0.0227 | **−15%** | $0.0171 | **−36%** |
+| 50% | $0.0280 | +5% | $0.0224 | −16% |
+| 70% | $0.0334 | +25% | $0.0277 | +4% |
+| 90% | $0.0387 | +45% | $0.0331 | +24% |
+
+**N=100 大日**（baseline $0.0534）：偏差比例同上，金额翻倍。
+
+**关键洞察**：
+1. **绝对金额很小**（每天 $0.02–0.05）。即使预筛 +45% 也是 $0.04/day，月度增量 $1.2，远不及 `BUDGET_LIMIT_USD=80` 1.5%。
+2. **真正风险不在成本在质量**：预筛与 score 评分 prompt 是两个不同模型/不同 prompt，对同一 relevance 维度的判断会**抖动不一致**——预筛放过的可能 score 低、预筛拒的可能 score 高。这是 Mode 失效的真正风险来源（远比 $0.02/day 重要）。
+3. **N 当前上限 50**，batch 摊薄效应被低频调用稀释；想摊薄到 H > 50% 才有正收益，需 N 显著放大。
+
+#### 与 M1-7 协同审视
+
+M1-7 已在 URL dedup 之后、score 之前跑了一次 cheap LLM 调语义聚类。**预筛是再插一次 LLM 调，分两次"问 LLM 同一批内容"**——叠加成本与抖动风险都翻倍。除非预筛承担更弱的语义（仅 relevance 0-10，比聚类简单），否则**边际收益不抵增加的系统复杂度**。
+
+#### DECISION: 推迟（不落地也不放弃）
+
+**理由**：
+1. 成本绝对值太小（$0.02–0.05/日）→ 即使最坏情况 +45% 也是月度 $1.2，不触发预算报警 → 决策价值低。
+2. **H 数值未知**：本仓库还没有足够 raw topic 让人工标 relevance ground truth。H 在 50–70% 之间没有外部数据校准，赌不准。TrendRadar 的 H 经验值不可移植（中文新闻 vs AI/科技日报子域差异极大）。
+3. 风险在质量不在成本：预筛与 score 双层 LLM 引入「同一维度两次判断」抖动（false negative = 漏掉好题），HARD_PARTS §3 没规定锚点对齐机制。
+4. 当前人工 review 已经在 M4/M3 处理「gated 内容」做最后一道闸，预筛拦下的低 relevance 条目在 score 阶段拿 0–5 分也会被 `min_score=6.0` 自然淘汰——**预筛承担的阈值功能已在 score 中现成实现**。
+
+**不放弃的原因**：
+- B 方案在 H < 50% 时可省 16–36% 成本——若 M6+ 阶段 ingest 量级跃迁（N > 200/日），重新评估可转正。
+- TrendRadar 的设计思想存留，作为「cheap-LLM-first」架构范式参考（M7 观察项）。
+- 一旦 M6 metrics 上线且人工 review 长期承担低 relevance 内容，预筛 ROI 可能转正。
+
+**触发重新评估的具体条件**（任一满足 → 复评此决策，升级为 P2-M1-8）：
+1. **N 增长门槛**：`30d_avg_raw_per_day > 200`（即典型 N 翻 4 倍），且月度 LLM 成本占比 > 60%（说明 score 是成本大头）。
+2. **人工 review 时间成本量化**：M6 metrics 显示人工 review 平均每 gated 内容 < 60s 看不完（含低 relevance 误入门），或 review review-state 直方图在 0–4 分有多峰——意味着预筛的真实边际 ROI 出现。
+3. **quota 显著放大**：从 5/日 扩到 ≥ 20/日——预筛可降低 top-N 排序的 LLM 总开销（即使 H=70% 也可正收益当 N 足够大）。
+4. **FAIL MODE**：`score` 阶段开始出现 `accepted=False`（JSON 解析失败）> 5%——预筛可拦截模型风格漂移（不是 ROI 而是 robustness）。
+
+**回看时间窗**：M6 完成 + 30 天运营数据后；最迟 M6 完成后 60 天必须重新评估一次（即使未触发上面 4 条），避免永久挂着。
+
+**不写 P2-M1-8 任务草案**：落地条件未达，转正需先有真实 H / 真实 N / 真实 review 时间数据。新任务草案由重新评估时按届时数据写。
+
+---
+
+
