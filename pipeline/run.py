@@ -675,6 +675,30 @@ def cmd_reset(args: argparse.Namespace) -> int:
         conn.close()
 
 
+@_stage_lock("doctor")
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """上线前自检（S8-3）：只读体检，不修不建。
+
+    调 run_doctor() 跑 6 项检查，逐行打印 ✅/❌。
+    任一 ❌ → exit 1（CI / 脚本可判）；全 ✅ → exit 0。
+    """
+    from pipeline.doctor import run_doctor
+
+    db_path = _DB_PATH
+    results = run_doctor(
+        config_path=args.config,
+        db_path=db_path,
+        secrets_dir="secrets",
+    )
+    has_fail = False
+    for r in results:
+        symbol = "✅" if r.ok else "❌"
+        print(f"{symbol} {r.name}：{r.hint}")
+        if not r.ok:
+            has_fail = True
+    return 1 if has_fail else 0
+
+
 def cmd_webui(args: argparse.Namespace) -> int:
     """启动本地 Web 控制台（M3-3）。
 
@@ -782,6 +806,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="只走流程，不实际发布"
     )
     sub.add_parser("collect", help="回流表现数据")
+    sub.add_parser(
+        "doctor", help="上线前自检（不修不建，只报告）"
+    )
     sub.add_parser("status", help="打印各状态计数表")
 
     reset_p = sub.add_parser(
@@ -835,6 +862,7 @@ COMMANDS = {
     "publish": cmd_publish,
     "collect": cmd_collect,
     "status": cmd_status,
+    "doctor": cmd_doctor,
     "reset": cmd_reset,
     "webui": cmd_webui,
     "login": cmd_login,
