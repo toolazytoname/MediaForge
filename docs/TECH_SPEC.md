@@ -359,6 +359,6 @@ GET  /api/status           JSON 状态计数（给页面轮询用）
 遵守用户全局规则（`~/.claude/rules/common/coding-style.md`），本项目补充：
 
 - 单文件 ≤ 400 行；函数 ≤ 50 行
-- 所有公开函数有 type hints；`mypy --strict pipeline/` 通过（M2 起强制）
+- 所有公开函数有 type hints；`mypy --strict pipeline/` 为**目标**，尚未接入 CI 强制（仓库无 mypy 配置文件，CI 不跑；接入属另一任务）
 - 时间一律 UTC ISO8601 字符串存储，展示层才转本地时区
 - ID 生成：`utils/ids.py` 的 `new_id(prefix)`，禁止散落 uuid 调用

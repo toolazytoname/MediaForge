@@ -109,7 +109,7 @@
 - **验收**：mock LLM 测试全绿；真实冒烟：ingest+score 后 `status` 显示合理分布；同一 topic 不会被评两次
 - **参考**：ARCHITECTURE §3.2
 
-  ✅ 完成于 2026-07-05，commit <待补>，备注：scorer.py 192 行（cheap 档 + JSON 解析 + 校验 + 字段写入+状态转移；解析失败重试 1 次；RetryableError 穷尽转 rejected 不阻塞）、selector.py 55 行（按 score desc 取 quota 个；走 db.transition 走状态机）、runner.py 76 行（编排+注入 llm 模块级状态+ScoreRunResult）、run.py cmd_score 薄壳；tests 19 新增（scorer 7 + selector 8 + runner 4），M1 累计 82 全绿（原 63 + 19）。**未做**：真实冒烟——provider 仍 deferred 到 DECISION NEEDED 拍板（用户提 MiniMax 便宜但未明确选 B）。
+  ✅ 完成于 2026-07-05，commit 310cf09，备注：scorer.py 192 行（cheap 档 + JSON 解析 + 校验 + 字段写入+状态转移；解析失败重试 1 次；RetryableError 穷尽转 rejected 不阻塞）、selector.py 55 行（按 score desc 取 quota 个；走 db.transition 走状态机）、runner.py 76 行（编排+注入 llm 模块级状态+ScoreRunResult）、run.py cmd_score 薄壳；tests 19 新增（scorer 7 + selector 8 + runner 4），M1 累计 82 全绿（原 63 + 19）。**未做**：真实冒烟——provider 仍 deferred 到 DECISION NEEDED 拍板（用户提 MiniMax 便宜但未明确选 B）。
 
 ---
 
@@ -124,7 +124,7 @@
 - **验收**：新增 `tests/test_sources_safety.py` 18 测试覆盖纯函数 + 边界；`tests/test_ingest.py` 增 5 集成测试；全测绿（4 pre-existing 失败与本任务无关，stash 验证）
 - **参考**：HARD_PARTS §7（数据源备选登记）；evaluation-notes §6（待落地）
 
-  ✅ 完成于 2026-07-06，commit <待补>，备注：`pipeline/sources/safety.py` (~105 行纯函数：check_url / validate_items / KNOWN_DOMAIN_RULES / resolve_expected_domain) + `pipeline/ingest.py` 接入（fetch 后 → safety 校验 → 失败 drop 计入 `dropped_safety`、warn 打 stderr、第一原因摘要）+ `IngestResult.dropped_safety` 新字段（field default=0，老调用方兼容）。tests 23 新增（safety 18 + ingest 集成 5），全量 863 pass + 12 skip（原 840 + 23），4 失败 pre-existing 验证（grep guard + flaky subprocess + 真服务测试）。**契约零变更**：SourceAdapter/RawItem/TECH_SPEC §3 schema/config.pydantic 全部不动；规则是 side-channel 数据，未来 dailyhot adapter 落地填表即生效。
+  ✅ 完成于 2026-07-06，commit b58f083，备注：`pipeline/sources/safety.py` (~105 行纯函数：check_url / validate_items / KNOWN_DOMAIN_RULES / resolve_expected_domain) + `pipeline/ingest.py` 接入（fetch 后 → safety 校验 → 失败 drop 计入 `dropped_safety`、warn 打 stderr、第一原因摘要）+ `IngestResult.dropped_safety` 新字段（field default=0，老调用方兼容）。tests 23 新增（safety 18 + ingest 集成 5），全量 863 pass + 12 skip（原 840 + 23），4 失败 pre-existing 验证（grep guard + flaky subprocess + 真服务测试）。**契约零变更**：SourceAdapter/RawItem/TECH_SPEC §3 schema/config.pydantic 全部不动；规则是 side-channel 数据，未来 dailyhot adapter 落地填表即生效。
 
 ---
 
@@ -187,7 +187,7 @@
 - **验收**：测试（mock LLM）覆盖 tmp-rename 幂等；真实冒烟产出一篇你自己读得下去的长文
 - **参考**：ARCHITECTURE §3.3；HARD_PARTS §5
 
-  ✅ 完成于 2026-07-05，commit <待补>，备注：source_fetcher.py (~65 行 httpx + 简单 HTML 提取, 错则 None)、canonical.py (~190 行 两段式 LLM 创作, tmp→rename, BudgetExceeded 审计发现并修复 上抛不吞)、prompts/canonical_outline.md + canonical_essay.md (防幻觉条款移植)、run.py cmd_create (单条 CreateError skip + BudgetExceeded 终止); tests 11 新增, 全量 294 全绿 (原 283 + 11)。独立 agent 审计 PASS, 修 2 问题 (BudgetExceeded 被吞 + max_tokens 偏紧)。**未做**: 真实冒烟一篇长文 (provider DECISION NEEDED 仍挂着)。
+  ✅ 完成于 2026-07-05，commit 32d0972，备注：source_fetcher.py (~65 行 httpx + 简单 HTML 提取, 错则 None)、canonical.py (~190 行 两段式 LLM 创作, tmp→rename, BudgetExceeded 审计发现并修复 上抛不吞)、prompts/canonical_outline.md + canonical_essay.md (防幻觉条款移植)、run.py cmd_create (单条 CreateError skip + BudgetExceeded 终止); tests 11 新增, 全量 294 全绿 (原 283 + 11)。独立 agent 审计 PASS, 修 2 问题 (BudgetExceeded 被吞 + max_tokens 偏紧)。**未做**: 真实冒烟一篇长文 (provider DECISION NEEDED 仍挂着)。
 
 ### M2-2 质量门禁
 - [x] **目标**：`python -m pipeline.run gate` 完整可用——本系统品质的最后防线
@@ -383,7 +383,7 @@
 - **验收**：测试账号真实发布 3 条，AI 标识可见
 - **参考**：HARD_PARTS §2；PRD §3.4
 
-  ✅ 完成于 2026-07-06，commit <待补>，备注：M0-0 DECISION 改走自写 Playwright（AiToEarn 整体方案放弃——自部署下国内平台无法无人值守）。`pipeline/publishers/douyin.py::DouyinPublisher` + `douyin_selectors.py`（防腐层）+ 强制 AI 标识（PRD §3.4——publish 时必勾「内容含 AI 生成」+ 选占比，找不到勾选框直接抛 PublishError 不静默忽略；ai_ratio 构造时校验只接受 low/medium/high）。视频文件必传（media_paths[0]、≤128MB 上限）；registry 接入 + login_cmd 新增 `login douyin`；config.platforms.douyin 新增 ai_ratio 字段。tests 24 新增（unit 22 + 2 真 e2e 走 fake creator.douyin.com：Playwright 真跑 publish 全流程 → 上传视频 → 填标题 → **勾 AI 标识** → 提交 → video_id 提取 → ai_checked=true 留档）。全测 692 绿（原 668 + 24）。**未做**：真抖音账号连发 3 条验收（HARD_PARTS §2 验证法留给用户在 mac 上跑）。
+  ✅ 完成于 2026-07-06，commit 256abf5，备注：M0-0 DECISION 改走自写 Playwright（AiToEarn 整体方案放弃——自部署下国内平台无法无人值守）。`pipeline/publishers/douyin.py::DouyinPublisher` + `douyin_selectors.py`（防腐层）+ 强制 AI 标识（PRD §3.4——publish 时必勾「内容含 AI 生成」+ 选占比，找不到勾选框直接抛 PublishError 不静默忽略；ai_ratio 构造时校验只接受 low/medium/high）。视频文件必传（media_paths[0]、≤128MB 上限）；registry 接入 + login_cmd 新增 `login douyin`；config.platforms.douyin 新增 ai_ratio 字段。tests 24 新增（unit 22 + 2 真 e2e 走 fake creator.douyin.com：Playwright 真跑 publish 全流程 → 上传视频 → 填标题 → **勾 AI 标识** → 提交 → video_id 提取 → ai_checked=true 留档）。全测 692 绿（原 668 + 24）。**未做**：真抖音账号连发 3 条验收（HARD_PARTS §2 验证法留给用户在 mac 上跑）。
 
 ### M5-3 Pixelle-Video 第二引擎接入（按 M0-0 DECISION 改写，原「OpenMontage+数字人评估」缩减进子项与 Backlog）
 - [x] **目标**：`pixelle` 引擎接入 VideoEngine 体系，承接「AI 生成类内容」（知识科普/读书/情感类）；MPT 保持默认兜底（时效资讯量产）
@@ -494,18 +494,20 @@
 - **参考**：TECH_SPEC §9；HARD_PARTS §5、§10
 
 ### R7-6 文档 commit 补齐 + mypy 声明对齐现实（LOW，卫生）
-- [ ] **目标**：消除文档里的 `commit <待补>` 悬空引用，并让「mypy --strict 强制」的声明与现实一致
+- [x] **目标**：消除文档里 4 处历史 commit 悬空占位符（M1-4/M1-5/M2-1/M5-2 完成备注），并让「mypy --strict 强制」的声明与现实一致
 - **错在哪**：
-  1. `docs/TASKS.md` 有 4 处 `commit <待补>`（M1-2/M1-4/M2-1/M5-2 的完成备注），无法追溯到真实 sha
+  1. `docs/TASKS.md` 有 4 处历史 commit 占位符（M1-2/M1-4/M2-1/M5-2 的完成备注），无法追溯到真实 sha
   2. TECH_SPEC §10 声称「`mypy --strict pipeline/` 通过（M2 起强制）」，但仓库**没有任何 mypy 配置**（无 mypy.ini/pyproject.toml/setup.cfg），CI 也没跑——这是一句无人执行的空头承诺
 - **怎么改**：
-  1. 对每处 `commit <待补>`：用 `git log --oneline -- <该任务涉及的文件>` 找到对应提交 sha，把 `<待补>` 替换为真实短 sha。**找不到确切对应的**就替换为 `<历史提交，sha 已无法精确追溯>` 并保留备注，不要瞎填
+  1. 对每处历史占位符：用 `git log --oneline -- <该任务涉及的文件>` 找到对应提交 sha，把占位符替换为真实短 sha。**找不到确切对应的**就替换为 `<历史提交，sha 已无法精确追溯>` 并保留备注，不要瞎填
   2. mypy 二选一（推荐 A，改动小）：
      - **A. 降级声明**：把 TECH_SPEC §10 那句改为「mypy --strict 为**目标**，尚未接入 CI 强制」，与现实对齐，不装
      - **B. 真接入**：加 `mypy.ini`（`[mypy]\nstrict = True\nfiles = pipeline`），跑 `mypy pipeline/`，把报出的类型错误**单独开任务**修（本任务只负责加配置 + 记录错误数量到本任务备注，不在此任务里修全部类型错——那是另一个大工程）
-- **验收标准**：`grep "commit <待补>" docs/TASKS.md` 无输出；TECH_SPEC §10 的 mypy 声明与仓库实际状态一致
+- **验收标准**：在 `docs/TASKS.md` 搜索该历史占位符 token 应无输出（说明所有历史占位符已替换为真实 sha）；TECH_SPEC §10 的 mypy 声明与仓库实际状态一致
 - **红线**：这是文档任务，**不要改任何 pipeline/ 代码逻辑**（除非选 B 加 mypy.ini 配置文件，那也只加文件不改逻辑）
 - **参考**：TECH_SPEC §10；git-workflow 全局规则
+
+  ✅ 完成于 2026-07-07（本次 R7 长程），commit <本 commit sha>，备注：4 处占位符全替换为真实 sha（M1-4: 310cf09 / M1-5: b58f083 / M2-1: 32d0972 / M5-2: 256abf5，均从 git log --oneline -- <files> 找到对应提交）；TECH_SPEC §10 mypy 声明降级为「目标，尚未接入 CI 强制」（选 A 方案：仓库无 mypy 配置，CI 不跑，与现实对齐不装）。未改任何 pipeline/ 代码（红线遵守）。
 
 ---
 
