@@ -62,6 +62,86 @@ class CompletionResult:
     output_tokens: int
 
 
+# ── ProviderSpec 注册表（M1-9：把散落的 provider 差异结构化）──
+# 新增 provider 只需：(1) 加 PROVIDER_SPECS 条目；(2) 加 build_provider 分支。
+# llm.py 的 complete() / complete_json() / 重试 / 预算等主逻辑无需改。
+
+@dataclass(frozen=True)
+class ProviderSpec:
+    """单个 provider 的协议层 / 默认值 / 兼容性约束。"""
+
+    name: str
+    protocol: str  # 'mock' | 'anthropic' | 'openai'
+    default_base_url: str | None
+    default_model: str
+    default_timeout_s: float
+    default_api_version: str | None
+    # 协议层差异
+    supports_response_format: bool  # 是否原生支持 OpenAI response_format
+    min_temperature: float | None   # provider 协议对 temperature 的下限（None=不限）
+    max_temperature: float | None   # provider 协议对 temperature 的上限（None=不限）
+    extra_fence_strip: bool         # provider 实际响应是否常包 ```json``` 围栏
+    env_var_prefix: str | None      # from_env 时 env var 名前缀
+
+
+PROVIDER_SPECS: dict[str, ProviderSpec] = {
+    "mock": ProviderSpec(
+        name="mock",
+        protocol="mock",
+        default_base_url=None,
+        default_model="claude-haiku-4-5-20251001",
+        default_timeout_s=0.0,
+        default_api_version=None,
+        supports_response_format=False,
+        min_temperature=None,
+        max_temperature=None,
+        extra_fence_strip=False,
+        env_var_prefix=None,
+    ),
+    "MiniMax": ProviderSpec(
+        name="MiniMax",
+        protocol="anthropic",
+        default_base_url="https://api.minimaxi.com/anthropic",
+        default_model="MiniMax-M3",
+        default_timeout_s=60.0,
+        default_api_version="2023-06-01",
+        # M3 走 Anthropic Messages 协议：不支持 response_format
+        supports_response_format=False,
+        # 与 Anthropic Sonnet 4.x 同：temperature 0~1
+        min_temperature=0.0,
+        max_temperature=1.0,
+        extra_fence_strip=False,
+        env_var_prefix="MINIMAX",
+    ),
+    "anthropic": ProviderSpec(
+        name="anthropic",
+        protocol="anthropic",
+        default_base_url="https://api.anthropic.com",
+        default_model="claude-sonnet-5",
+        default_timeout_s=60.0,
+        default_api_version="2023-06-01",
+        supports_response_format=False,
+        min_temperature=0.0,
+        max_temperature=1.0,
+        extra_fence_strip=False,
+        env_var_prefix="ANTHROPIC",
+    ),
+    "openai": ProviderSpec(
+        name="openai",
+        protocol="openai",
+        default_base_url="https://api.openai.com/v1",
+        default_model="gpt-4o",
+        default_timeout_s=60.0,
+        default_api_version=None,
+        supports_response_format=True,
+        min_temperature=0.0,
+        max_temperature=2.0,
+        extra_fence_strip=False,
+        env_var_prefix="OPENAI",
+    ),
+}
+
+
 class RetryableError(Exception):
     """429 / 5xx / 网络瞬时错误——应触发重试。"""
 
@@ -121,32 +201,46 @@ class MiniMaxProvider(LLMProvider):
       - HTTP 4xx（除 429）     → ValueError（契约错误，立即抛）
       - 网络异常 / 超时         → RetryableError（瞬时错误）
       - 响应 JSON 残缺         → ValueError（不可重试）
+
+    所有默认值从 PROVIDER_SPECS["MiniMax"] 读取（不写死在此处）；
+    增删 provider 只需改注册表 + build_provider 分支。
     """
 
-    DEFAULT_BASE_URL = "https://api.minimaxi.com/anthropic"
-    DEFAULT_MODEL = "MiniMax-M3"
-    DEFAULT_TIMEOUT_S = 60.0
-    DEFAULT_API_VERSION = "2023-06-01"
+    # 向后兼容：保留类常量供外部代码引用（值与 spec 同步）
+    DEFAULT_BASE_URL = PROVIDER_SPECS["MiniMax"].default_base_url
+    DEFAULT_MODEL = PROVIDER_SPECS["MiniMax"].default_model
+    DEFAULT_TIMEOUT_S = PROVIDER_SPECS["MiniMax"].default_timeout_s
+    DEFAULT_API_VERSION = PROVIDER_SPECS["MiniMax"].default_api_version
 
     def __init__(
         self,
         api_key: str,
         *,
-        base_url: str = DEFAULT_BASE_URL,
-        model: str = DEFAULT_MODEL,
-        timeout_s: float = DEFAULT_TIMEOUT_S,
-        api_version: str = DEFAULT_API_VERSION,
+        base_url: str | None = None,
+        model: str | None = None,
+        timeout_s: float | None = None,
+        api_version: str | None = None,
+        spec: ProviderSpec | None = None,
     ) -> None:
         if not api_key:
             raise ValueError(
                 "MiniMaxProvider: api_key is required "
                 "(set MINIMAX_API_KEY or ANTHROPIC_API_KEY env var)"
             )
+        self._spec = spec if spec is not None else PROVIDER_SPECS["MiniMax"]
         self._api_key = api_key
-        self._base_url = base_url.rstrip("/")
-        self._model = model
-        self._timeout_s = timeout_s
-        self._api_version = api_version
+        self._base_url = (
+            base_url if base_url is not None else self._spec.default_base_url
+        ).rstrip("/")
+        self._model = model if model is not None else self._spec.default_model
+        self._timeout_s = (
+            timeout_s if timeout_s is not None else self._spec.default_timeout_s
+        )
+        self._api_version = (
+            api_version
+            if api_version is not None
+            else self._spec.default_api_version
+        )
 
     @classmethod
     def from_env(cls) -> "MiniMaxProvider":
@@ -155,6 +249,7 @@ class MiniMaxProvider(LLMProvider):
         优先使用 MiniMax-* 变量；如未设置则回退到 Anthropic-* 变量
         （保持与用户实测环境兼容）。
         """
+        spec = PROVIDER_SPECS["MiniMax"]
         api_key = (
             os.environ.get("MINIMAX_API_KEY")
             or os.environ.get("ANTHROPIC_API_KEY")
@@ -169,18 +264,20 @@ class MiniMaxProvider(LLMProvider):
             base_url=os.environ.get(
                 "MINIMAX_BASE_URL",
                 os.environ.get(
-                    "ANTHROPIC_BASE_URL", cls.DEFAULT_BASE_URL
+                    "ANTHROPIC_BASE_URL", spec.default_base_url
                 ),
             ),
             model=os.environ.get(
                 "MINIMAX_MODEL",
-                os.environ.get("ANTHROPIC_MODEL", cls.DEFAULT_MODEL),
+                os.environ.get("ANTHROPIC_MODEL", spec.default_model),
             ),
             timeout_s=float(
-                os.environ.get("MINIMAX_TIMEOUT_S", cls.DEFAULT_TIMEOUT_S)
+                os.environ.get(
+                    "MINIMAX_TIMEOUT_S", spec.default_timeout_s
+                )
             ),
             api_version=os.environ.get(
-                "MINIMAX_API_VERSION", cls.DEFAULT_API_VERSION
+                "MINIMAX_API_VERSION", spec.default_api_version
             ),
         )
 
@@ -258,6 +355,41 @@ class MiniMaxProvider(LLMProvider):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+
+
+# ── Provider 工厂（M1-9：注册表驱动，新增 provider 不改主逻辑）──
+
+def build_provider(name: str, *, api_key: str, **overrides: Any) -> LLMProvider:
+    """按 PROVIDER_SPECS 注册表名构造 provider。
+
+    当前实装：
+      - "MiniMax" → MiniMaxProvider（Anthropic 兼容 /v1/messages）
+
+    其他 provider（anthropic / openai）→ NotImplementedError：
+    spec 已就位等待 DECISION 拍板后实装对应类。
+
+    Args:
+        name: PROVIDER_SPECS 中的 key
+        api_key: provider API key（MiniMax 必填）
+        **overrides: 透传给 provider 构造函数的 kwargs
+
+    Raises:
+        KeyError: 未知 provider 名
+        NotImplementedError: spec 已注册但 build_provider 尚未实装该 provider
+    """
+    if name not in PROVIDER_SPECS:
+        raise KeyError(
+            f"unknown provider: {name!r}; "
+            f"registered: {sorted(PROVIDER_SPECS.keys())}"
+        )
+    spec = PROVIDER_SPECS[name]
+    if name == "MiniMax":
+        return MiniMaxProvider(api_key=api_key, **overrides)
+    raise NotImplementedError(
+        f"provider {name!r} registered in PROVIDER_SPECS but "
+        f"build_provider() not implemented yet "
+        f"(spec.protocol={spec.protocol!r})"
+    )
 
 
 # ── Module-level state（测试 / CLI 注入）────────────────
