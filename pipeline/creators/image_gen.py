@@ -67,15 +67,22 @@ class ImageProvider(ABC):
 # ── MiniMax image-01 provider ──────────────────────────
 
 class MiniMaxImageProvider(ImageProvider):
-    """MiniMax image-01 provider（POST /v1/image_generation）。
+    """MiniMax 文生图 provider（POST /v1/image_generation）。
 
     接口来源：https://platform.minimaxi.com/docs/guides/image-generation
     返回 data.image_base64（list[str]，base64 encoded image bytes）。
+
+    两个支持的 model：
+      - image-01：基础版，1280×720（16:9）/ 1024×1024（1:1），~190KB JPEG
+      - image-01-live：**增强版**，1456×816（16:9）/ ~2 倍细节，~420KB JPEG
+                慢一点（实测 18-30s），但质量明显更好（2026-07-08 实测对比）
+
+    默认 image-01-live（注重质量的发布场景）。
     """
 
     DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
-    DEFAULT_MODEL = "image-01"
-    DEFAULT_TIMEOUT_S = 90.0
+    DEFAULT_MODEL = "image-01-live"
+    DEFAULT_TIMEOUT_S = 120.0  # image-01-live 比基础版慢 ~30%，加大超时
 
     # 支持的 aspect_ratio（docs 列出常用 1:1 / 16:9 / 9:16）
     VALID_ASPECT_RATIOS = frozenset({"1:1", "16:9", "9:16", "4:3", "3:4"})

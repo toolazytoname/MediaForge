@@ -338,7 +338,11 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
         now = datetime.now(timezone.utc).isoformat()
 
         # 3. 处理每条
-        _IMAGE_PLACEHOLDER_RE = re.compile(r"\[IMAGE:\s*([^\]]+?)\s*\]")
+        # 两种占位格式都支持：
+        #   A. [IMAGE: 说明]          —— 新生成的 essay prompt 输出
+        #   B. ![说明](images/inline-N.png) —— 已经被上一轮替换过（含 fixed 旧 md）
+        _IMAGE_NEW_RE = re.compile(r"\[IMAGE:\s*([^\]]+?)\s*\]")
+        _IMAGE_USED_RE = re.compile(r"!\[[^\]]*\]\(images/inline-(\d+)\.png\)")
         for c in todo:
             content_dir = Path(c.canonical_path).parent
             if not content_dir.exists():
@@ -349,10 +353,15 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
             try:
                 # ── 封面图 ──
                 cover_out = content_dir / "cover.png"
+                # 6 元素 prompt 结构（MiniMax docs 推荐）：
+                # [主体] + [场景/环境] + [风格] + [光照] + [构图] + [质量要求]
                 cover_prompt = (
-                    f"{c.title}. Minimal flat-design cover illustration, "
-                    f"wide 16:9 composition, no text, no border, "
-                    f"clean editorial style."
+                    f"{c.title} — 作为主体。\n"
+                    f"场景：抽象科技感背景，干净的渐变与几何元素，无具体产品。\n"
+                    f"风格：现代扁平化插画 + 微妙层次，专业编辑级。\n"
+                    f"光照：柔和漫射光，顶部轻度高光，无硬阴影。\n"
+                    f"构图：超宽 16:9，留白充足。\n"
+                    f"质量：高视觉密度，丰富细节，构图精致。"
                 )
                 if not c.cover_path:
                     generate_image(
@@ -365,9 +374,8 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
                         conn=conn,
                     )
 
-                # ── 文中插图（解析 [IMAGE: ...] 占位）──
+                # ── 文中插图 ──
                 canonical_md = (content_dir / "canonical.md").read_text(encoding="utf-8")
-                inline_markers = _IMAGE_PLACEHOLDER_RE.findall(canonical_md)[:4]  # 最多 4 张
                 images_dir = content_dir / "images"
                 inline_paths: list[str] = []
 
@@ -375,14 +383,19 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
                 if c.inline_images:
                     inline_paths = list(c.inline_images)
 
-                if inline_markers and not c.inline_images:
-                    for i, marker_prompt in enumerate(inline_markers, start=1):
+                # 检测到底有哪些占位：先看 A 格式（新生成），再看 B 格式（旧 md）
+                new_markers = _IMAGE_NEW_RE.findall(canonical_md)[:4]
+                if new_markers and not c.inline_images:
+                    # A 格式：生成新图，把 canonical.md 里的占位替换成 ![...](...)
+                    for i, marker_prompt in enumerate(new_markers, start=1):
                         inline_out = images_dir / f"inline-{i}.png"
-                        # 占位文本拼成完整 prompt
                         full_prompt = (
-                            f"{marker_prompt}. Flat-design technical illustration, "
-                            f"square 1:1 composition, no text labels, "
-                            f"clean vector style, neutral palette."
+                            f"{marker_prompt} — 作为主体。\n"
+                            f"场景：技术示意场景，干净背景，无干扰元素。\n"
+                            f"风格：扁平化信息图 + 微妙阴影，专业技术文档级。\n"
+                            f"光照：均匀漫射光，主体清晰可辨。\n"
+                            f"构图：方形 1:1 居中。\n"
+                            f"质量：信息密度高，构图简洁，视觉重点突出。"
                         )
                         generate_image(
                             full_prompt,
@@ -394,6 +407,23 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
                             conn=conn,
                         )
                         inline_paths.append(str(inline_out.relative_to(output_root)))
+                        # 替换 markdown 里的占位为真实引用
+                        rel = f"images/inline-{i}.png"
+                        canonical_md = canonical_md.replace(
+                            f"[IMAGE: {marker_prompt}]", f"![{marker_prompt}]({rel})", 1
+                        )
+                    (content_dir / "canonical.md").write_text(canonical_md, encoding="utf-8")
+                    print(f"  ↻ {c.id}: rewrote canonical.md with {len(new_markers)} image refs",
+                          file=sys.stderr)
+                elif not c.inline_images:
+                    # B 格式但 DB 里没记：图已经在文件里（之前手改留的），
+                    # 反向扫描出 inline-N.png 顺序，写回 inline_paths
+                    used = sorted(set(int(n) for n in _IMAGE_USED_RE.findall(canonical_md)))
+                    if used:
+                        for n in used:
+                            inline_paths.append(f"{content_dir.name}/images/inline-{n}.png")
+                        print(f"  ↻ {c.id}: discovered {len(used)} existing inline images from md",
+                              file=sys.stderr)
 
                 # 4. 写回 contents（封面 + inline 路径）
                 with conn:
