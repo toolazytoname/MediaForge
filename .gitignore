@@ -16,3 +16,5 @@ __pycache__/
 coverage.json
 htmlcov/
 .DS_Store
+# 探测脚本输出：含 API response 完整 body + base64 图片数据，敏感
+scripts/probe_*.last.json

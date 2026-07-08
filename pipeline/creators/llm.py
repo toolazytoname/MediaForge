@@ -43,6 +43,14 @@ MODEL_PRICES: dict[str, dict[str, float]] = {
     "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
     "MiniMax-M3": {"input": 0.30, "output": 1.20},
     "agnes-2.0-flash": {"input": 0.0, "output": 0.0},  # TODO: 以 agnes-ai.com 官方为准
+    # M-x：image 模型按张计费（不走 token 算式）
+    # docs: https://platform.minimaxi.com/docs/guides/image-generation
+    # 当前限时 $0/张；标准 $0.003/张（取保守值用于预算护栏）
+    "image-01": {
+        "input": 0.0,
+        "output": 0.0,
+        "per_image_usd": 0.003,
+    },
 }
 
 # 月度预算硬顶（USD）。生产从 config.budget.monthly_usd 读；测试可 patch。
