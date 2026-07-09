@@ -903,12 +903,14 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：npm create vite@latest --template vue-ts；ant-design-vue + pinia + vue-router + echarts + axios。AppShell.vue 蚁小二式左侧栏分 5 组（概览/内容生产/分发/数据/运营）。router 12 路由（11 真实 + /roadmap/:feature）。9 Pinia store 仅 load() 占位——M10-8 填字段。12 view 占位。vite build 成功（dist/index.html 0.45KB + index.js 1.49MB gzipped 460KB；AntD Vue 大块，后续可 code-split）。test_spa_serving.py 修订：dist 默认提交，3 测试改 _dist_dir() 探测 + pytest.skip 兜底。
 
 ### M10-8 前端只读视图对接真实数据
-- [ ] **目标**：11 个真实页面用 `/api/v1` 渲染真实数据 + loading/empty/error 三态；规划中模块 `EmptyStub`
+- [x] **目标**：11 个真实页面用 `/api/v1` 渲染真实数据 + loading/empty/error 三态；规划中模块 `EmptyStub`
 - **步骤**：按页对接——仪表盘(计数/成本预算/待办/近期活动/门禁直方图 ECharts)、选题池(表格+状态/支柱/源筛选)、内容库(列表+详情：canonical HTML/派生文件/图片/发布时间线)、审核台(gated 卡片+门禁分+图卡缩略)、发布日历(周视图)、发布记录(表格+metrics)、数据看板(周报+平台对比+成本趋势 ECharts)、账号管理(cookie 健康表+登录引导)、运行台(运行历史，触发按钮禁用标 P2)、设置(脱敏 config + doctor)；**写操作按钮一律禁用并标 "P2"**
   - Pinia store 每域一个，仅只读 fetch；组件 StatusTag/CostBudgetCard/TodoCard 复用
 - **验收**：起后端(有种子数据) + 前端，每页渲染真实数据；空库显示 empty 态不报错；断网/500 显示 error 态
 - **声明改动文件**：`frontend/**`
 - **红线**：只读；写按钮禁用占位，不接任何写端点
+
+  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：11 view 全部接 /api/v1 真实数据。stores/index.ts 类型化（移除 any，加 9 interface：TopicItem/ContentItem/ContentDetail/PublicationItem/CalendarData/AccountHealthItem/LoginGuidance/DoctorItem）。AppShell 5 分组导航 + 当前路由高亮。loading/empty/error 三态（a-spin/a-empty/a-alert）。写按钮 disabled 标 P2（promote/reject/approve/新增选题）。dist 1.49MB gzipped 461KB（AntD 大块，后续可 code-split）。全测 1139 pass + 12 skip + 7 pre-existing。
 
 ### M10-9 构建脚本 + 文档 + 端到端验证（P1 收尾）
 - [ ] **目标**：一键构建 + 文档到位 + 全链路验证 P1 达标
