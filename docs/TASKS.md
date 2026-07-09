@@ -793,7 +793,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 ---
 
 ### M10-0 契约修订 + 工程准备（纯文档/配置，先做）
-- [ ] **目标**：把「引入 SPA + npm 构建链」这项已获用户批准的契约变更落到文档，并准备好前端目录忽略规则，后续任务才不算「擅自改契约」
+- [x] **目标**：把「引入 SPA + npm 构建链」这项已获用户批准的契约变更落到文档，并准备好前端目录忽略规则，后续任务才不算「擅自改契约」
 - **步骤**：
   1. 改 `docs/TECH_SPEC.md §7`：技术栈段落加「FastAPI 提供 `/api/v1/*` JSON API，背后 SPA（`frontend/` 源码，Vite 构建到 `frontend/dist`，由 FastAPI StaticFiles + 客户端路由 catch-all 托管），**引入 npm 构建链**」；路由契约段注明「JSON 契约（见 M10 各 router），旧 htmx 路由标注 legacy、SPA 达 parity 后移除」；**保留不变量原文**「UI 不得直接写 SQL / 状态机 + 发布三重锁对 UI 同样生效」，并补一句「发布需 dry-run 先行 + 显式确认，排除于通用运行台」
   2. 改 `.gitignore`：加 `frontend/node_modules/`（`frontend/dist/` 默认**提交**，便于 `webui` 直开免构建；若后续嫌体积大再改策略）
@@ -801,6 +801,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **验收**：TECH_SPEC §7 与现实一致（承认 npm 构建链）；`.gitignore` 含 frontend/node_modules；**不改任何 pipeline/ 代码**
 - **声明改动文件**：`docs/TECH_SPEC.md`、`.gitignore`、`docs/GETTING_STARTED.md`
 - **红线**：只动 §7，**不许碰 §3/§4/§5**
+
+  ✅ 完成于 2026-07-09，commit 4a95a0d，备注：TECH_SPEC §7 改 53 行——技术栈分后端 FastAPI + 前端 SPA（Vue3/Vite/TS/AntD Vue/Pinia/Router/ECharts）+ npm 构建链声明；新增 17 行 JSON API 路由清单（dashboard/topics/sources/contents/review/publish/analytics/accounts/runs/settings）；旧 htmx 路由清单保留并标「deprecated，SPA parity 后移除」；不变量原文保留 + 补「publish 排除于通用运行台白名单」；错误格式分 JSON envelope vs htmx alert 两种。.gitignore 加 frontend/node_modules/（dist 默认提交注释说明）。GETTING_STARTED.md 新增 §13「前端构建」占位节（指向 M10-7 + M10-9）+ 目录索引同步。全测 1102 pass + 12 skip + 7 失败（全部 pre-existing——stash 验证过，与本任务无关）；git diff 仅命中声明文件集；§3/§4/§5 零改动（红线遵守）。
 
 ### M10-1 webui 接缝：抽 `deps.py` + `app.py` 瘦身（行为不变）
 - [ ] **目标**：把 `pipeline/webui/app.py` 里模块级 `_DB_PATH`/`_CONFIG_PATH`/`load_config`/`_conn()`/`_db()` 抽到新 `pipeline/webui/deps.py`，为 API router 与 SPA 托管铺接缝；**现有 htmx 路由与测试行为零变化**
