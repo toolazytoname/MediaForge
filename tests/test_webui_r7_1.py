@@ -74,9 +74,10 @@ class TestInitDbOnce:
         monkeypatch.setattr(db, "init_db", init_db_mock)
 
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app())
@@ -103,9 +104,10 @@ class TestInitDbOnce:
         monkeypatch.setattr(db, "init_db", init_db_mock)
 
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         TestClient(create_app())
@@ -129,9 +131,10 @@ class TestDashboardTimezone:
         datetime.now(timezone.utc).isoformat() 含 +00:00。
         """
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app())
@@ -151,9 +154,10 @@ class TestDashboardTimezone:
         """Dashboard 时间字符串可被 datetime.fromisoformat 解析为 UTC。"""
         import re
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app())
@@ -184,9 +188,10 @@ class TestNoDbSchemaBroken:
         minimal_config: AppConfig,
     ) -> None:
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app())

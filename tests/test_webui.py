@@ -72,9 +72,10 @@ def client(
 ) -> TestClient:
     """注入 db path + config，避免 webui 读默认 './state.db' / './config.yaml'。"""
     import pipeline.webui.app as app_mod
+    import pipeline.webui.deps as deps
 
-    monkeypatch.setattr(app_mod, "_DB_PATH", str(tmp_path / "state.db"))
-    monkeypatch.setattr(app_mod, "load_config",
+    monkeypatch.setattr(deps, "_DB_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setattr(deps, "load_config",
                         lambda *a, **kw: minimal_config)
 
     app = create_app()

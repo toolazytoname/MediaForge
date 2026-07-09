@@ -88,9 +88,10 @@ class TestOutputDirAutoCreate:
         assert not (tmp_path / "output").exists()
 
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app_safe(monkeypatch))
@@ -128,9 +129,10 @@ class TestOutputDirAutoCreate:
         (tmp_path / "output" / "2026-01-01" / "y.png").write_bytes(_MINIMAL_PNG)
 
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app_safe(monkeypatch))
@@ -152,9 +154,10 @@ class TestOutputDirAutoCreate:
         monkeypatch.chdir(tmp_path)
 
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app_safe(monkeypatch))
@@ -180,9 +183,10 @@ class TestStaticDirAlwaysMounted:
         不受 chdir 影响。
         """
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app_safe(monkeypatch))
@@ -208,9 +212,10 @@ class TestStaticFilesUnchanged:
         minimal_config: AppConfig,
     ) -> None:
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app_safe(monkeypatch))
@@ -224,9 +229,10 @@ class TestStaticFilesUnchanged:
         minimal_config: AppConfig,
     ) -> None:
         import pipeline.webui.app as app_mod
-        monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
         monkeypatch.setattr(
-            app_mod, "load_config", lambda *a, **kw: minimal_config,
+            deps, "load_config", lambda *a, **kw: minimal_config,
         )
 
         client = TestClient(create_app_safe(monkeypatch))

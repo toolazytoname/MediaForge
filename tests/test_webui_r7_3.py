@@ -83,9 +83,10 @@ def client(
     minimal_config: AppConfig,
 ) -> TestClient:
     import pipeline.webui.app as app_mod
-    monkeypatch.setattr(app_mod, "_DB_PATH", str(pre_init_db))
+    import pipeline.webui.deps as deps
+    monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
     monkeypatch.setattr(
-        app_mod, "load_config", lambda *a, **kw: minimal_config,
+        deps, "load_config", lambda *a, **kw: minimal_config,
     )
     return TestClient(app_mod.create_app())
 

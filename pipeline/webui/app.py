@@ -24,7 +24,6 @@
 from __future__ import annotations
 
 import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,31 +33,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from pipeline import db
-from pipeline.config import load_config
 from pipeline.models import ContentStatus, PublicationStatus, TopicStatus
+from pipeline.webui import deps
 from pipeline.webui.mdrender import md_to_html
 from pipeline.webui.sanitize import sanitize_config
 
 
-_DB_PATH = "state.db"
-_CONFIG_PATH = "./config.yaml"
-
-
 # ── 工具 ────────────────────────────────────────────────────
-
-
-def _conn() -> sqlite3.Connection:
-    return db.connect(_DB_PATH)
-
-
-@contextmanager
-def _db():
-    """conn 生命周期 context manager（自动 init + close）。"""
-    c = _conn()
-    try:
-        yield c
-    finally:
-        c.close()
 
 
 def _status_counts(conn: sqlite3.Connection) -> dict:
@@ -93,7 +74,7 @@ def create_app() -> FastAPI:
 
     # 应用启动时一次性建表（每请求跑 DDL 是浪费；create_app 内做完即可）
     # db.connect 不支持 contextmanager，手动 close
-    _init_c = db.connect(_DB_PATH)
+    _init_c = db.connect(deps._DB_PATH)
     try:
         db.init_db(_init_c)
     finally:
@@ -122,7 +103,7 @@ def create_app() -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request) -> HTMLResponse:
-        with _db() as conn:
+        with deps._db() as conn:
             counts = _status_counts(conn)
         return templates.TemplateResponse(
             request, "dashboard.html",
@@ -132,7 +113,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/status")
     def api_status() -> JSONResponse:
-        with _db() as conn:
+        with deps._db() as conn:
             return JSONResponse(_status_counts(conn))
 
     # ── 选题池 ─────────────────────────────────────────────
@@ -142,7 +123,7 @@ def create_app() -> FastAPI:
         request: Request,
         status: str | None = None,
     ) -> HTMLResponse:
-        with _db() as conn:
+        with deps._db() as conn:
             if status:
                 rows = db.get_topics_by_status(conn, status)
             else:
@@ -156,7 +137,7 @@ def create_app() -> FastAPI:
 
     @app.post("/topics/{topic_id}/promote", response_class=HTMLResponse)
     def topic_promote(topic_id: str) -> HTMLResponse:
-        with _db() as conn:
+        with deps._db() as conn:
             try:
                 db.transition(
                     conn, "topics", topic_id,
@@ -171,7 +152,7 @@ def create_app() -> FastAPI:
 
     @app.post("/topics/{topic_id}/reject", response_class=HTMLResponse)
     def topic_reject(topic_id: str) -> HTMLResponse:
-        with _db() as conn:
+        with deps._db() as conn:
             try:
                 db.transition(
                     conn, "topics", topic_id,
@@ -188,7 +169,7 @@ def create_app() -> FastAPI:
 
     @app.get("/review", response_class=HTMLResponse)
     def review(request: Request) -> HTMLResponse:
-        with _db() as conn:
+        with deps._db() as conn:
             gated = db.get_contents_by_status(
                 conn, ContentStatus.GATED.value,
             )
@@ -206,7 +187,7 @@ def create_app() -> FastAPI:
         """body: {decision: approve|reject, reason?}"""
         if decision not in ("approve", "reject"):
             return _alert(f"非法 decision: {decision!r}")
-        with _db() as conn:
+        with deps._db() as conn:
             try:
                 if decision == "approve":
                     db.transition(
@@ -251,7 +232,7 @@ def create_app() -> FastAPI:
         """
         from pipeline.webui.calendar import bucket_week
 
-        with _db() as conn:
+        with deps._db() as conn:
             pubs = []
             for st in PublicationStatus:
                 pubs.extend(db.get_publications_by_status(conn, st.value))
@@ -272,7 +253,7 @@ def create_app() -> FastAPI:
         TECH_SPEC §4 没有 reschedule 这条状态边——保留 scheduled_at 字段
         可变但 status 限定为 queued（发布中/已完成/失败/取消 的不能再改）。
         """
-        with _db() as conn:
+        with deps._db() as conn:
             try:
                 # R7-3：写 SQL 抽到 db.reschedule_publication
                 n = db.reschedule_publication(
@@ -293,7 +274,7 @@ def create_app() -> FastAPI:
         "/publications/{pub_id}/cancel", response_class=HTMLResponse
     )
     def pub_cancel(pub_id: str) -> HTMLResponse:
-        with _db() as conn:
+        with deps._db() as conn:
             try:
                 db.transition(
                     conn, "publications", pub_id,
@@ -312,7 +293,7 @@ def create_app() -> FastAPI:
         注意：不调真实 publish——发布由 `pipeline.run publish` 触发，
         且 publish.enabled=false 时整体阻断。三重锁天然生效。
         """
-        with _db() as conn:
+        with deps._db() as conn:
             try:
                 db.transition(
                     conn, "publications", pub_id,
@@ -329,7 +310,7 @@ def create_app() -> FastAPI:
     def content_detail(
         request: Request, content_id: str
     ) -> HTMLResponse:
-        with _db() as conn:
+        with deps._db() as conn:
             c = db.get_content(conn, content_id)
             if c is None:
                 raise HTTPException(404, "content not found")
@@ -349,13 +330,7 @@ def create_app() -> FastAPI:
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings(request: Request) -> HTMLResponse:
-        try:
-            cfg = load_config(_CONFIG_PATH)
-        except Exception as e:
-            cfg = None
-            err = str(e)
-        else:
-            err = None
+        cfg, err = deps.get_config()
         # 脱敏：把 webhook_url 等敏感字段值替换为 "***"
         sanitized = sanitize_config(cfg.model_dump()) if cfg else {}
         # cookie 健康状态（轻量级：只校验文件存在 + 格式合法；不实际探活）
@@ -382,7 +357,7 @@ def main() -> int:
     """启动入口（cmd_webui 调用）。"""
     import uvicorn
     try:
-        cfg = load_config(_CONFIG_PATH)
+        cfg = deps.load_config(deps._CONFIG_PATH)
         host = cfg.webui.host
         port = cfg.webui.port
     except Exception:

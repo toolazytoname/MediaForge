@@ -44,11 +44,12 @@ def tmp_db(tmp_path: Path, monkeypatch) -> Path:
     conn.close()
 
     import pipeline.webui.app as webui_app
-    monkeypatch.setattr(webui_app, "_DB_PATH", str(db_path))
+    import pipeline.webui.deps as deps
+    monkeypatch.setattr(deps, "_DB_PATH", str(db_path))
     # config 不重要：测试只关心路由存在 + 不报 500
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(_minimal_config_yaml(), encoding="utf-8")
-    monkeypatch.setattr(webui_app, "_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(deps, "_CONFIG_PATH", str(cfg_path))
     return tmp_path
 
 
