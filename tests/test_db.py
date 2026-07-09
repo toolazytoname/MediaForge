@@ -733,3 +733,184 @@ def test_repeated_legal_transitions_on_fresh_db(tmp_path):
     db.transition(c, "topics", t.id, TopicStatus.SCORED, TopicStatus.SELECTED)
     assert db.get_topic(c, t.id).status == TopicStatus.SELECTED
     c.close()
+
+
+# ── M10-2 增量：list_*/count_*/get_publications_by_content/recent_activity ────
+
+
+class TestListTopics:
+    """list_topics 按过滤+分页返回；空表/无匹配 → []。"""
+
+    def test_empty_returns_empty_list(self, conn):
+        assert db.list_topics(conn) == []
+
+    def test_returns_all_without_filter(self, conn):
+        for i in range(3):
+            db.insert_topic(conn, _topic(content_hash=f"h_list_{i}"))
+        rows = db.list_topics(conn)
+        assert len(rows) == 3
+        assert all(isinstance(r, Topic) for r in rows)
+
+    def test_filter_by_status(self, conn):
+        t1 = _topic(content_hash="h_a")
+        db.insert_topic(conn, t1)
+        db.transition(conn, "topics", t1.id, TopicStatus.RAW, TopicStatus.SCORED)
+        t2 = _topic(content_hash="h_b")
+        db.insert_topic(conn, t2)
+        scored = db.list_topics(conn, status=TopicStatus.SCORED.value)
+        assert len(scored) == 1
+        assert scored[0].id == t1.id
+
+    def test_filter_by_pillar(self, conn):
+        t_a = _topic(content_hash="h_pa", pillar="ai_daily")
+        t_b = _topic(content_hash="h_pb", pillar="finance")
+        db.insert_topic(conn, t_a)
+        db.insert_topic(conn, t_b)
+        out = db.list_topics(conn, pillar="finance")
+        assert [t.id for t in out] == [t_b.id]
+
+    def test_limit_offset(self, conn):
+        for i in range(5):
+            db.insert_topic(conn, _topic(content_hash=f"h_lo_{i}"))
+        page1 = db.list_topics(conn, limit=2, offset=0)
+        page2 = db.list_topics(conn, limit=2, offset=2)
+        assert len(page1) == 2 and len(page2) == 2
+        assert {t.id for t in page1}.isdisjoint({t.id for t in page2})
+
+    def test_invalid_filter_column_rejected(self, conn):
+        # 合法列不抛（sanity：上方 filter 测试已经覆盖）
+        db.list_topics(conn, source="rss:x")
+        # 非法列名走底层 helper 直接抛 ValueError
+        with pytest.raises(ValueError, match="column"):
+            db._build_filter_where(
+                db._TOPICS_FILTER_COLS, unknown_col="x"
+            )
+
+
+class TestCountTopics:
+    def test_empty(self, conn):
+        assert db.count_topics(conn) == 0
+
+    def test_with_filter(self, conn):
+        t = _topic(content_hash="h_c")
+        db.insert_topic(conn, t)
+        db.transition(conn, "topics", t.id, TopicStatus.RAW, TopicStatus.SCORED)
+        assert db.count_topics(conn) == 1
+        assert db.count_topics(conn, status=TopicStatus.SCORED.value) == 1
+        assert db.count_topics(conn, status=TopicStatus.SELECTED.value) == 0
+
+
+class TestListContents:
+    def test_empty(self, conn):
+        assert db.list_contents(conn) == []
+
+    def test_filter_pillar(self, conn):
+        # contents.topic_id UNIQUE → 不同 content 需不同 topic
+        t1 = _topic(content_hash="h_lc1")
+        t2 = _topic(content_hash="h_lc2")
+        db.insert_topic(conn, t1)
+        db.insert_topic(conn, t2)
+        c1 = _content(t1.id, pillar="ai_daily")
+        c2 = _content(t2.id, pillar="finance")
+        db.insert_content(conn, c1)
+        db.insert_content(conn, c2)
+        out = db.list_contents(conn, pillar="finance")
+        assert [c.id for c in out] == [c2.id]
+
+
+class TestCountContents:
+    def test_zero(self, conn):
+        assert db.count_contents(conn) == 0
+
+    def test_with_filter(self, conn):
+        topic = _topic(content_hash="h_cc")
+        db.insert_topic(conn, topic)
+        db.insert_content(conn, _content(topic.id))
+        assert db.count_contents(conn) == 1
+        assert db.count_contents(conn, pillar="ai_daily") == 1
+        assert db.count_contents(conn, pillar="finance") == 0
+
+
+class TestListPublications:
+    def test_filter_by_status(self, conn):
+        topic = _topic(content_hash="h_lp")
+        db.insert_topic(conn, topic)
+        content = _content(topic.id)
+        db.insert_content(conn, content)
+        # 不同 account_id 避免 UNIQUE(content_id, platform, account_id) 冲突
+        db.insert_publication(conn, _pub(content.id, account_id="a_q"))
+        db.insert_publication(conn, _pub(content.id, account_id="a_p"))
+        # a_q 走完整链路 queued→publishing→published；a_p 保持 queued
+        rows = db.get_publications_by_content(conn, content.id)
+        a_q = next(r for r in rows if r.account_id == "a_q")
+        db.transition(
+            conn, "publications", a_q.id,
+            PublicationStatus.QUEUED, PublicationStatus.PUBLISHING,
+        )
+        db.transition(
+            conn, "publications", a_q.id,
+            PublicationStatus.PUBLISHING, PublicationStatus.PUBLISHED,
+        )
+        out = db.list_publications(conn, status=PublicationStatus.QUEUED.value)
+        assert len(out) == 1
+        assert out[0].account_id == "a_p"
+
+    def test_filter_by_platform(self, conn):
+        topic = _topic(content_hash="h_lpf")
+        db.insert_topic(conn, topic)
+        content = _content(topic.id)
+        db.insert_content(conn, content)
+        db.insert_publication(conn, _pub(content.id, platform="x", account_id="a1"))
+        db.insert_publication(conn, _pub(content.id, platform="toutiao", account_id="a1"))
+        out = db.list_publications(conn, platform="toutiao")
+        assert len(out) == 1
+        assert out[0].platform == "toutiao"
+
+
+class TestGetPublicationsByContent:
+    def test_returns_empty_for_unknown_content(self, conn):
+        assert db.get_publications_by_content(conn, "c_nope") == []
+
+    def test_returns_sorted_by_scheduled_at(self, conn):
+        topic = _topic(content_hash="h_gpb")
+        db.insert_topic(conn, topic)
+        content = _content(topic.id)
+        db.insert_content(conn, content)
+        p_early = _pub(content.id, account_id="a1", scheduled_at="2026-07-10T10:00:00+00:00")
+        p_late = _pub(content.id, account_id="a2", scheduled_at="2026-07-12T10:00:00+00:00")
+        db.insert_publication(conn, p_late)
+        db.insert_publication(conn, p_early)
+        out = db.get_publications_by_content(conn, content.id)
+        assert [p.scheduled_at for p in out] == [p_early.scheduled_at, p_late.scheduled_at]
+
+
+class TestRecentActivity:
+    def test_empty(self, conn):
+        assert db.recent_activity(conn) == []
+
+    def test_unions_three_tables(self, conn):
+        topic = _topic(content_hash="h_ra")
+        db.insert_topic(conn, topic)
+        content = _content(topic.id)
+        db.insert_content(conn, content)
+        pub = _pub(content.id)
+        db.insert_publication(conn, pub)
+        rows = db.recent_activity(conn)
+        kinds = {r["kind"] for r in rows}
+        assert kinds == {"topic", "content", "publication"}
+        for r in rows:
+            assert {"id", "kind", "status", "updated_at"} <= set(r.keys())
+
+    def test_ordering_by_updated_at_desc(self, conn):
+        t = _topic(content_hash="h_rao")
+        db.insert_topic(conn, t)
+        # 直接 update_at 改一个
+        conn.execute(
+            "UPDATE topics SET updated_at=? WHERE id=?",
+            ("2026-01-01T00:00:00+00:00", t.id),
+        )
+        conn.commit()
+        t2 = _topic(content_hash="h_rao2")
+        db.insert_topic(conn, t2)
+        out = db.recent_activity(conn, limit=2)
+        assert out[0]["id"] == t2.id  # 新的（默认 created_at 更新）排前

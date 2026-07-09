@@ -486,6 +486,205 @@ def sum_llm_cost_this_month(
     return float(row["used"])
 
 
+# ── 只读列表/筛选查询助手（M10-2 引入） ──────────────────────
+#
+# 全部仅 SELECT，不写库；为 webui API（dashboard/topics/contents/
+# publications 列表页）提供过滤+分页的查询入口。空表 / 无匹配 → 空 list。
+# 复用上方私有 _row_to_* mapper，保持 dataclass 构造一致性。
+#
+# 设计要点：
+#   - 所有函数接受 keyword-only 过滤参数（status/pillar/source/platform），
+#     简化调用方代码（不必记得位置参数顺序）
+#   - limit/offset 默认值保守（50/0）防止「没传 limit 把全表拉回」的内存风险
+#   - 不做 status 白名单校验（filters 透传给 SQL，调用方负责；与既有
+#     count_by_status 的白名单策略不同，因为列表查询允许任意 status 子集，
+#     而 status 是 enum 调用方约定）
+
+# 各表的「可过滤列」白名单——防止 SQL 注入。filter 列名字符串硬编码到 SQL。
+_TOPICS_FILTER_COLS = frozenset({"status", "pillar", "source"})
+_CONTENTS_FILTER_COLS = frozenset({"status", "pillar"})
+_PUBS_FILTER_COLS = frozenset({"status", "platform"})
+
+
+def _build_filter_where(
+    conn_columns: frozenset[str], **filters,
+) -> tuple[str, list]:
+    """从 kwargs 过滤参数构造 WHERE 子句 + 绑定值列表。
+
+    只接受 conn_columns 白名单内的列名；其它列抛 ValueError。
+    任意参数为 None → 不加条件。
+    返回 ("WHERE ..." | "", [vals])。注意「无任何过滤」返回空串而非
+    "WHERE 1=1"——简化调用方拼接。
+    """
+    clauses = []
+    vals = []
+    for col, val in filters.items():
+        if col not in conn_columns:
+            raise ValueError(
+                f"_build_filter_where: column {col!r} not in "
+                f"{sorted(conn_columns)}"
+            )
+        if val is None:
+            continue
+        clauses.append(f'"{col}" = ?')
+        vals.append(val)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where, vals
+
+
+def list_topics(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    pillar: str | None = None,
+    source: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Topic]:
+    """按过滤条件列出 topics（按 updated_at DESC 排序，LIMIT/OFFSET）。
+
+    只读 SELECT。limit/offset 由调用方负责「不爆内存」——limit 上限
+    由 webui API 层再做一次硬封顶（默认 200）。
+    """
+    where, vals = _build_filter_where(
+        _TOPICS_FILTER_COLS, status=status, pillar=pillar, source=source,
+    )
+    rows = conn.execute(
+        f'SELECT * FROM topics {where} '
+        f'ORDER BY updated_at DESC, id LIMIT ? OFFSET ?',
+        (*vals, limit, offset),
+    ).fetchall()
+    return [_row_to_topic(r) for r in rows]
+
+
+def count_topics(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    pillar: str | None = None,
+    source: str | None = None,
+) -> int:
+    """与 list_topics 对应的计数（同样过滤条件）。"""
+    where, vals = _build_filter_where(
+        _TOPICS_FILTER_COLS, status=status, pillar=pillar, source=source,
+    )
+    row = conn.execute(
+        f'SELECT COUNT(*) AS n FROM topics {where}', vals,
+    ).fetchone()
+    return int(row["n"])
+
+
+def list_contents(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    pillar: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Content]:
+    """按过滤条件列出 contents（按 updated_at DESC 排序）。"""
+    where, vals = _build_filter_where(
+        _CONTENTS_FILTER_COLS, status=status, pillar=pillar,
+    )
+    rows = conn.execute(
+        f'SELECT * FROM contents {where} '
+        f'ORDER BY updated_at DESC, id LIMIT ? OFFSET ?',
+        (*vals, limit, offset),
+    ).fetchall()
+    return [_row_to_content(r) for r in rows]
+
+
+def count_contents(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    pillar: str | None = None,
+) -> int:
+    """与 list_contents 对应的计数。"""
+    where, vals = _build_filter_where(
+        _CONTENTS_FILTER_COLS, status=status, pillar=pillar,
+    )
+    row = conn.execute(
+        f'SELECT COUNT(*) AS n FROM contents {where}', vals,
+    ).fetchone()
+    return int(row["n"])
+
+
+def list_publications(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    platform: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Publication]:
+    """按过滤条件列出 publications（按 scheduled_at ASC 排序——日历语义）。
+
+    注意：contents/topics 用 updated_at DESC（最近活动优先），publications
+    用 scheduled_at ASC（即将发布的在前），这是 M3-1 / M4-4 的日历语义。
+    """
+    where, vals = _build_filter_where(
+        _PUBS_FILTER_COLS, status=status, platform=platform,
+    )
+    rows = conn.execute(
+        f'SELECT * FROM publications {where} '
+        f'ORDER BY scheduled_at ASC, id LIMIT ? OFFSET ?',
+        (*vals, limit, offset),
+    ).fetchall()
+    return [_row_to_publication(r) for r in rows]
+
+
+def get_publications_by_content(
+    conn: sqlite3.Connection, content_id: str,
+) -> list[Publication]:
+    """列出一条 content 的所有 publications（按 scheduled_at ASC）。
+
+    内容详情页（M10-4 内容详情）需要展示「这条内容排到了哪些平台什么时间」。
+    不存在该 content → 空 list（FK 保证不会出错，只是空）。
+    """
+    rows = conn.execute(
+        "SELECT * FROM publications WHERE content_id=? "
+        "ORDER BY scheduled_at ASC",
+        (content_id,),
+    ).fetchall()
+    return [_row_to_publication(r) for r in rows]
+
+
+def recent_activity(
+    conn: sqlite3.Connection, *, limit: int = 20,
+) -> list[dict]:
+    """三表（topics/contents/publications）最近 updated_at 活动合并。
+
+    返回 list[dict]，每项：
+        {id, kind, status, updated_at}
+    ORDER BY updated_at DESC, LIMIT ?。
+
+    只读 UNION——三表结构不强制同构（kind 标来源表区分）。
+    用于 webui dashboard 的「近期活动」面板。
+    """
+    rows = conn.execute(
+        """
+        SELECT id, 'topic' AS kind, status, updated_at FROM topics
+        UNION ALL
+        SELECT id, 'content' AS kind, status, updated_at FROM contents
+        UNION ALL
+        SELECT id, 'publication' AS kind, status, updated_at FROM publications
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "kind": r["kind"],
+            "status": r["status"],
+            "updated_at": r["updated_at"],
+        }
+        for r in rows
+    ]
+
+
 # ── 状态机 ─────────────────────────────────────────────────
 
 def transition(
