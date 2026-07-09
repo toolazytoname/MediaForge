@@ -839,7 +839,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：db.py 增 7 函数（list_topics/contents/publications × 3 + count_topics/contents × 2 + get_publications_by_content + recent_activity）+ `_build_filter_where` 私有 helper（白名单 frozenset 防注入；None 透传）。db_reads.py 新建 6 函数（row_to_metric / get_latest_metric / get_metrics_series / llm_cost_by_stage / llm_cost_by_day / platform_metric_totals）。test_db.py 增 19 用例 + test_db_reads.py 新建 15 用例。全测 1073 pass + 12 skip + 7 pre-existing。**bug 修**：llm_cost_by_day 初版 since_iso 没减 days 天，第一轮 verify 抓出已修。
 
 ### M10-3 序列化层：`serialize.py`（dataclass→dict + 内容目录枚举）
-- [ ] **目标**：统一把 frozen dataclass 序列化成 API JSON，并提供内容输出目录的文件/图片只读枚举
+- [x] **目标**：统一把 frozen dataclass 序列化成 API JSON，并提供内容输出目录的文件/图片只读枚举
 - **步骤**：
   1. 新建 `pipeline/webui/serialize.py`：`topic_dict/content_dict/pub_dict/metric_dict`（字段 1:1；`formats`/`inline_images` 转 list，`gate_scores` 转 obj|null，`metric_dict` 默认丢 `raw`）
   2. `list_content_files(content) -> list[dict]`：读 `output/<date>/<id>/` 枚举 `toutiao.md`/`xiaohongshu/*`/`x/thread.md` 等（**只读文件系统**，目录不存在返回 `[]`）
@@ -848,6 +848,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **验收**：`tests/webui/test_serialize.py` 覆盖各 `*_dict` 字段完整性 + 文件枚举（有/无目录）+ 路径越狱被拒（`../` 逃逸 raise）
 - **声明改动文件**：`pipeline/webui/serialize.py`(新)、`tests/webui/test_serialize.py`(新)
 - **红线**：P1 只做只读序列化 + 枚举；写接口写好但不接路由
+
+  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：serialize.py 240 行——topic_dict/content_dict/pub_dict（tuple→list + gate_scores dict|None 透传）+ metric_dict(include_raw) 默认丢 raw + list_content_files 枚举 15 已知派生路径（目录不存在全 exists=False）+ content_image_urls cover/inline 转 /output/<path> URL + write_canonical_jailed tmp→rename + _safe_resolve 越狱防护两层（NUL+normpath .. 解析）。tests/webui/test_serialize.py 新建 28 测试覆盖各函数 + 越狱边界。全测 1101 pass + 12 skip + 7 pre-existing。**bug 修**：_safe_resolve 初版 Path.absolute() 不解析 ..——测试 `tmp_path/../evil` 逃过前缀检查；改用 os.path.normpath 归一化后再 .relative_to。
 
 ### M10-4 只读 API（一）：dashboard / topics / sources / contents / review
 - [ ] **目标**：`/api/v1` 前五个域的**只读** router 落地
