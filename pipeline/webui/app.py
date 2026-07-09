@@ -35,6 +35,7 @@ from fastapi.templating import Jinja2Templates
 from pipeline import db
 from pipeline.models import ContentStatus, PublicationStatus, TopicStatus
 from pipeline.webui import deps
+from pipeline.webui.api import api_router
 from pipeline.webui.mdrender import md_to_html
 from pipeline.webui.sanitize import sanitize_config
 
@@ -79,6 +80,10 @@ def create_app() -> FastAPI:
         db.init_db(_init_c)
     finally:
         _init_c.close()
+
+    # M10-4 /api/v1 JSON API（dashboard/topics/sources/contents/review）
+    # 旧 htmx 路由仍保留——SPA parity 后移除
+    app.include_router(api_router)
 
     # /output 静态目录（只读）—— 工厂时挂载（同步，幂等）
     # R7-2 修复：移除 `if exists` 条件，启动时自动 mkdir；这样流水线后建
