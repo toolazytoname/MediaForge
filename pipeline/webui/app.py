@@ -104,6 +104,16 @@ def create_app() -> FastAPI:
         name="static",
     )
 
+    # M10-6 SPA 构建产物 frontend/dist/assets（Vite 输出）——目录不存在则跳过
+    # 注意：/assets 必须挂在 catch-all 之前，否则 catch-all 抢先匹配
+    assets_dir = base.parent.parent / "frontend" / "dist" / "assets"
+    if assets_dir.is_dir():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(assets_dir)),
+            name="spa-assets",
+        )
+
     # ── Dashboard / API ────────────────────────────────────
 
     @app.get("/", response_class=HTMLResponse)
@@ -350,6 +360,36 @@ def create_app() -> FastAPI:
                 "err": err,
                 "cookie_health": cookie_health,
             },
+        )
+
+    # ── M10-6 SPA 客户端路由 catch-all ────────────────────────
+    # 必须在所有具体路由之后注册——FastAPI 按注册顺序匹配。
+    # 命中条件：路径不以 /api /output /static /assets 开头；
+    # dist 存在 → 返回 dist/index.html；不存在 → 返回构建提示页。
+    spa_index = base.parent.parent / "frontend" / "dist" / "index.html"
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa_catch_all(full_path: str) -> HTMLResponse:
+        # 防御：理论上不应该命中这些前缀（前面的路由已匹配）
+        if (full_path.startswith("api/")
+                or full_path.startswith("output/")
+                or full_path.startswith("static/")
+                or full_path.startswith("assets/")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        if spa_index.is_file():
+            return HTMLResponse(
+                spa_index.read_text(encoding="utf-8"),
+                status_code=200,
+            )
+        # dist 缺失：返回构建提示页（不 500）
+        return HTMLResponse(
+            "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            "<title>MediaForge</title></head><body>"
+            "<h1>MediaForge frontend not built</h1>"
+            "<p>Run <code>cd frontend && npm ci && npm run build</code>, "
+            "or use the legacy htmx UI at <a href='/topics'>/topics</a>.</p>"
+            "</body></html>",
+            status_code=200,
         )
 
     return app
