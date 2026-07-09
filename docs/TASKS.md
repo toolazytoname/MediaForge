@@ -866,7 +866,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：5 子 router + 1 组合 router，11 个 GET 端点。dashboard 聚合 6 字段（counts/todos/budget/activity/histogram/correlation，复用 weekly_report.collect_weekly_report）；topics/contents 走 db.list_* 过滤分页 + get_by_id 404 envelope；sources 走 cfg.sources；review 仅 gated 状态。app.py 加 `include_router(api_router)` 一行。tests/webui/test_api_m10_4.py 13 用例覆盖路由 + 过滤 + 分页 + 404 + tuple→list + canonical HTML 渲染。全测 1114 pass + 12 skip + 7 pre-existing。
 
 ### M10-5 只读 API（二）：publish / analytics / accounts / runs / settings
-- [ ] **目标**：`/api/v1` 其余域的只读 router
+- [x] **目标**：`/api/v1` 其余域的只读 router
 - **步骤**：`publish.py`/`analytics.py`/`accounts.py`/`runs.py`/`settings.py`：
   - `GET /publish/calendar?week=`（复用 `bucket_week`）；`GET /publish/records?status=`（`list_publications` + 可带 latest metric）
   - `GET /analytics/weekly`（序列化 `collect_weekly_report()`）；`/analytics/cost?group=stage|day`（`llm_cost_by_*`）；`/analytics/publications/{id}/metrics`（`get_latest_metric`+`get_metrics_series`）；`/analytics/platforms`（`platform_metric_totals` 或周报 top_by_platform）
@@ -876,6 +876,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **验收**：各 `tests/webui/test_api_*.py` 断言 JSON + 脱敏（settings 无明文 key）+ `publish not in STAGE_WHITELIST`
 - **声明改动文件**：`pipeline/webui/api/{publish,analytics,accounts,runs,settings}.py`(新)、`pipeline/webui/runner_bridge.py`(新，仅 registry + 白名单常量，_execute 可先写不接线)、对应 tests(新)
 - **红线**：只读；`publish` 绝不进 `STAGE_WHITELIST`
+
+  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：5 router 落地（publish/analytics/accounts/runs/settings）；api_router 加 5 子 router include。STAGE_WHITELIST = {ingest/score/create/gate/derivative/review/schedule/collect/generate-images}——publish 排除。tests 19 用例覆盖 4 路由 + 5 runs 路径（含 publish 400 + 白名单 stage 501 + get 404）+ 白名单锁死断言。**2 bug 修**：① publish/calendar 误用 bucket.days.date（实际是 date 列表）→ 改 bucket.by_day；② settings.run_doctor 返回 CheckResult dataclass（非 tuple）→ 改 r.name/r.ok/r.hint。全测 1133 pass + 12 skip + 7 pre-existing。
 
 ### M10-6 SPA 托管接线：`app.py` mount + catch-all
 - [ ] **目标**：FastAPI 能托管 Vite 构建产物 `frontend/dist`，客户端路由可用，且不遮蔽 API/output/static
