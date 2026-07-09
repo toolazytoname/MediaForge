@@ -527,6 +527,8 @@
 
 ---
 
+> ⚠️ **U7-1 ~ U7-6 已被 M10 取代（2026-07-09，用户决策）**：改按「蚁小二」形态用 **Vue3 + Ant Design Vue SPA** 重做整个前端外壳。U7 系列（驾驶舱 / 运行台 / 图卡预览 / vendor htmx / 日志页 / UI 发布）的诉求**全部并入 M10**（见本文件末尾）。**不要再做 U7-1~U7-6**——它们保留在此仅作历史与需求出处。当前应认领的第一个任务是 **M10-0**。
+
 ### U7-1 Dashboard 升级：从三张裸表 → 运营驾驶舱（HIGH，体验核心）
 - [ ] **目标**：打开首页 30 秒看懂「系统在干什么、花了多少钱、有没有出问题、有什么待我处理」，不再只是三张 status 计数表
 - **错在哪**：`pipeline/webui/templates/dashboard.html` 现在只有 topics/contents/publications 三张 `status→count` 表（见文件全文 36 行），**没有成本、没有预算余量、没有告警、没有待办、没有近期活动、计数不可点击钻取**。运营者看不出任何有价值信息
@@ -683,6 +685,8 @@
 
 ---
 
+> ⚠️ **A8-1 ~ A8-4 已被 M10 取代（2026-07-09，用户决策）**：管理后台 CRUD（选题录入 / 内容编辑 / 手动排期 / 信息架构整合）并入 **M10 P2**（写操作阶段）。**不要再做 A8-1~A8-4**——保留仅作需求出处。
+
 ### A8-1 选题手动录入（MEDIUM，管理后台 CRUD 第一块）
 - [ ] **目标**：在 Web 控制台手动新增一条选题（用户自己发现的热点），不必等 RSS 抓
 - **背景**：现在 topics 只能由 `ingest` 从数据源抓入。用户要「增」的能力——手动录入一条 title/url，进入正常 score 流程
@@ -766,4 +770,148 @@
 - **参考**：M1-3 DECISION NEEDED；TECH_SPEC §5.3；HARD_PARTS §4
 
   ✅ 完成于 2026-07-07，commit <本 commit>，备注：tests/test_openai_provider.py 新增 18 用例（构造 5 + from_env 6 + call 7）+ test_provider_specs.py 5 条更新（4→5 entries、agni spec/price/build）+ test_doctor.py 加 agnes_env_passes + test_minimax_provider 3 个 setup 测试加 delenv AGNES/OPENAI 兜底。**真实冒烟**：ingest 36 → score 14 processed / 5 selected（topic_dedup 29KB 超 agnes 上下文 404，**M1-7 设计的静默 fallback 兜住，正常继续**）→ create 4 ok / 1 fail (timeout) → gate 4 discarded（占位锚点严，全部 < 24 分）。**0.42 USD / 完整 round-trip**（4 篇 3541-4109 字 canonical 产出）。**契约零变更**：models.py / SQL schema / Adapter 签名 / TECH_SPEC §3/4/5 一律不动；只动 llm.py + config.yaml + 三个测试文件。**已知限制**：agni 上下文窗口较小（topic_dedup 一次性喂 36 条超限），M1-8 评估文档建议过按需 chunk；当下语义去重静默 fallback 兜底，单调降级不阻塞。
+
+---
+
+## M10 — Web 控制台 v3：「蚁小二」形态 SPA（2026-07-09 追加，用户驱动）
+
+> **缘起**：用户判定现有 htmx webui「没法用」，参考成熟商业产品 **蚁小二**（yixiaoer.cn，自媒体多平台多账号分发管理工具）的产品形态，把控制台重做成左侧栏 App Shell 管理后台。**已拍板**：① 前端栈 = **Vue 3 + Vite + TypeScript + Ant Design Vue + Pinia + Vue Router + ECharts**（独立 SPA，后端加 `/api/v1/*` JSON API）；② 范围 = **真实能力优先**（借蚁小二 IA 搭外壳，只把后端真实支撑的页做实，云托管/团队/私信/RPA/采集源等无后端模块留「规划中」占位）；③ 首期 = **外壳 + 真实只读数据**。完整设计见 `/Users/lazy/.claude/plans/curried-giggling-hammock.md`。
+>
+> **取代关系**：M10 取代 U7-1~U7-6、A8-1~A8-4（前端诉求全部并入）。写操作/发布留 P2~P4。
+>
+> **执行者注意（弱模型必读）**：同 M7/M8 规则——严格照「怎么改」，**不许改契约**（models.py 字段、SQLite schema、`PublisherAdapter`/`SourceAdapter` 签名、状态机转移表、TECH_SPEC §3/§4/§5 一律不动）。**新增 db 只读 SELECT 查询是允许的**（增量，R7-3 有先例）。API 层**不裸写 SQL**，写操作走 `db.transition()`/既有编排。改动前 `git pull` 对齐；每任务**独立 commit** + `python -m pytest tests/ -q` 全绿才算完成；每任务只改其「声明改动文件」集（自治协议客观闸）。
+
+### 🧭 M10 执行顺序（先做 P1，逐个独立交付）
+
+```
+P1（页面架构 + 真实只读）：M10-0 → M10-1 → M10-2 → M10-3 → M10-4 → M10-5 → M10-6 → M10-7 → M10-8 → M10-9
+P2（交互与写操作 + 运行台）：M10-P2-*（见末尾大纲）
+P3（按发布类型做深）：M10-P3-*
+P4（UI 发布，最高危，最后）：M10-P4-*
+```
+
+---
+
+### M10-0 契约修订 + 工程准备（纯文档/配置，先做）
+- [ ] **目标**：把「引入 SPA + npm 构建链」这项已获用户批准的契约变更落到文档，并准备好前端目录忽略规则，后续任务才不算「擅自改契约」
+- **步骤**：
+  1. 改 `docs/TECH_SPEC.md §7`：技术栈段落加「FastAPI 提供 `/api/v1/*` JSON API，背后 SPA（`frontend/` 源码，Vite 构建到 `frontend/dist`，由 FastAPI StaticFiles + 客户端路由 catch-all 托管），**引入 npm 构建链**」；路由契约段注明「JSON 契约（见 M10 各 router），旧 htmx 路由标注 legacy、SPA 达 parity 后移除」；**保留不变量原文**「UI 不得直接写 SQL / 状态机 + 发布三重锁对 UI 同样生效」，并补一句「发布需 dry-run 先行 + 显式确认，排除于通用运行台」
+  2. 改 `.gitignore`：加 `frontend/node_modules/`（`frontend/dist/` 默认**提交**，便于 `webui` 直开免构建；若后续嫌体积大再改策略）
+  3. `docs/GETTING_STARTED.md` 末尾加一节「前端构建」：`cd frontend && npm ci && npm run build`（此时 frontend 尚不存在，先写步骤占位，M10-9 落实）
+- **验收**：TECH_SPEC §7 与现实一致（承认 npm 构建链）；`.gitignore` 含 frontend/node_modules；**不改任何 pipeline/ 代码**
+- **声明改动文件**：`docs/TECH_SPEC.md`、`.gitignore`、`docs/GETTING_STARTED.md`
+- **红线**：只动 §7，**不许碰 §3/§4/§5**
+
+### M10-1 webui 接缝：抽 `deps.py` + `app.py` 瘦身（行为不变）
+- [ ] **目标**：把 `pipeline/webui/app.py` 里模块级 `_DB_PATH`/`_CONFIG_PATH`/`load_config`/`_conn()`/`_db()` 抽到新 `pipeline/webui/deps.py`，为 API router 与 SPA 托管铺接缝；**现有 htmx 路由与测试行为零变化**
+- **错在哪/为何**：现有 `app.py`（393 行）把 DB 路径常量、config 加载、DB 连接上下文都放在自己模块里，测试靠 `monkeypatch.setattr(app, "_DB_PATH", …)`。API router 若也 `from app import` 会循环依赖；抽到 `deps.py` 后 router 与 app 都从 deps 导入，override 种子仍生效
+- **步骤**：
+  1. 新建 `pipeline/webui/deps.py`：搬 `_DB_PATH`/`_CONFIG_PATH`、`get_conn()`（= `db.connect(_DB_PATH)`）、`_db()` contextmanager、`get_config()`（= `load_config(_CONFIG_PATH)`，异常返回 None + err）。**保持同名**便于 monkeypatch
+  2. `app.py` 改为 `from . import deps` 并引用 `deps._DB_PATH` 等；删掉自己那份定义；旧 htmx 路由逻辑不动
+  3. 现有 `tests/test_webui*.py` 里 `monkeypatch.setattr(app_mod, "_DB_PATH", …)` 若因搬家失效 → 改指向 `deps`（**最小改动，不改断言**）
+- **验收**：`python -m pytest tests/test_webui*.py -q` 全绿；`python -m pipeline.run webui` 仍能起、旧页面仍在
+- **声明改动文件**：`pipeline/webui/app.py`、`pipeline/webui/deps.py`(新)、`tests/test_webui*.py`（仅 monkeypatch target 调整）
+- **红线**：不改任何路由的**行为/返回**；纯搬家
+
+### M10-2 只读查询层：`db.py` 列表/关联查询 + `db_reads.py` metrics/llm 查询
+- [ ] **目标**：补齐 UI 需要但现在缺失的**只读** SELECT 查询（全部增量，零 schema 变更）
+- **步骤**：
+  1. `pipeline/db.py`（复用私有 `_row_to_*`，紧挨现有 `get_*_by_status`）新增：
+     - `list_topics(conn, *, status=None, pillar=None, source=None, limit=50, offset=0) -> list[Topic]` + `count_topics(conn, *, status=None, pillar=None, source=None) -> int`
+     - `list_contents(conn, *, status=None, pillar=None, limit=50, offset=0) -> list[Content]` + `count_contents(...)`
+     - `list_publications(conn, *, status=None, platform=None, limit=50, offset=0) -> list[Publication]`
+     - `get_publications_by_content(conn, content_id) -> list[Publication]`（ORDER BY scheduled_at）
+     - `recent_activity(conn, *, limit=20) -> list[dict]`（topics/contents/publications 的 (id,kind,status,updated_at) UNION，ORDER BY updated_at DESC）
+  2. 新建 `pipeline/db_reads.py`（metrics/llm 无现成 mapper，独立成文件避免 db.py 继续膨胀）：
+     - `row_to_metric(row) -> Metric`
+     - `get_latest_metric(conn, publication_id) -> Metric | None`、`get_metrics_series(conn, publication_id) -> list[Metric]`
+     - `llm_cost_by_stage(conn, *, since_iso=None, until_iso=None) -> list[dict]`（GROUP BY stage：calls/cost/in/out tokens）
+     - `llm_cost_by_day(conn, *, days=30, now=None) -> list[dict]`
+     - `platform_metric_totals(conn) -> list[dict]`（publications LEFT JOIN metrics，仅 published，GROUP BY platform）
+- **验收**：`tests/test_db_reads.py` + `tests/test_db.py` 增量覆盖每个新函数（造数据→断言返回）；全 SELECT，**无 UPDATE/schema 变更**
+- **声明改动文件**：`pipeline/db.py`、`pipeline/db_reads.py`(新)、`tests/test_db.py`、`tests/test_db_reads.py`(新)
+- **红线**：只读；不改 schema、不改现有查询签名
+
+### M10-3 序列化层：`serialize.py`（dataclass→dict + 内容目录枚举）
+- [ ] **目标**：统一把 frozen dataclass 序列化成 API JSON，并提供内容输出目录的文件/图片只读枚举
+- **步骤**：
+  1. 新建 `pipeline/webui/serialize.py`：`topic_dict/content_dict/pub_dict/metric_dict`（字段 1:1；`formats`/`inline_images` 转 list，`gate_scores` 转 obj|null，`metric_dict` 默认丢 `raw`）
+  2. `list_content_files(content) -> list[dict]`：读 `output/<date>/<id>/` 枚举 `toutiao.md`/`xiaohongshu/*`/`x/thread.md` 等（**只读文件系统**，目录不存在返回 `[]`）
+  3. `content_image_urls(content) -> dict`：由 `cover_path`/`inline_images` 生成 `/output/...` URL
+  4. （**为 P2 预留、本期先写但不接线**）`write_canonical_jailed(content, markdown) -> int`：路径越狱防护（解析绝对路径必须以该 content 输出目录为前缀）+ tmp→rename 原子写。**M10 P1 不暴露此写接口**
+- **验收**：`tests/webui/test_serialize.py` 覆盖各 `*_dict` 字段完整性 + 文件枚举（有/无目录）+ 路径越狱被拒（`../` 逃逸 raise）
+- **声明改动文件**：`pipeline/webui/serialize.py`(新)、`tests/webui/test_serialize.py`(新)
+- **红线**：P1 只做只读序列化 + 枚举；写接口写好但不接路由
+
+### M10-4 只读 API（一）：dashboard / topics / sources / contents / review
+- [ ] **目标**：`/api/v1` 前五个域的**只读** router 落地
+- **步骤**：新建 `pipeline/webui/api/__init__.py`（`api_router = APIRouter(prefix="/api/v1")` 并 include 各子 router）+ `dashboard.py`/`topics.py`/`contents.py`/`review.py`：
+  - `GET /dashboard`：`count_by_status`×3 + `sum_llm_cost_this_month` + `cfg.budget` + `collect_weekly_report().gate_histogram` + 待办(由 `get_*_by_status` 派生) + `recent_activity`
+  - `GET /topics?status=&pillar=&source=&limit=&offset=`（`get_topics_by_status` 或 `list_topics`）；`GET /sources`（`load_config().sources`）
+  - `GET /contents?status=`（`list_contents`）；`GET /contents/{id}`（详情：`md_to_html(canonical)` + `list_content_files` + `content_image_urls` + `get_publications_by_content` + 派生时间线）
+  - `GET /review`（`get_contents_by_status('gated')` + 门禁分 + 缩略）
+  - 错误统一 `{error:{code,message}}` + HTTP 码
+- **验收**：`tests/webui/test_api_{dashboard,topics,contents,review}.py` 用 `monkeypatch deps._DB_PATH` + `TestClient(create_app())` 造数据断言 JSON 形状 + 状态码
+- **声明改动文件**：`pipeline/webui/api/*`（上述文件，新）、对应 `tests/webui/test_api_*.py`(新)、`app.py`（`include_router(api_router)` 一行）
+- **红线**：全部 GET 只读；不写库
+
+### M10-5 只读 API（二）：publish / analytics / accounts / runs / settings
+- [ ] **目标**：`/api/v1` 其余域的只读 router
+- **步骤**：`publish.py`/`analytics.py`/`accounts.py`/`runs.py`/`settings.py`：
+  - `GET /publish/calendar?week=`（复用 `bucket_week`）；`GET /publish/records?status=`（`list_publications` + 可带 latest metric）
+  - `GET /analytics/weekly`（序列化 `collect_weekly_report()`）；`/analytics/cost?group=stage|day`（`llm_cost_by_*`）；`/analytics/publications/{id}/metrics`（`get_latest_metric`+`get_metrics_series`）；`/analytics/platforms`（`platform_metric_totals` 或周报 top_by_platform）
+  - `GET /accounts`（`collect_cookie_health(load_config())`）；`GET /accounts/login-guidance`（静态每平台指引）
+  - `GET /runs` / `GET /runs/{id}`（**首期只读内存运行历史**；`runner_bridge` 触发留 P2；`publish` 断言不在白名单）
+  - `GET /settings`（`sanitize_config(cfg.model_dump())` + `run_doctor`，脱敏无明文密钥）
+- **验收**：各 `tests/webui/test_api_*.py` 断言 JSON + 脱敏（settings 无明文 key）+ `publish not in STAGE_WHITELIST`
+- **声明改动文件**：`pipeline/webui/api/{publish,analytics,accounts,runs,settings}.py`(新)、`pipeline/webui/runner_bridge.py`(新，仅 registry + 白名单常量，_execute 可先写不接线)、对应 tests(新)
+- **红线**：只读；`publish` 绝不进 `STAGE_WHITELIST`
+
+### M10-6 SPA 托管接线：`app.py` mount + catch-all
+- [ ] **目标**：FastAPI 能托管 Vite 构建产物 `frontend/dist`，客户端路由可用，且不遮蔽 API/output/static
+- **步骤**：`app.py` 内（顺序敏感）：① 保留 `/output`、`/static` 挂载；② `include_router(api_router)`；③ `app.mount("/assets", StaticFiles(directory="frontend/dist/assets"))`（目录不存在则跳过不崩）；④ 旧 htmx 路由迁到 `legacy_htmx.py` router 注册在 catch-all 之前（或加 `/legacy` 前缀）；⑤ **最后**注册 `GET /{full_path:path}` 返回 `frontend/dist/index.html`，对 `/api`/`/output`/`/static`/`/assets` 前缀放行 404；`dist` 不存在时返回「请先 `npm run build`」提示页（200，不崩）
+- **验收**：`tests/webui/test_spa_serving.py`：dist 缺失时 catch-all 返回提示页不 500；`/api/v1/dashboard` 不被 catch-all 吞；造一个假 `frontend/dist/index.html` 后 `GET /topics`(前端路由) 返回该 index
+- **声明改动文件**：`pipeline/webui/app.py`、`pipeline/webui/legacy_htmx.py`(新，搬旧路由)、`tests/webui/test_spa_serving.py`(新)
+- **红线**：catch-all 必须放行 API/静态前缀；`create_app()` 仍是唯一工厂
+
+### M10-7 前端脚手架 + App Shell + 全路由
+- [ ] **目标**：`frontend/` 建起 Vue3+Vite+TS+AntD Vue+Pinia+Router+ECharts，蚁小二式左侧栏外壳 + 全部页面路由 + 规划中占位可导航
+- **步骤**：
+  1. `npm create vite@latest frontend -- --template vue-ts`；装 `ant-design-vue`、`pinia`、`vue-router`、`echarts`、`axios`
+  2. `src/api/client.ts`（axios，baseURL `/api/v1`，统一错误解包）；`vite.config.ts` dev proxy `/api`→`127.0.0.1:8787`，`build.outDir` 指向 `dist`
+  3. `layouts/AppShell.vue`：左侧 `a-menu` 分组（概览/内容生产/分发/数据/运营/规划中）+ 顶栏（标题 + 环境标 + 预算胶囊占位）+ `<router-view>`；当前路由高亮
+  4. `router/index.ts`：仪表盘 `/`、`/topics`、`/contents`、`/contents/:id`、`/review`、`/publish/calendar`、`/publish/records`、`/analytics`、`/accounts`、`/runs`、`/settings`、`/roadmap/*`
+  5. `components/EmptyStub.vue`（规划中占位空态）；各 view 先空壳可导航
+- **验收**：`cd frontend && npm run build` 成功产出 `dist`；`npm run dev` 起本地、左侧栏导航到每个页面不报错（此步数据可空）
+- **声明改动文件**：`frontend/**`（新）
+- **红线**：不引第二套 UI 库；不改后端
+
+### M10-8 前端只读视图对接真实数据
+- [ ] **目标**：11 个真实页面用 `/api/v1` 渲染真实数据 + loading/empty/error 三态；规划中模块 `EmptyStub`
+- **步骤**：按页对接——仪表盘(计数/成本预算/待办/近期活动/门禁直方图 ECharts)、选题池(表格+状态/支柱/源筛选)、内容库(列表+详情：canonical HTML/派生文件/图片/发布时间线)、审核台(gated 卡片+门禁分+图卡缩略)、发布日历(周视图)、发布记录(表格+metrics)、数据看板(周报+平台对比+成本趋势 ECharts)、账号管理(cookie 健康表+登录引导)、运行台(运行历史，触发按钮禁用标 P2)、设置(脱敏 config + doctor)；**写操作按钮一律禁用并标 "P2"**
+  - Pinia store 每域一个，仅只读 fetch；组件 StatusTag/CostBudgetCard/TodoCard 复用
+- **验收**：起后端(有种子数据) + 前端，每页渲染真实数据；空库显示 empty 态不报错；断网/500 显示 error 态
+- **声明改动文件**：`frontend/**`
+- **红线**：只读；写按钮禁用占位，不接任何写端点
+
+### M10-9 构建脚本 + 文档 + 端到端验证（P1 收尾）
+- [ ] **目标**：一键构建 + 文档到位 + 全链路验证 P1 达标
+- **步骤**：`scripts/build_frontend.sh`（`cd frontend && npm ci && npm run build`）；`docs/GETTING_STARTED.md` 落实前端构建节 + 「webui 现为 SPA」说明；按计划「验证」小节跑通
+- **验收**（P1 里程碑）：
+  1. `bash scripts/build_frontend.sh` 产出 `frontend/dist`
+  2. `python -m pipeline.run webui` → 浏览器左侧栏导航可达全部页面、当前页高亮
+  3. 造种子数据后仪表盘/选题/内容/审核/日历/数据/账号/设置渲染真实数据，规划中模块显示占位
+  4. `python -m pytest tests/ -q` 全绿（不回归）；`curl 127.0.0.1:8787/api/v1/dashboard` 返回 JSON；`curl .../api/v1/settings` 脱敏无明文密钥
+  5. `grep -rn "import anthropic" pipeline/ | grep -v llm.py` 为空；契约文件（models/schema/adapter 签名）零 diff
+- **声明改动文件**：`scripts/build_frontend.sh`(新)、`docs/GETTING_STARTED.md`
+
+---
+
+### M10 P2/P3/P4 大纲（P1 完成后再拆细）
+
+- **P2 交互与写操作 + 运行台**：接线写端点——topics promote/reject/手动录入(`try_insert_topic`)、review approve/reject(`transition`/`set_gate_verdict`)、publications reschedule/cancel/retry(`reschedule_publication`/`transition`)、手动排期(`insert_publication`)、canonical 在线编辑(M10-3 已写的 jailed writer 接 `PUT /contents/{id}/canonical`)；`runner_bridge` 启用**一键触发白名单阶段**(ingest/score/create/gate/derivative/review/schedule/collect/generate-images，经 FastAPI BackgroundTasks + flock，**publish 排除**)。这是用户最强诉求「摆脱 terminal」。
+- **P3 按发布类型做深**：头条长文 / 小红书图卡(缩略 + HTML 渲染) / X thread / 抖音视频 的 创作→预览→编辑→排期 流。
+- **P4 UI 发布（最高危，最后）**：dry-run 先行 + 二次确认 + `publish.enabled` 总闸 + **复用 `safe_publish` 三重锁**，`POST /publications/{id}/publish?dry_run=`。**高危任务，需用户人工确认，不进自治流**（CLAUDE.md 工作约定第 7 条）。
+
+---
 
