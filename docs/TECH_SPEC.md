@@ -310,28 +310,53 @@ class VideoRequest:
 
 ## 7. Web 控制台契约（webui）
 
-- 技术栈：FastAPI + Jinja2 + htmx，代码在 `pipeline/webui/`（`app.py` + `templates/` + `static/`）
-- 启动：`python -m pipeline.run webui`，绑定 `config.webui.host:port`（默认 `127.0.0.1:8787`）
-- **UI 不得直接写 SQL**：读走 `db.py` 查询函数，写走 `transition()` 与既有编排函数——状态机与发布三重锁对 UI 同样生效
+- 技术栈：
+  - 后端 FastAPI（`pipeline/webui/app.py` + `pipeline/webui/api/*`），暴露 `/api/v1/*` JSON API
+  - 前端 SPA（`frontend/` 源码，Vue 3 + Vite + TypeScript + Ant Design Vue + Pinia + Vue Router + ECharts），构建产物 `frontend/dist/`，由 FastAPI `StaticFiles` 挂载 `/assets` + 客户端路由 catch-all 返回 `index.html`
+  - **引入 npm 构建链**（与 §7 原 htmx/jinja2 单文件方案不同；构建步骤见 `docs/GETTING_STARTED.md`「前端构建」节）
+  - 旧 htmx + jinja2 路由（`/`、`/topics`、`/review` 等）标注 legacy 保留——SPA 达 parity 后移除
+  - 启动：`python -m pipeline.run webui`，绑定 `config.webui.host:port`（默认 `127.0.0.1:8787`）
+- **不变量（契约红线，spa/htmx 通用）**：
+  - **UI 不得直接写 SQL**：读走 `db.py` / `db_reads.py` 查询函数，写走 `transition()` / `set_gate_verdict` / `reschedule_publication` 与既有编排函数——状态机与发布三重锁对 UI 同样生效
+  - **发布需 dry-run 先行 + 显式确认**（二次确认弹条 + 复用 `safe_publish` 三重锁）；`publish` **排除于通用运行台白名单**（仅 `ingest/score/create/gate/derivative/review/schedule/collect/generate-images` 可由 UI 一键触发）
 - 路由契约：
 
 ```
-GET  /                     Dashboard（状态计数、成本、告警）
-GET  /topics?status=       选题池列表
-POST /topics/{id}/promote  加急（scored→selected）
-POST /topics/{id}/reject   废弃
-GET  /review               审核台（gated 内容卡片流）
-POST /review/{content_id}  body: {decision: approve|reject, reason?}
-GET  /calendar?week=       发布日历
+# 新：JSON API（FastAPI router，前端 SPA 主用）
+GET  /api/v1/dashboard           Dashboard 计数/成本/待办/近期活动
+GET  /api/v1/topics              选题列表（status/pillar/source/limit/offset 过滤）
+GET  /api/v1/sources             选题数据源列表
+GET  /api/v1/contents            内容列表
+GET  /api/v1/contents/{id}       内容详情（canonical HTML + 派生文件 + 图片 + 时间线）
+GET  /api/v1/review              审核台（gated 内容列表）
+GET  /api/v1/publish/calendar    发布日历（?week=YYYY-MM-DD）
+GET  /api/v1/publish/records     发布记录列表
+GET  /api/v1/analytics/weekly    周报
+GET  /api/v1/analytics/cost      LLM 成本（group=stage|day）
+GET  /api/v1/analytics/publications/{id}/metrics  表现数据序列
+GET  /api/v1/analytics/platforms 平台汇总
+GET  /api/v1/accounts            账号 + cookie 健康
+GET  /api/v1/accounts/login-guidance  各平台登录引导
+GET  /api/v1/runs                运行历史
+GET  /api/v1/settings            config 脱敏展示 + doctor 报告
+
+# 旧：htmx legacy（标注 deprecated，SPA parity 后移除）
+GET  /                           Dashboard（htmx 三表计数）
+GET  /topics?status=             选题池列表
+POST /topics/{id}/promote        加急（scored→selected）
+POST /topics/{id}/reject         废弃
+GET  /review                     审核台（gated 内容卡片流）
+POST /review/{content_id}        body: {decision: approve|reject, reason?}
+GET  /calendar?week=             发布日历
 POST /publications/{id}/reschedule   body: {scheduled_at}
 POST /publications/{id}/cancel
 POST /publications/{id}/retry        (failed→queued，走 reset 逻辑)
-GET  /contents/{id}        内容详情（全链路时间线）
-GET  /settings             config 脱敏展示 + 登录态健康
-GET  /api/status           JSON 状态计数（给页面轮询用）
+GET  /contents/{id}              内容详情（全链路时间线）
+GET  /settings                   config 脱敏展示 + 登录态健康
+GET  /api/status                 JSON 状态计数（给页面轮询用）
 ```
 
-- 所有 POST 返回 htmx 局部片段；错误统一返回带 `role=alert` 的片段
+- JSON API 错误统一格式 `{error:{code,message}}` + 对应 HTTP 码；旧 htmx 路由错误统一返回带 `role=alert` 的片段
 - 文件预览：canonical.md 渲染为 HTML；图卡 PNG 直接 `<img>`（`/output` 挂静态目录，只读）
 
 ## 8. 错误处理与日志规范

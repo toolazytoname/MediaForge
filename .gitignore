@@ -18,3 +18,6 @@ htmlcov/
 .DS_Store
 # 探测脚本输出：含 API response 完整 body + base64 图片数据，敏感
 scripts/probe_*.last.json
+# M10 SPA 前端依赖 + 构建产物（详见 docs/TECH_SPEC.md §7 + docs/GETTING_STARTED.md「前端构建」）
+# frontend/dist 默认提交（开箱即用，免构建）；如后续嫌体积再改策略
+frontend/node_modules/

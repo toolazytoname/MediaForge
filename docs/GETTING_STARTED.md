@@ -17,6 +17,7 @@
 - [§10 成本 baseline](#10-成本-baseline)
 - [§11 ⚠️ 发布相关警告](#11-️-发布相关警告)
 - [§12 下一步](#12-下一步)
+- [§13 前端构建（M10 SPA，仅当你想改前端时需要）](#13-前端构建m10-spa仅当你想改前端时需要)
 
 ---
 
@@ -294,6 +295,33 @@ python -m pipeline.run webui
 | **M6-2 周报** | 每周一自动生成 `output/weekly-report.md` | `python -m pipeline.run report weekly` |
 
 **Web UI 是日常运营主入口**：上述命令都能在 webui 里点按钮跑（见里程碑 7 的 U7-2「一键运行流水线」）。
+
+---
+
+## §13 前端构建（M10 SPA，仅当你想改前端时需要）
+
+> ⚠️ **本节为占位**——M10 P1 任务尚未落地，前端目录 `frontend/` 还不存在（计划在 M10-7 由 `npm create vite@latest frontend -- --template vue-ts` 初始化）。**如果你 clone 下来的仓库 `frontend/dist/` 已有**（正式版会随 P1 完成提交），跳过本节直接 `python -m pipeline.run webui` 即可开箱即用。
+
+首次构建（仅开发/修改前端时跑一次）：
+
+```bash
+cd frontend
+npm ci              # 按 package-lock.json 装依赖
+npm run build       # 产物输出到 frontend/dist/（默认提交到仓库）
+```
+
+开发模式（前后端联调）：
+
+```bash
+# 终端 1：起后端（默认 127.0.0.1:8787）
+python -m pipeline.run webui
+
+# 终端 2：起 Vite dev server（默认 5173，proxy /api→后端 8787）
+cd frontend && npm run dev
+```
+
+技术栈：Vue 3 + Vite + TypeScript + Ant Design Vue + Pinia + Vue Router + ECharts。
+后端契约 `/api/v1/*` 见 [`docs/TECH_SPEC.md §7`](./TECH_SPEC.md#7-web-控制台契约webui)。
 
 ---
 
