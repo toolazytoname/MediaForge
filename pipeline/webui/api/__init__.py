@@ -9,9 +9,14 @@
 from fastapi import APIRouter
 
 from pipeline.webui.api import (
+    accounts,
+    analytics,
     contents,
     dashboard,
+    publish,
     review,
+    runs,
+    settings,
     sources,
     topics,
 )
@@ -22,5 +27,10 @@ api_router.include_router(topics.router)
 api_router.include_router(sources.router)
 api_router.include_router(contents.router)
 api_router.include_router(review.router)
+api_router.include_router(publish.router)
+api_router.include_router(analytics.router)
+api_router.include_router(accounts.router)
+api_router.include_router(runs.router)
+api_router.include_router(settings.router)
 
 __all__ = ["api_router"]

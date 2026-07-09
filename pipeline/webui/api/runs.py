@@ -1,0 +1,56 @@
+"""M10-5 runs router（首期只读 + 白名单常量）。
+
+GET /api/v1/runs — 内存运行历史（P1 仅返回空；P2 runner_bridge 启用后
+  真正记录 stage/exit_code/timing）
+GET /api/v1/runs/{run_id} — 单条详情（P1 返回 404）
+POST /api/v1/runs/{stage} — 触发后台执行（P2 才实现；P1 拒绝）
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+
+# 允许通过 UI 一键触发的 stage 白名单（发布排除）
+STAGE_WHITELIST = frozenset({
+    "ingest", "score", "create", "gate", "derivative",
+    "review", "schedule", "collect", "generate-images",
+})
+
+router = APIRouter(tags=["runs"])
+
+
+# P1 内存占位（不真正记录）
+_RUN_HISTORY: list[dict[str, Any]] = []
+
+
+@router.get("/runs")
+def list_runs() -> dict[str, Any]:
+    """运行历史。P1 仅返回空（runner_bridge 留 P2）。"""
+    return {
+        "items": _RUN_HISTORY,
+        "stage_whitelist": sorted(STAGE_WHITELIST),
+    }
+
+
+@router.get("/runs/{run_id}")
+def get_run(run_id: str) -> dict[str, Any]:
+    """单条详情。P1 永远 404——无持久化。"""
+    raise HTTPException(status_code=404, detail={"error": {
+        "code": "run_not_found", "message": f"run {run_id} not found"
+    }})
+
+
+@router.post("/runs/{stage}")
+def trigger_run(stage: str) -> dict[str, Any]:
+    """P1 拒绝所有触发；P2 启用。"""
+    if stage not in STAGE_WHITELIST:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "stage_not_whitelisted",
+            "message": f"stage {stage!r} not in whitelist; publish is excluded",
+        }})
+    # publish 已通过白名单过滤——若调用方传 publish（理论上不该），同样拒绝
+    raise HTTPException(status_code=501, detail={"error": {
+        "code": "not_implemented",
+        "message": "runner_bridge 留 P2 启用；M10 P1 不暴露触发端点",
+    }})
