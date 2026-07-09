@@ -805,7 +805,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   ✅ 完成于 2026-07-09，commit 4a95a0d，备注：TECH_SPEC §7 改 53 行——技术栈分后端 FastAPI + 前端 SPA（Vue3/Vite/TS/AntD Vue/Pinia/Router/ECharts）+ npm 构建链声明；新增 17 行 JSON API 路由清单（dashboard/topics/sources/contents/review/publish/analytics/accounts/runs/settings）；旧 htmx 路由清单保留并标「deprecated，SPA parity 后移除」；不变量原文保留 + 补「publish 排除于通用运行台白名单」；错误格式分 JSON envelope vs htmx alert 两种。.gitignore 加 frontend/node_modules/（dist 默认提交注释说明）。GETTING_STARTED.md 新增 §13「前端构建」占位节（指向 M10-7 + M10-9）+ 目录索引同步。全测 1102 pass + 12 skip + 7 失败（全部 pre-existing——stash 验证过，与本任务无关）；git diff 仅命中声明文件集；§3/§4/§5 零改动（红线遵守）。
 
 ### M10-1 webui 接缝：抽 `deps.py` + `app.py` 瘦身（行为不变）
-- [ ] **目标**：把 `pipeline/webui/app.py` 里模块级 `_DB_PATH`/`_CONFIG_PATH`/`load_config`/`_conn()`/`_db()` 抽到新 `pipeline/webui/deps.py`，为 API router 与 SPA 托管铺接缝；**现有 htmx 路由与测试行为零变化**
+- [x] **目标**：把 `pipeline/webui/app.py` 里模块级 `_DB_PATH`/`_CONFIG_PATH`/`load_config`/`_conn()`/`_db()` 抽到新 `pipeline/webui/deps.py`，为 API router 与 SPA 托管铺接缝；**现有 htmx 路由与测试行为零变化**
 - **错在哪/为何**：现有 `app.py`（393 行）把 DB 路径常量、config 加载、DB 连接上下文都放在自己模块里，测试靠 `monkeypatch.setattr(app, "_DB_PATH", …)`。API router 若也 `from app import` 会循环依赖；抽到 `deps.py` 后 router 与 app 都从 deps 导入，override 种子仍生效
 - **步骤**：
   1. 新建 `pipeline/webui/deps.py`：搬 `_DB_PATH`/`_CONFIG_PATH`、`get_conn()`（= `db.connect(_DB_PATH)`）、`_db()` contextmanager、`get_config()`（= `load_config(_CONFIG_PATH)`，异常返回 None + err）。**保持同名**便于 monkeypatch
@@ -815,8 +815,10 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **声明改动文件**：`pipeline/webui/app.py`、`pipeline/webui/deps.py`(新)、`tests/test_webui*.py`（仅 monkeypatch target 调整）
 - **红线**：不改任何路由的**行为/返回**；纯搬家
 
+  ✅ 完成于 2026-07-09，commit <本 commit sha>，备注：`pipeline/webui/deps.py` 76 行——模块级 `_DB_PATH`/`_CONFIG_PATH` 常量 + `load_config` re-export（让 monkeypatch 仍生效）+ `get_conn()`/`_db()` contextmanager + `get_config() -> (cfg, err)`。app.py 改 5 行删 14 行：create_app 内 `db.connect(deps._DB_PATH)`、所有路由 `with deps._db()`、settings 路由 try/except 块简化为 `cfg, err = deps.get_config()`、main() 走 `deps.load_config(deps._CONFIG_PATH)`。5 个 webui 测试 monkeypatch target 由 `app_mod` 改 `deps`（最小改动，未碰断言；处理过一次转义字符 sed 副作用已修）。webui 测试 53 全绿 + 全测 1039 pass + 12 skip + 7 失败 pre-existing（stash 验证过）。
+
 ### M10-2 只读查询层：`db.py` 列表/关联查询 + `db_reads.py` metrics/llm 查询
-- [ ] **目标**：补齐 UI 需要但现在缺失的**只读** SELECT 查询（全部增量，零 schema 变更）
+- [x] **目标**：补齐 UI 需要但现在缺失的**只读** SELECT 查询（全部增量，零 schema 变更）
 - **步骤**：
   1. `pipeline/db.py`（复用私有 `_row_to_*`，紧挨现有 `get_*_by_status`）新增：
      - `list_topics(conn, *, status=None, pillar=None, source=None, limit=50, offset=0) -> list[Topic]` + `count_topics(conn, *, status=None, pillar=None, source=None) -> int`
@@ -833,6 +835,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **验收**：`tests/test_db_reads.py` + `tests/test_db.py` 增量覆盖每个新函数（造数据→断言返回）；全 SELECT，**无 UPDATE/schema 变更**
 - **声明改动文件**：`pipeline/db.py`、`pipeline/db_reads.py`(新)、`tests/test_db.py`、`tests/test_db_reads.py`(新)
 - **红线**：只读；不改 schema、不改现有查询签名
+
+  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：db.py 增 7 函数（list_topics/contents/publications × 3 + count_topics/contents × 2 + get_publications_by_content + recent_activity）+ `_build_filter_where` 私有 helper（白名单 frozenset 防注入；None 透传）。db_reads.py 新建 6 函数（row_to_metric / get_latest_metric / get_metrics_series / llm_cost_by_stage / llm_cost_by_day / platform_metric_totals）。test_db.py 增 19 用例 + test_db_reads.py 新建 15 用例。全测 1073 pass + 12 skip + 7 pre-existing。**bug 修**：llm_cost_by_day 初版 since_iso 没减 days 天，第一轮 verify 抓出已修。
 
 ### M10-3 序列化层：`serialize.py`（dataclass→dict + 内容目录枚举）
 - [ ] **目标**：统一把 frozen dataclass 序列化成 API JSON，并提供内容输出目录的文件/图片只读枚举
