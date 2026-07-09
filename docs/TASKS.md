@@ -889,7 +889,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：app.py 顺序挂载 /output → /static → /assets（缺则跳过） → 旧 htmx 路由 → catch-all GET /{full_path:path}（dist 缺时返回构建提示页 200 不 500；明确 404 拒绝 api/output/static/assets 前缀）。tests 6 用例覆盖 catch-all 5 路径 + 旧 htmx 仍工作。全测 1139 pass + 12 skip + 7 pre-existing。
 
 ### M10-7 前端脚手架 + App Shell + 全路由
-- [ ] **目标**：`frontend/` 建起 Vue3+Vite+TS+AntD Vue+Pinia+Router+ECharts，蚁小二式左侧栏外壳 + 全部页面路由 + 规划中占位可导航
+- [x] **目标**：`frontend/` 建起 Vue3+Vite+TS+AntD Vue+Pinia+Router+ECharts，蚁小二式左侧栏外壳 + 全部页面路由 + 规划中占位可导航
 - **步骤**：
   1. `npm create vite@latest frontend -- --template vue-ts`；装 `ant-design-vue`、`pinia`、`vue-router`、`echarts`、`axios`
   2. `src/api/client.ts`（axios，baseURL `/api/v1`，统一错误解包）；`vite.config.ts` dev proxy `/api`→`127.0.0.1:8787`，`build.outDir` 指向 `dist`
@@ -899,6 +899,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **验收**：`cd frontend && npm run build` 成功产出 `dist`；`npm run dev` 起本地、左侧栏导航到每个页面不报错（此步数据可空）
 - **声明改动文件**：`frontend/**`（新）
 - **红线**：不引第二套 UI 库；不改后端
+
+  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：npm create vite@latest --template vue-ts；ant-design-vue + pinia + vue-router + echarts + axios。AppShell.vue 蚁小二式左侧栏分 5 组（概览/内容生产/分发/数据/运营）。router 12 路由（11 真实 + /roadmap/:feature）。9 Pinia store 仅 load() 占位——M10-8 填字段。12 view 占位。vite build 成功（dist/index.html 0.45KB + index.js 1.49MB gzipped 460KB；AntD Vue 大块，后续可 code-split）。test_spa_serving.py 修订：dist 默认提交，3 测试改 _dist_dir() 探测 + pytest.skip 兜底。
 
 ### M10-8 前端只读视图对接真实数据
 - [ ] **目标**：11 个真实页面用 `/api/v1` 渲染真实数据 + loading/empty/error 三态；规划中模块 `EmptyStub`
