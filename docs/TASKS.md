@@ -880,11 +880,13 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：5 router 落地（publish/analytics/accounts/runs/settings）；api_router 加 5 子 router include。STAGE_WHITELIST = {ingest/score/create/gate/derivative/review/schedule/collect/generate-images}——publish 排除。tests 19 用例覆盖 4 路由 + 5 runs 路径（含 publish 400 + 白名单 stage 501 + get 404）+ 白名单锁死断言。**2 bug 修**：① publish/calendar 误用 bucket.days.date（实际是 date 列表）→ 改 bucket.by_day；② settings.run_doctor 返回 CheckResult dataclass（非 tuple）→ 改 r.name/r.ok/r.hint。全测 1133 pass + 12 skip + 7 pre-existing。
 
 ### M10-6 SPA 托管接线：`app.py` mount + catch-all
-- [ ] **目标**：FastAPI 能托管 Vite 构建产物 `frontend/dist`，客户端路由可用，且不遮蔽 API/output/static
+- [x] **目标**：FastAPI 能托管 Vite 构建产物 `frontend/dist`，客户端路由可用，且不遮蔽 API/output/static
 - **步骤**：`app.py` 内（顺序敏感）：① 保留 `/output`、`/static` 挂载；② `include_router(api_router)`；③ `app.mount("/assets", StaticFiles(directory="frontend/dist/assets"))`（目录不存在则跳过不崩）；④ 旧 htmx 路由迁到 `legacy_htmx.py` router 注册在 catch-all 之前（或加 `/legacy` 前缀）；⑤ **最后**注册 `GET /{full_path:path}` 返回 `frontend/dist/index.html`，对 `/api`/`/output`/`/static`/`/assets` 前缀放行 404；`dist` 不存在时返回「请先 `npm run build`」提示页（200，不崩）
 - **验收**：`tests/webui/test_spa_serving.py`：dist 缺失时 catch-all 返回提示页不 500；`/api/v1/dashboard` 不被 catch-all 吞；造一个假 `frontend/dist/index.html` 后 `GET /topics`(前端路由) 返回该 index
 - **声明改动文件**：`pipeline/webui/app.py`、`pipeline/webui/legacy_htmx.py`(新，搬旧路由)、`tests/webui/test_spa_serving.py`(新)
 - **红线**：catch-all 必须放行 API/静态前缀；`create_app()` 仍是唯一工厂
+
+  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：app.py 顺序挂载 /output → /static → /assets（缺则跳过） → 旧 htmx 路由 → catch-all GET /{full_path:path}（dist 缺时返回构建提示页 200 不 500；明确 404 拒绝 api/output/static/assets 前缀）。tests 6 用例覆盖 catch-all 5 路径 + 旧 htmx 仍工作。全测 1139 pass + 12 skip + 7 pre-existing。
 
 ### M10-7 前端脚手架 + App Shell + 全路由
 - [ ] **目标**：`frontend/` 建起 Vue3+Vite+TS+AntD Vue+Pinia+Router+ECharts，蚁小二式左侧栏外壳 + 全部页面路由 + 规划中占位可导航
