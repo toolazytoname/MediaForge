@@ -852,7 +852,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：serialize.py 240 行——topic_dict/content_dict/pub_dict（tuple→list + gate_scores dict|None 透传）+ metric_dict(include_raw) 默认丢 raw + list_content_files 枚举 15 已知派生路径（目录不存在全 exists=False）+ content_image_urls cover/inline 转 /output/<path> URL + write_canonical_jailed tmp→rename + _safe_resolve 越狱防护两层（NUL+normpath .. 解析）。tests/webui/test_serialize.py 新建 28 测试覆盖各函数 + 越狱边界。全测 1101 pass + 12 skip + 7 pre-existing。**bug 修**：_safe_resolve 初版 Path.absolute() 不解析 ..——测试 `tmp_path/../evil` 逃过前缀检查；改用 os.path.normpath 归一化后再 .relative_to。
 
 ### M10-4 只读 API（一）：dashboard / topics / sources / contents / review
-- [ ] **目标**：`/api/v1` 前五个域的**只读** router 落地
+- [x] **目标**：`/api/v1` 前五个域的**只读** router 落地
 - **步骤**：新建 `pipeline/webui/api/__init__.py`（`api_router = APIRouter(prefix="/api/v1")` 并 include 各子 router）+ `dashboard.py`/`topics.py`/`contents.py`/`review.py`：
   - `GET /dashboard`：`count_by_status`×3 + `sum_llm_cost_this_month` + `cfg.budget` + `collect_weekly_report().gate_histogram` + 待办(由 `get_*_by_status` 派生) + `recent_activity`
   - `GET /topics?status=&pillar=&source=&limit=&offset=`（`get_topics_by_status` 或 `list_topics`）；`GET /sources`（`load_config().sources`）
@@ -862,6 +862,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **验收**：`tests/webui/test_api_{dashboard,topics,contents,review}.py` 用 `monkeypatch deps._DB_PATH` + `TestClient(create_app())` 造数据断言 JSON 形状 + 状态码
 - **声明改动文件**：`pipeline/webui/api/*`（上述文件，新）、对应 `tests/webui/test_api_*.py`(新)、`app.py`（`include_router(api_router)` 一行）
 - **红线**：全部 GET 只读；不写库
+
+  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：5 子 router + 1 组合 router，11 个 GET 端点。dashboard 聚合 6 字段（counts/todos/budget/activity/histogram/correlation，复用 weekly_report.collect_weekly_report）；topics/contents 走 db.list_* 过滤分页 + get_by_id 404 envelope；sources 走 cfg.sources；review 仅 gated 状态。app.py 加 `include_router(api_router)` 一行。tests/webui/test_api_m10_4.py 13 用例覆盖路由 + 过滤 + 分页 + 404 + tuple→list + canonical HTML 渲染。全测 1114 pass + 12 skip + 7 pre-existing。
 
 ### M10-5 只读 API（二）：publish / analytics / accounts / runs / settings
 - [ ] **目标**：`/api/v1` 其余域的只读 router
