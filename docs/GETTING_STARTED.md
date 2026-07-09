@@ -298,17 +298,21 @@ python -m pipeline.run webui
 
 ---
 
-## §13 前端构建（M10 SPA，仅当你想改前端时需要）
+## §13 前端构建（M10 SPA 形态）
 
-> ⚠️ **本节为占位**——M10 P1 任务尚未落地，前端目录 `frontend/` 还不存在（计划在 M10-7 由 `npm create vite@latest frontend -- --template vue-ts` 初始化）。**如果你 clone 下来的仓库 `frontend/dist/` 已有**（正式版会随 P1 完成提交），跳过本节直接 `python -m pipeline.run webui` 即可开箱即用。
+M10 把 webui 重做成 Vue3 + AntD Vue SPA（蚁小二式左侧栏管理后台）。**如果你 clone 时 `frontend/dist/` 已随仓库发布**，直接 `python -m pipeline.run webui` 即可开箱即用，无需 build。
 
-首次构建（仅开发/修改前端时跑一次）：
+如果你想改前端 / dist 不存在，按下面构建：
 
 ```bash
-cd frontend
-npm ci              # 按 package-lock.json 装依赖
-npm run build       # 产物输出到 frontend/dist/（默认提交到仓库）
+bash scripts/build_frontend.sh
+# 等价于：
+#   cd frontend && npm ci && npm run build
+# 产物输出到 frontend/dist/（默认 commit 到仓库）
 ```
+
+技术栈：Vue 3 + Vite + TypeScript + Ant Design Vue + Pinia + Vue Router + ECharts + axios。
+后端契约 `/api/v1/*` 见 [`docs/TECH_SPEC.md §7`](./TECH_SPEC.md#7-web-控制台契约webui)。
 
 开发模式（前后端联调）：
 
@@ -320,8 +324,7 @@ python -m pipeline.run webui
 cd frontend && npm run dev
 ```
 
-技术栈：Vue 3 + Vite + TypeScript + Ant Design Vue + Pinia + Vue Router + ECharts。
-后端契约 `/api/v1/*` 见 [`docs/TECH_SPEC.md §7`](./TECH_SPEC.md#7-web-控制台契约webui)。
+注意：M10 P1 只读。**写操作（promote/reject/approve/手动录入/排期/发布）均禁用并标 P2**——后续 P2 阶段接入。
 
 ---
 

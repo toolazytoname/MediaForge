@@ -225,7 +225,7 @@ export const usePublishStore = defineStore('publish', () => {
       loading.value = false
     }
   }
-  async function loadRecords(params: Record<string, string | number> = {}) {
+  async function loadRecords(params: Record<string, string | number | boolean> = {}) {
     loading.value = true
     error.value = null
     try {

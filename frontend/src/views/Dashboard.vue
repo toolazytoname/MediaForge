@@ -35,7 +35,7 @@ const budgetColor = computed(() => {
             <a-progress
               :percent="budgetPct"
               :stroke-color="budgetColor"
-              :format="(p) => `${p}% / $${data!.budget.monthly_usd}`"
+              :format="(p: number) => `${p}% / $${data!.budget.monthly_usd}`"
             />
           </a-card>
         </a-col>

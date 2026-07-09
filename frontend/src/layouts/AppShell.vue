@@ -56,10 +56,6 @@ const groups: MenuGroup[] = [
 ]
 
 const currentPath = computed(() => route.path)
-function isActive(path: string): boolean {
-  if (path === '/') return currentPath.value === '/'
-  return currentPath.value === path || currentPath.value.startsWith(path + '/')
-}
 </script>
 
 <template>

@@ -59,7 +59,7 @@ onMounted(reload)
       row-key="id"
       size="small"
     >
-      <template #bodyCell="{ column, record }">
+      <template #bodyCell="{ column }">
         <template v-if="column.key === 'op'">
           <a-button size="small" disabled>promote（P2）</a-button>
           <a-button size="small" danger disabled style="margin-left: 4px">reject（P2）</a-button>
