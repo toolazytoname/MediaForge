@@ -913,7 +913,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：11 view 全部接 /api/v1 真实数据。stores/index.ts 类型化（移除 any，加 9 interface：TopicItem/ContentItem/ContentDetail/PublicationItem/CalendarData/AccountHealthItem/LoginGuidance/DoctorItem）。AppShell 5 分组导航 + 当前路由高亮。loading/empty/error 三态（a-spin/a-empty/a-alert）。写按钮 disabled 标 P2（promote/reject/approve/新增选题）。dist 1.49MB gzipped 461KB（AntD 大块，后续可 code-split）。全测 1139 pass + 12 skip + 7 pre-existing。
 
 ### M10-9 构建脚本 + 文档 + 端到端验证（P1 收尾）
-- [ ] **目标**：一键构建 + 文档到位 + 全链路验证 P1 达标
+- [x] **目标**：一键构建 + 文档到位 + 全链路验证 P1 达标
 - **步骤**：`scripts/build_frontend.sh`（`cd frontend && npm ci && npm run build`）；`docs/GETTING_STARTED.md` 落实前端构建节 + 「webui 现为 SPA」说明；按计划「验证」小节跑通
 - **验收**（P1 里程碑）：
   1. `bash scripts/build_frontend.sh` 产出 `frontend/dist`
@@ -922,6 +922,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   4. `python -m pytest tests/ -q` 全绿（不回归）；`curl 127.0.0.1:8787/api/v1/dashboard` 返回 JSON；`curl .../api/v1/settings` 脱敏无明文密钥
   5. `grep -rn "import anthropic" pipeline/ | grep -v llm.py` 为空；契约文件（models/schema/adapter 签名）零 diff
 - **声明改动文件**：`scripts/build_frontend.sh`(新)、`docs/GETTING_STARTED.md`
+
+  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：scripts/build_frontend.sh 一键命令（npm ci + npm run build）。GETTING_STARTED.md §13 占位升级：dist 默认提交 / 改前端才 build / 开发模式 vite dev + 后端并行 / 显式 P1 只读。TS 严格模式 build 修复 3 vue-tsc 错误（Dashboard :format p 显式 number / loadRecords params 类型扩 boolean / Topics 解构多取 record → 删 / AppShell isActive 死代码）。**端到端 5/5 全过**：① build_frontend.sh 成功 ② pytest 1139 pass ③ /api/v1/dashboard 200 + 7 keys ④ /api/v1/settings 脱敏无明文 password/token/api_key/secret ⑤ import anthropic 护栏仅 llm.py 命中。**P1 里程碑达标**：左侧栏 SPA + 11 真实只读页面 + JSON 契约全打通 + 旧 htmx 兼容 + 状态机/三重锁护栏保持 + 模型零 diff + 写操作 P2 禁用。
 
 ---
 
