@@ -312,6 +312,7 @@ export const useAccountsStore = defineStore('accounts', () => {
   const items = ref<AccountHealthItem[]>([])
   const guidance = ref<LoginGuidance[]>([])
   const loading = ref(false)
+  const loaded = ref(false)
   const error = ref<string | null>(null)
   async function load() {
     loading.value = true
@@ -323,13 +324,14 @@ export const useAccountsStore = defineStore('accounts', () => {
       ])
       items.value = a.data.items
       guidance.value = g.data.items
+      loaded.value = true
     } catch (e) {
       error.value = String(e)
     } finally {
       loading.value = false
     }
   }
-  return { items, guidance, loading, error, load }
+  return { items, guidance, loading, loaded, error, load }
 })
 
 // ── Runs ───────────────────────────────────────────────────

@@ -1071,7 +1071,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **红线**：不动后端/API/契约；**不把真实创作能力降级为占位**
 
 ### M11-B｜发布中心重构（对标蚁小二发布页）
-- [ ] **目标**：把分裂的"发布日历+发布记录"合并为蚁小二式**发布中心**：tab【发布记录｜草稿箱】+ [新增发布] + 批量 + 筛选(发布人/类型/状态/模式)
+- [x] **目标**：把分裂的"发布日历+发布记录"合并为蚁小二式**发布中心**：tab【发布记录｜草稿箱】+ [新增发布] + 批量 + 筛选(发布人/类型/状态/模式)
+  ✅ 完成于 2026-07-11，commit 8ed0edc，备注：3 tab（发布记录/草稿箱/日历）+ 4 筛选（发布人/平台/状态/模式）+ [新增发布] 顶部按钮 + 草稿箱行内 [+排期] 共用 modal，调 POST /contents/{id}/schedule；后端 list_publications 只读扩展 account_id/pending_only，white-list 守护，schema/Adapter 不动；新增 TestListPublicationsM11B 3 用例。
 - **步骤**：
   1. 新路由 `/publish`（发布中心）含 tab；日历降级为其中一个视图或保留 `/publish/calendar` 子路
   2. "新增发布"= 对 approved 内容选平台+账号+时间造 queued（**复用 M10-11 `POST /contents/{id}/schedule` 端点，已存在**）
