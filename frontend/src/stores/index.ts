@@ -668,3 +668,99 @@ export const useScheduleStore = defineStore('schedule', () => {
 
   return { running, lastResult, lastError, run, reset }
 })
+
+// ── Preview (M10-12 阶段 E: dry-run 发布预演) ─────────────
+
+export interface PreviewBody {
+  title: string
+  body_excerpt: string
+  media: string[]
+  tags: string[]
+  platform: string
+  account_id: string
+  scheduled_at: string
+}
+
+export interface SafePublishPreviewResult {
+  published: boolean
+  reason: string
+  dry_run: boolean
+}
+
+export interface PreviewResult {
+  validate_passed: boolean
+  validate_errors: string[]
+  preview: PreviewBody
+  safe_publish_result: SafePublishPreviewResult
+}
+
+export type PreviewRunStatus = 'queued' | 'succeeded' | 'failed'
+
+export interface PreviewRun {
+  run_id: string
+  publication_id?: string
+  status: PreviewRunStatus
+  started_at?: string
+  finished_at?: string
+  result?: PreviewResult
+  error_code?: string
+  error?: string
+}
+
+const PREVIEW_POLL_INTERVAL_MS = 1_000
+const PREVIEW_POLL_TIMEOUT_MS = 30_000
+
+async function pollPreviewRun(runId: string): Promise<PreviewRun> {
+  const deadline = Date.now() + PREVIEW_POLL_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    const r = await api.get<PreviewRun>(`/runs/${runId}`)
+    const data = r.data
+    if (data.status === 'succeeded' || data.status === 'failed') {
+      return data
+    }
+    await new Promise((resolve) => setTimeout(resolve, PREVIEW_POLL_INTERVAL_MS))
+  }
+  throw new Error(`preview run ${runId} timed out`)
+}
+
+export const usePreviewStore = defineStore('preview', () => {
+  const running = ref(false)
+  const lastResult = ref<PreviewResult | null>(null)
+  const lastRun = ref<PreviewRun | null>(null)
+  const lastError = ref<string | null>(null)
+
+  async function run(publicationId: string): Promise<PreviewRun | null> {
+    running.value = true
+    lastError.value = null
+    lastResult.value = null
+    lastRun.value = null
+    try {
+      const queued = await apiPost<{ run_id: string; status: 'queued' }>(
+        `/publications/${publicationId}/publish/preview`,
+        {},
+      )
+      const run = await pollPreviewRun(queued.data.run_id)
+      lastRun.value = run
+      if (run.status === 'succeeded' && run.result) {
+        lastResult.value = run.result
+        return run
+      }
+      lastError.value = `${run.error_code ?? 'preview_error'}: ${run.error ?? ''}`.trim()
+      return run
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  function reset() {
+    running.value = false
+    lastResult.value = null
+    lastRun.value = null
+    lastError.value = null
+  }
+
+  return { running, lastResult, lastRun, lastError, run, reset }
+})

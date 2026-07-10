@@ -23,6 +23,20 @@ router = APIRouter(tags=["runs"])
 # P1 内存占位（不真正记录）
 _RUN_HISTORY: list[dict[str, Any]] = []
 
+# M10-12：preview/dry-run 后台运行注册表（独立字典，
+# 不并入 STAGE_WHITELIST，因为 preview 不属于通用一键触发阶段）。
+_RUNS: dict[str, dict[str, Any]] = {}
+
+
+def register_run(run_id: str, **fields: Any) -> None:
+    """在内存 run registry 写入一条 run 记录（首次创建时状态为 queued）。"""
+    _RUNS[run_id] = {"run_id": run_id, **fields}
+
+
+def get_run_record(run_id: str) -> dict[str, Any] | None:
+    """查询内存 run registry；无则返 None（router 把它映射为 404）。"""
+    return _RUNS.get(run_id)
+
 
 @router.get("/runs")
 def list_runs() -> dict[str, Any]:
@@ -35,10 +49,17 @@ def list_runs() -> dict[str, Any]:
 
 @router.get("/runs/{run_id}")
 def get_run(run_id: str) -> dict[str, Any]:
-    """单条详情。P1 永远 404——无持久化。"""
-    raise HTTPException(status_code=404, detail={"error": {
-        "code": "run_not_found", "message": f"run {run_id} not found"
-    }})
+    """单条详情。P1 永远 404——无持久化。
+
+    M10-12 升级：preview 端点使用同一内存 registry（`register_run`/`get_run_record`），
+    真正存在的 run 仍可被前端轮询拿到结果。
+    """
+    record = get_run_record(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"error": {
+            "code": "run_not_found", "message": f"run {run_id} not found"
+        }})
+    return record
 
 
 @router.post("/runs/{stage}")

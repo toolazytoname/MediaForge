@@ -1,4 +1,4 @@
-"""M10-5 publish router（GET）+ M10 P2 阶段 C 写端点。
+"""M10-5 publish router（GET）+ M10 P2 阶段 C 写端点 + M10-12 阶段 E dry-run 预演。
 
 GET  /api/v1/publish/calendar?week=YYYY-MM-DD   周视图（复用 bucket_week）
 GET  /api/v1/publish/records?status=&platform=&limit=&offset=
@@ -6,17 +6,27 @@ GET  /api/v1/publish/records?status=&platform=&limit=&offset=
 POST /api/v1/publications/{id}/reschedule    queued 改时间
 POST /api/v1/publications/{id}/cancel        queued → cancelled
 POST /api/v1/publications/{id}/retry         failed → queued（不调真实 publish）
+POST /api/v1/publications/{publication_id}/publish/preview
+                                              dry-run 预演（绝不真发）
 """
 from __future__ import annotations
 
+import logging
+import time
+import traceback
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
 
 from pipeline import db, db_reads
-from pipeline.webui import deps, write_action_bridge
+from pipeline.webui import deps, preview_bridge, write_action_bridge
+from pipeline.webui.api.runs import register_run
 from pipeline.webui.calendar import bucket_week
 from pipeline.webui.serialize import metric_dict, pub_dict
+
+logger = logging.getLogger("mediaforge.webui.preview")
 
 router = APIRouter(tags=["publish"])
 
@@ -171,3 +181,95 @@ def retry_publication_endpoint(pub_id: str) -> dict[str, Any]:
                 "code": "status_changed", "message": str(e),
             }})
     return pub_dict(p)
+
+
+# ── M10-12 阶段 E：dry-run 预演端点（绝不真发） ─────────────
+
+
+_PREVIEW_ERROR_CODES = {
+    preview_bridge.PublicationNotFoundError: "publication_not_found",
+    preview_bridge.PublicationWrongStatusError: "wrong_status",
+    preview_bridge.ConfigLoadError: "config_load_error",
+    preview_bridge.PlatformNotConfiguredError: "platform_not_configured",
+    preview_bridge.AccountNotFoundError: "account_not_found",
+    preview_bridge.AdapterInitError: "adapter_init_error",
+    preview_bridge.ContentNotFoundError: "content_not_found",
+}
+
+
+def _execute_preview(
+    run_id: str,
+    publication_id: str,
+    started_at: str,
+) -> None:
+    """后台任务体：调 preview_bridge._run_preview，把结果写进 run registry。
+
+    任何异常都被分类映射到 error_code，但绝不向 publication DB 写状态。
+    """
+    try:
+        with deps._db() as conn:
+            result = preview_bridge._run_preview(
+                conn, publication_id, run_id, started_at,
+            )
+        register_run(
+            run_id,
+            status="succeeded",
+            started_at=started_at,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            result=result,
+        )
+    except preview_bridge.PreviewError as e:
+        code = _PREVIEW_ERROR_CODES.get(type(e), "preview_error")
+        register_run(
+            run_id,
+            status="failed",
+            started_at=started_at,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error_code=code,
+            error=str(e),
+        )
+        logger.warning("preview failed run_id=%s code=%s err=%s", run_id, code, e)
+    except Exception as e:  # noqa: BLE001 — 不让后台任务静默死掉
+        register_run(
+            run_id,
+            status="failed",
+            started_at=started_at,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error_code="unexpected",
+            error=str(e),
+        )
+        logger.error(
+            "preview unexpected run_id=%s err=%s\n%s",
+            run_id, e, traceback.format_exc(),
+        )
+
+
+@router.post(
+    "/publications/{publication_id}/publish/preview",
+    status_code=202,
+)
+def preview_publication_endpoint(
+    publication_id: str,
+    background: BackgroundTasks,
+) -> dict[str, Any]:
+    """dry-run 预演：对一条 queued publication 走真实 validate + safe_publish(dry_run=True)。
+
+    立即返回 202 + run_id；后台通过 FastAPI BackgroundTasks 执行，结果写内存
+    run registry。前端轮询 GET /api/v1/runs/{run_id} 拿到结果。
+
+    关键护栏：
+      - 永远只调 safe_publish(..., dry_run=True)；
+      - 给 safe_publish 的 adapter 是 preview_bridge 内的防真发包装器；
+      - 真实 state.db 不会被改动（safe_publish 在内存 DB 副本上跑）；
+      - 路径含 /publish/preview，命名上明示「非真发」。
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    run_id = f"run_{uuid.uuid4().hex[:8]}_{int(time.time() * 1000) % 1_000_000}"
+    register_run(
+        run_id,
+        status="queued",
+        started_at=now,
+        publication_id=publication_id,
+    )
+    background.add_task(_execute_preview, run_id, publication_id, now)
+    return {"run_id": run_id, "status": "queued"}

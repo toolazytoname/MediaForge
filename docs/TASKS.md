@@ -969,6 +969,25 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 
 ---
 
+### M10-12 P2 阶段 E：UI dry-run 预演端点（绝对不真发）
+
+- [x] **目标**：在发布日历/记录页加「🔍 预演」按钮，对一条 queued publication 调 `safe_publish(dry_run=True)` 走完整三道锁 + 真实 `PublisherAdapter.validate()`，展示「将发什么」并 100% 不触发任何真发副作用。M10 P2「图文全流程」第五步（阶段 A 创建、阶段 B 衍生+出图、阶段 C 写端点迁移、阶段 D 手动排期已完成）。
+- **步骤**：
+  1. 新建 `pipeline/webui/preview_bridge.py`：纯函数 `_build_preview_bundle(conn, pub)` 按 platform 解析产物（X → `x/thread.md` + 内联媒体 / 小红书 → `xiaohongshu/caption.md` + `tags.txt` + `cover.png` + `card-*.png` / 头条 → `toutiao.md` / 抖音 → `*.mp4`）+ 5 个 Error class（PublicationNotFoundError / PublicationWrongStatusError / ConfigLoadError / PlatformNotConfiguredError / AccountNotFoundError / AdapterInitError / ContentNotFoundError）；`_run_preview(conn, pub_id, run_id, now)` 流程：查 pub → cfg + account → 真实 `get_adapter()` → `adapter.validate(bundle)` → 用防真发包装器 `_NoPublishPreviewAdapter` 调 `safe_publish(dry_run=True)`，**safe_publish 在内存 DB 副本上跑**（`conn.backup(:memory:)`）→ 真实 state.db 不变
+  2. `pipeline/webui/api/publish.py` 加 `POST /api/v1/publications/{publication_id}/publish/preview`（**路径含 /publish/preview 字样**），`status_code=202` + BackgroundTasks 调度 `_execute_preview(run_id, pub_id, now)`；后台结果写 `runs._RUNS` 内存注册表
+  3. `pipeline/webui/api/runs.py` 加 `register_run` / `get_run_record` 辅助 + 修 `GET /api/v1/runs/{run_id}` 真正查注册表（前端轮询依赖）；**`STAGE_WHITELIST` 不动**（preview 不在白名单，独立端点）
+  4. `tests/webui/test_api_publish_preview.py` 新建：16 测试覆盖 endpoint 路径含 `/preview` / 202 + run_id / 返回结构含 validate_passed+validate_errors+preview+safe_publish_result 且 `dry_run=True` / `safe_publish` 被调且 `dry_run=True` / `adapter.publish` 调用次数==0 / DB 状态（pub.status + updated_at + published_at + platform_post_id + platform_url）不变 / publish.enabled=false 走 `published=False, reason="publish is disabled"` / 4 种 domain Error（not_found / wrong_status / platform_not_configured / account_not_found）/ adapter_init_error / 真实 XApiPublisher.validate 路径（只 mock safe_publish 副作用）/ 真实 validate 报错信息 / `_build_preview_bundle` 解析小红书媒体+tags / 未知 run_id 返 404
+  5. 前端 `stores/index.ts` 加 `usePreviewStore`（running / lastResult / lastRun / lastError / run(pubId) / reset），内部用 `setInterval` 1s 轮询 `GET /api/v1/runs/{run_id}` 直至 succeeded/failed（30s 超时）；`PreviewBody` / `PreviewResult` / `PreviewRun` 类型化
+  6. 前端 `PublishRecords.vue` 加 actions 列 + 「🔍 预演」按钮（仅 queued 可点；`publishEnabled` 来自 `useSettingsStore.config.publish.enabled` 决定 `a-alert` 提示），成功弹 a-drawer 展示 validate + preview + safe_publish_result；失败 a-alert
+  7. 前端 `PublishCalendar.vue` 同上：每条 queued 加「🔍 预演」按钮 + a-drawer；与既有 reschedule / cancel 按钮共存
+  8. `npm run build` + `git add frontend/dist/` 重建
+- **验收**：`pytest tests/webui/test_api_publish_preview.py -q` 16 全绿；`pytest tests/ -q` 1288 pass + 12 skip + 7 pre-existing（与本任务无关，stash 验证过）；`grep -rn "import anthropic" pipeline/ | grep -v llm.py` 为空；**真发护栏**：`grep -rn "dry_run=False" pipeline/webui/preview_bridge.py pipeline/webui/api/publish.py` 为空；`git diff models.py / db.py SQL schema / safe_publish.py / base.py / __init__.py::get_adapter / TECH_SPEC §3-5` 全空；前端 `npm run build` 绿，dist 已 rebuild + git add
+- **声明改动文件**：`pipeline/webui/preview_bridge.py`(新)、`pipeline/webui/api/publish.py`、`pipeline/webui/api/runs.py`、`tests/webui/test_api_publish_preview.py`(新)、`frontend/src/stores/index.ts`、`frontend/src/views/PublishRecords.vue`、`frontend/src/views/PublishCalendar.vue`、`frontend/dist/**`、`docs/TASKS.md`
+- **红线**：不改 models.py / db.py SQL schema / safe_publish.py / base.py / `get_adapter` 签名；`STAGE_WHITELIST` 不加 `publish`；`safe_publish` 唯一调用点是 `dry_run=True`；preview adapter 的 `publish()` 在 `dry_run=False` 时**抛 PublishError 拒绝**（双保险）；`adapter.publish` 调用次数必须为 0（真发护栏）；不引入 anthropic import；旧 htmx POST 路由保留；preview 后台不 transition publication 状态
+
+  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：`preview_bridge.py` (~210 行) + `POST /api/v1/publications/{id}/publish/preview` 端点（`status_code=202` + BackgroundTasks）+ `runs.register_run` / `get_run_record` 辅助 + `GET /api/v1/runs/{run_id}` 真正可查。16 测试全绿。`safe_publish` 跑在内存 DB 副本上（`conn.backup(:memory:)`），真实 `state.db` 不变；`_NoPublishPreviewAdapter` 双保险拒绝 `dry_run=False`；真发护栏 grep 验证通过。前端 `usePreviewStore` 1s 轮询 30s 超时；`PublishRecords/Calendar.vue` 加 🔍 预演按钮 + a-drawer 展示 validate + preview + safe_publish_result；`publishEnabled` 来自 settings 控制 a-alert 提示。dist rebuild 1495KB gzipped 462KB git add。**契约零变更**：models.py / db.py SQL schema / safe_publish.py / base.py / `get_adapter` 签名 / TECH_SPEC §3-5 全部不动；7 pre-existing failures 与本任务无关（stash 验证）。
+
+
 ### M10 P2/P3/P4 大纲（P1 完成后再拆细）
 
 - **P2 交互与写操作 + 运行台**：接线写端点——topics promote/reject/手动录入(`try_insert_topic`)、review approve/reject(`transition`/`set_gate_verdict`)、publications reschedule/cancel/retry(`reschedule_publication`/`transition`)、手动排期(`insert_publication`)、canonical 在线编辑(M10-3 已写的 jailed writer 接 `PUT /contents/{id}/canonical`)；`runner_bridge` 启用**一键触发白名单阶段**(ingest/score/create/gate/derivative/review/schedule/collect/generate-images，经 FastAPI BackgroundTasks + flock，**publish 排除**)。这是用户最强诉求「摆脱 terminal」。

@@ -4,12 +4,21 @@
 //   - reschedule: 弹 a-modal 改 scheduled_at → POST /api/v1/publications/{id}/reschedule
 //   - cancel: POST /api/v1/publications/{id}/cancel
 //   - retry: POST /api/v1/publications/{id}/retry
-import { onMounted, ref } from 'vue'
-import { usePublishStore, usePubActionStore } from '../stores'
+// M10-12 阶段 E：每条 queued 出版物加「🔍 预演」按钮 + a-drawer
+import { computed, onMounted, ref } from 'vue'
+import {
+  usePublishStore,
+  usePubActionStore,
+  usePreviewStore,
+  useSettingsStore,
+  type PreviewResult,
+} from '../stores'
 import { storeToRefs } from 'pinia'
 
 const store = usePublishStore()
 const actionStore = usePubActionStore()
+const previewStore = usePreviewStore()
+const settingsStore = useSettingsStore()
 const { calendar, loading } = storeToRefs(store)
 
 const week = ref<string | undefined>(undefined)
@@ -22,10 +31,25 @@ const modalOpen = ref(false)
 const modalPubId = ref<string | null>(null)
 const modalNewTime = ref<string>('2026-07-12T18:30:00+00:00')
 
+// preview state
+const previewDrawerOpen = ref(false)
+const previewRunning = ref<string | null>(null)
+const previewError = ref<string | null>(null)
+
 function load() {
   store.loadCalendar(week.value)
 }
-onMounted(load)
+onMounted(async () => {
+  if (!settingsStore.config) {
+    await settingsStore.load()
+  }
+  load()
+})
+
+const publishEnabled = computed(() => {
+  const cfg = settingsStore.config as { publish?: { enabled?: boolean } } | null
+  return cfg?.publish?.enabled !== false
+})
 
 async function onCancel(pubId: string) {
   success.value = null
@@ -73,6 +97,26 @@ async function onRescheduleSubmit() {
   }
 }
 
+async function onPreview(pubId: string) {
+  previewError.value = null
+  previewRunning.value = pubId
+  try {
+    const result = await previewStore.run(pubId)
+    if (!result) {
+      previewError.value = previewStore.lastError ?? '预演失败'
+      return
+    }
+    previewDrawerOpen.value = true
+  } finally {
+    previewRunning.value = null
+  }
+}
+
+function closePreview() {
+  previewDrawerOpen.value = false
+  previewStore.reset()
+}
+
 function showError() {
   const [code, ...rest] = (actionStore.lastError ?? '').split(':')
   errorAlert.value = {
@@ -97,6 +141,13 @@ function isFailed(item: any): boolean {
     <a-button @click="load">加载</a-button>
   </a-space>
   <a-alert
+    v-if="!publishEnabled"
+    type="warning"
+    show-icon
+    style="margin-bottom: 12px"
+    message="publish.enabled=false：🔍 预演按钮只读展示，safe_publish 会以「publish is disabled」拒绝（不会真发）。"
+  />
+  <a-alert
     v-if="success"
     type="success"
     :message="success"
@@ -113,6 +164,15 @@ function isFailed(item: any): boolean {
     closable
     style="margin-bottom: 12px"
     @close="errorAlert = null"
+  />
+  <a-alert
+    v-if="previewError"
+    type="error"
+    show-icon
+    closable
+    style="margin-bottom: 12px"
+    :message="`预演失败：${previewError}`"
+    @close="previewError = null"
   />
   <a-spin :spinning="loading">
     <template v-if="calendar">
@@ -148,6 +208,15 @@ function isFailed(item: any): boolean {
                       @click="onCancel(item.id)"
                     >
                       cancel
+                    </a-button>
+                    <a-button
+                      v-if="isQueued(item)"
+                      size="small"
+                      :loading="previewRunning === item.id || previewStore.running"
+                      style="margin-left: 4px"
+                      @click="onPreview(item.id)"
+                    >
+                      🔍 预演
                     </a-button>
                     <a-button
                       v-if="isFailed(item)"
@@ -186,4 +255,113 @@ function isFailed(item: any): boolean {
       </p>
     </a-form>
   </a-modal>
+
+  <a-drawer
+    :open="previewDrawerOpen"
+    title="Dry-run 发布预演"
+    :width="520"
+    @close="closePreview"
+  >
+    <PreviewResultPanel
+      v-if="previewStore.lastResult"
+      :result="previewStore.lastResult as PreviewResult"
+    />
+    <a-empty v-else description="等待后端 run 完成后展示" />
+  </a-drawer>
 </template>
+
+<script lang="ts">
+import { defineComponent, h, type PropType } from 'vue'
+
+interface PanelProps {
+  result: PreviewResult
+}
+
+const PreviewResultPanel = defineComponent({
+  name: 'PreviewResultPanel',
+  props: { result: { type: Object as PropType<PreviewResult>, required: true } },
+  setup(props: PanelProps) {
+    return () => {
+      const r = props.result
+      const preview = r.preview
+      return h('div', [
+        h(
+          'a-alert',
+          {
+            type: r.validate_passed ? 'success' : 'warning',
+            showIcon: true,
+            style: 'margin-bottom: 12px',
+            message: r.validate_passed
+              ? '本地校验通过'
+              : `本地校验有 ${r.validate_errors.length} 条问题`,
+          },
+        ),
+        r.validate_errors.length
+          ? h(
+              'a-list',
+              {
+                size: 'small',
+                dataSource: r.validate_errors,
+                style: 'margin-bottom: 12px',
+              },
+              {
+                renderItem: ({ item }: { item: string }) =>
+                  h('a-list-item', () => h('span', { style: 'color:#c41d7f' }, item)),
+              },
+            )
+          : null,
+        h(
+          'a-descriptions',
+          { title: '预览内容', bordered: true, size: 'small', column: 1 },
+          () => [
+            h('a-descriptions-item', { label: '标题' }, () => preview.title),
+            h(
+              'a-descriptions-item',
+              { label: '正文摘要' },
+              () => preview.body_excerpt || '（空）',
+            ),
+            h('a-descriptions-item', { label: '平台' }, () => preview.platform),
+            h('a-descriptions-item', { label: '账号' }, () => preview.account_id),
+            h(
+              'a-descriptions-item',
+              { label: '排期' },
+              () => preview.scheduled_at,
+            ),
+            h(
+              'a-descriptions-item',
+              { label: '媒体' },
+              () => preview.media.length
+                ? h(
+                    'a-list',
+                    { size: 'small', dataSource: preview.media },
+                    {
+                      renderItem: ({ item }: { item: string }) =>
+                        h('a-list-item', () => h('code', item)),
+                    },
+                  )
+                : '（无）',
+            ),
+            h(
+              'a-descriptions-item',
+              { label: 'tags' },
+              () => preview.tags.length ? preview.tags.join(', ') : '（无）',
+            ),
+          ],
+        ),
+        h(
+          'a-alert',
+          {
+            type: 'info',
+            showIcon: true,
+            style: 'margin-top: 12px',
+            message: `safe_publish: published=${r.safe_publish_result.published} dry_run=${r.safe_publish_result.dry_run}`,
+          },
+          () => r.safe_publish_result.reason || '（无 reason）',
+        ),
+      ])
+    }
+  },
+})
+
+export default PreviewResultPanel
+</script>
