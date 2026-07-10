@@ -1,4 +1,5 @@
-// M10-7 路由：蚁小二式左侧栏导航对应的 11 个真实页面 + /roadmap/* 占位
+// M11-A 路由：保留 M10-7 全部 11 真实页 + 占位路由；M11-A 新增 `/publish` 重定向
+// （M11-B 会把 `/publish` 替换为正式 PublishCenter 组件）
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
@@ -8,6 +9,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/contents/:id', name: 'content-detail', component: () => import('../views/ContentDetail.vue') },
   { path: '/review', name: 'review', component: () => import('../views/Review.vue') },
   { path: '/creation', name: 'creation', component: () => import('../views/Creation.vue') },
+  { path: '/publish', name: 'publish', redirect: '/publish/records' },
   { path: '/publish/calendar', name: 'publish-calendar', component: () => import('../views/PublishCalendar.vue') },
   { path: '/publish/records', name: 'publish-records', component: () => import('../views/PublishRecords.vue') },
   { path: '/analytics', name: 'analytics', component: () => import('../views/Analytics.vue') },
