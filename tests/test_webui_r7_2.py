@@ -167,50 +167,27 @@ class TestOutputDirAutoCreate:
         assert client.delete("/output/test.txt").status_code == 405
 
 
-# ── 2. /static 无 if 条件也能挂 ────────────────────────────
+# ── 2. (历史) /static 无 if 条件也能挂 ─────────────────────
+#
+# M10 P1 后 /static 已废弃,pico.min.css 不再 vendored。
+# /assets(Vite 产物)取代它。SPA build 验证见 test_spa_serving.py。
+# 本节不再有断言 —— M3-3 时期的 CSS 静态测试已被 SPA 端 AntD Vue 自带
+# 样式链路取代,FastAPI / 静态资源契约由 test_spa_serving.test_assets_mounted
+# 当 dist 存在时实际覆盖。
 
-
-class TestStaticDirAlwaysMounted:
-    def test_static_pico_css_accessible(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        pre_init_db: Path,
-        minimal_config: AppConfig,
-    ) -> None:
-        """/static 不再 if exists 条件挂载 → pico.min.css 必可访问。
-
-        static_dir 用的是 Path(__file__).parent / "static"（绝对路径），
-        不受 chdir 影响。
-        """
-        import pipeline.webui.app as app_mod
-        import pipeline.webui.deps as deps
-        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
-        monkeypatch.setattr(
-            deps, "load_config", lambda *a, **kw: minimal_config,
-        )
-
-        client = TestClient(create_app_safe(monkeypatch))
-        r = client.get("/static/pico.min.css")
-        assert r.status_code == 200, (
-            f"pico.min.css 应可访问但 status={r.status_code}"
-        )
-        # CSS 文件 content-type 形如 text/css
-        ct = r.headers.get("content-type", "")
-        assert "text/css" in ct, f"content-type 应含 text/css，实际: {ct}"
-
-
-# ── 3. 行为契约：/output 与 /static 都用 StaticFiles（只读） ───
+# ── 3. 行为契约：/output 与 SPA 都对外只读 ────────────────
 
 
 class TestStaticFilesUnchanged:
     """回归覆盖：修复不应影响路由签名和其它行为。"""
 
-    def test_dashboard_still_renders(
+    def test_root_serves_spa_index(
         self,
         monkeypatch: pytest.MonkeyPatch,
         pre_init_db: Path,
         minimal_config: AppConfig,
     ) -> None:
+        """/ 由 SPA catch-all 服务 frontend/dist/index.html。"""
         import pipeline.webui.app as app_mod
         import pipeline.webui.deps as deps
         monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
@@ -221,6 +198,9 @@ class TestStaticFilesUnchanged:
         client = TestClient(create_app_safe(monkeypatch))
         r = client.get("/")
         assert r.status_code == 200
+        assert "<!doctype html>" in r.text.lower()
+        # SPA 不再用 Pico
+        assert "pico" not in r.text.lower()
 
     def test_api_status_still_renders(
         self,

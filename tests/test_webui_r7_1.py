@@ -3,10 +3,10 @@
 1. _conn() 每请求 init_db 跑 DDL → 浪费 + 拖慢
 2. create_app() 内一次性 init_db 即可
 3. datetime.utcnow() 已 deprecated → 用 datetime.now(timezone.utc)
+   （M10 P1 后该验证场景不再适用,dashboard 改 SPA 渲染,见下方说明）
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -115,64 +115,13 @@ class TestInitDbOnce:
         assert init_db_mock.call_count >= 1
 
 
-# ── 2. Dashboard 用 timezone.utc，不再用弃用 utcnow() ────────
-
-
-class TestDashboardTimezone:
-    def test_dashboard_html_contains_utc_offset(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        pre_init_db: Path,
-        minimal_config: AppConfig,
-    ) -> None:
-        """Dashboard 时间字符串含 +00:00（timezone-aware）。
-
-        datetime.utcnow().isoformat() 不含时区偏移（无 +00:00）。
-        datetime.now(timezone.utc).isoformat() 含 +00:00。
-        """
-        import pipeline.webui.app as app_mod
-        import pipeline.webui.deps as deps
-        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
-        monkeypatch.setattr(
-            deps, "load_config", lambda *a, **kw: minimal_config,
-        )
-
-        client = TestClient(create_app())
-        r = client.get("/")
-        assert r.status_code == 200
-        assert "+00:00" in r.text, (
-            "Dashboard 时间应含 +00:00（timezone.utc），"
-            f"实际响应片段：{r.text[:500]}"
-        )
-
-    def test_dashboard_time_matches_utc_now(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        pre_init_db: Path,
-        minimal_config: AppConfig,
-    ) -> None:
-        """Dashboard 时间字符串可被 datetime.fromisoformat 解析为 UTC。"""
-        import re
-        import pipeline.webui.app as app_mod
-        import pipeline.webui.deps as deps
-        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
-        monkeypatch.setattr(
-            deps, "load_config", lambda *a, **kw: minimal_config,
-        )
-
-        client = TestClient(create_app())
-        r = client.get("/")
-        assert r.status_code == 200
-
-        # 模板 "更新时间：<iso>"，抓出 iso 字符串
-        m = re.search(r"更新时间：([0-9T:.+\-Z]+)", r.text)
-        assert m is not None, "找不到 更新时间： 字段"
-        iso = m.group(1)
-        parsed = datetime.fromisoformat(iso)
-        # 必须 tz-aware 且偏移 0
-        assert parsed.tzinfo is not None, "时间字符串必须含时区信息"
-        assert parsed.utcoffset() == timezone.utc.utcoffset(parsed), \
-            "时间必须为 UTC"
+# ── 2. M10 P1 后 dashboard.html 不再由 app 渲染 ─────────────
+#
+# M10 P1 之前,dashboard.html 模板含 "更新时间：<iso>" 字符串,
+# 用以断言 datetime.utcnow() → datetime.now(timezone.utc) 迁移。
+# M10 P1 后 / 由 SPA catch-all 服务 frontend/dist/index.html,
+# 该字符串已无意义,timezone 测试被 SPA 自身的 fetch /api/v1/dashboard 覆盖。
+# 保留此节仅为结构:该迁移已在多处 (M8/M9 等) 验证过。
 
 
 # ── 3. 完整 init_db 不被绕过的兜底测试 ──────────────────────

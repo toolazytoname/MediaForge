@@ -1,50 +1,50 @@
-"""M3-3 Web 控制台（TECH_SPEC §7 + ARCHITECTURE §3.9）。
+"""M3-3 → M10-9 Web 控制台。
 
-设计原则：
-  - FastAPI + Jinja2 服务端渲染 + htmx（无 npm/Vite）
-  - **UI 不直接写 SQL**——读走 db 查询函数，写走 db.transition() 状态机
-  - 所有 POST 返回 htmx 局部片段；错误统一 role=alert 片段
-  - 三重锁（publish.enabled）对 UI 触发的发布操作同样生效
+M10 P1 完成: SPA + /api/v1 已上线,旧 htmx 页面路由已移除,这些路径
+现在全部交给 SPA catch-all 服务 `frontend/dist/index.html`,前端 Vue
+Router 渲染并通过 `/api/v1` 取数据。
 
-路由契约（TECH_SPEC §7）：
-  GET  /                     Dashboard
-  GET  /api/status           JSON 状态计数
-  GET  /topics?status=       选题池
-  POST /topics/{id}/promote  scored→selected
-  POST /topics/{id}/reject   →rejected
-  GET  /review               审核台（gated 卡片流）
-  POST /review/{content_id}  body: {decision, reason?}
-  GET  /calendar             发布日历
-  POST /publications/{id}/reschedule
+写操作路由（promote/reject/approve/reschedule/cancel/retry）保留,
+旧版契约不变,curl/脚本可触发;直到 M10 P2 在 SPA 上接线 UI 按钮。
+
+设计原则:
+  - UI 不直接写 SQL——读走 db 查询函数,写走 db.transition() 状态机
+  - 写操作受三重锁（publish.enabled）约束
+  - SPA catch-all 紧跟具体路径注册顺序
+
+路由契约（TECH_SPEC §7 + M10-4/M10-5）:
+  GET  /                              SPA catch-all → index.html
+  GET  /api/v1/*                      JSON API
+  GET  /api/status                    旧版 JSON 状态计数（迁移期保留）
+  POST /topics/{id}/promote           scored→selected
+  POST /topics/{id}/reject            →rejected
+  POST /review/{content_id}           body: {decision, reason?}
+  POST /publications/{id}/reschedule  queued 仅可改时间
   POST /publications/{id}/cancel
-  POST /publications/{id}/retry        (failed→queued)
-  GET  /contents/{id}        内容详情
-  GET  /settings             config 脱敏展示
+  POST /publications/{id}/retry       failed→queued（不调 publish）
+  GET  /output/<path>                 只读图卡
+  GET  /assets/<path>                 SPA Vite 静态资源
 """
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from pipeline import db
 from pipeline.models import ContentStatus, PublicationStatus, TopicStatus
 from pipeline.webui import deps
 from pipeline.webui.api import api_router
-from pipeline.webui.mdrender import md_to_html
-from pipeline.webui.sanitize import sanitize_config
 
 
 # ── 工具 ────────────────────────────────────────────────────
 
 
 def _status_counts(conn: sqlite3.Connection) -> dict:
-    """各状态计数（dashboard 用）。"""
+    """各状态计数（/api/status 用,保留旧契约兼容）。"""
     out = {"topics": {}, "contents": {}, "publications": {}}
     for table in ("topics", "contents", "publications"):
         rows = conn.execute(
@@ -55,7 +55,7 @@ def _status_counts(conn: sqlite3.Connection) -> dict:
 
 
 def _alert(msg: str) -> HTMLResponse:
-    """统一错误片段：role=alert。"""
+    """统一错误片段:role=alert（旧 htmx 客户端期望此格式）。"""
     html = f'<div role="alert" class="alert error">{msg}</div>'
     return HTMLResponse(html, status_code=400)
 
@@ -70,24 +70,17 @@ def _ok(html: str) -> HTMLResponse:
 def create_app() -> FastAPI:
     app = FastAPI(title="MediaForge Console", version="0.3.0")
 
-    base = Path(__file__).parent
-    templates = Jinja2Templates(directory=str(base / "templates"))
-
-    # 应用启动时一次性建表（每请求跑 DDL 是浪费；create_app 内做完即可）
-    # db.connect 不支持 contextmanager，手动 close
+    # 启动时一次性建表（每请求跑 DDL 是浪费）
     _init_c = db.connect(deps._DB_PATH)
     try:
         db.init_db(_init_c)
     finally:
         _init_c.close()
 
-    # M10-4 /api/v1 JSON API（dashboard/topics/sources/contents/review）
-    # 旧 htmx 路由仍保留——SPA parity 后移除
+    # M10-4 / M10-5 /api/v1 JSON API
     app.include_router(api_router)
 
-    # /output 静态目录（只读）—— 工厂时挂载（同步，幂等）
-    # R7-2 修复：移除 `if exists` 条件，启动时自动 mkdir；这样流水线后建
-    # 的图卡 PNG 无需重启 webui 即可访问（M2-4 派生阶段产出后场景）。
+    # /output 静态目录(只读)—— 启动时 mkdir 后无条件挂载
     output_dir = Path("output")
     output_dir.mkdir(parents=True, exist_ok=True)
     app.mount(
@@ -96,17 +89,8 @@ def create_app() -> FastAPI:
         name="output",
     )
 
-    # 静态 vendor (pico.css) — 仓库自带资产，正常存在；去掉 if 条件直接挂
-    static_dir = base / "static"
-    app.mount(
-        "/static",
-        StaticFiles(directory=str(static_dir)),
-        name="static",
-    )
-
-    # M10-6 SPA 构建产物 frontend/dist/assets（Vite 输出）——目录不存在则跳过
-    # 注意：/assets 必须挂在 catch-all 之前，否则 catch-all 抢先匹配
-    assets_dir = base.parent.parent / "frontend" / "dist" / "assets"
+    # /assets = SPA 构建产物 frontend/dist/assets（Vite 输出）——不存在则跳过
+    assets_dir = Path(__file__).parent.parent.parent / "frontend" / "dist" / "assets"
     if assets_dir.is_dir():
         app.mount(
             "/assets",
@@ -114,41 +98,12 @@ def create_app() -> FastAPI:
             name="spa-assets",
         )
 
-    # ── Dashboard / API ────────────────────────────────────
-
-    @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request) -> HTMLResponse:
-        with deps._db() as conn:
-            counts = _status_counts(conn)
-        return templates.TemplateResponse(
-            request, "dashboard.html",
-            {"counts": counts,
-             "now": datetime.now(timezone.utc).isoformat()},
-        )
+    # ── 旧 JSON 兼容 + 写操作 POST(契约保留,M10 P2 接到 SPA) ──
 
     @app.get("/api/status")
     def api_status() -> JSONResponse:
         with deps._db() as conn:
             return JSONResponse(_status_counts(conn))
-
-    # ── 选题池 ─────────────────────────────────────────────
-
-    @app.get("/topics", response_class=HTMLResponse)
-    def topics(
-        request: Request,
-        status: str | None = None,
-    ) -> HTMLResponse:
-        with deps._db() as conn:
-            if status:
-                rows = db.get_topics_by_status(conn, status)
-            else:
-                rows = []
-                for st in TopicStatus:
-                    rows.extend(db.get_topics_by_status(conn, st.value))
-            return templates.TemplateResponse(
-                request, "topics.html",
-                {"topics": rows, "filter": status or ""},
-            )
 
     @app.post("/topics/{topic_id}/promote", response_class=HTMLResponse)
     def topic_promote(topic_id: str) -> HTMLResponse:
@@ -159,9 +114,7 @@ def create_app() -> FastAPI:
                     TopicStatus.SCORED.value,
                     TopicStatus.SELECTED.value,
                 )
-                return _ok(
-                    f'<span class="badge ok">promoted → selected</span>'
-                )
+                return _ok('<span class="badge ok">promoted → selected</span>')
             except Exception as e:
                 return _alert(f"promote 失败：{e}")
 
@@ -174,24 +127,9 @@ def create_app() -> FastAPI:
                     TopicStatus.SCORED.value,
                     TopicStatus.REJECTED.value,
                 )
-                return _ok(
-                    f'<span class="badge rejected">rejected</span>'
-                )
+                return _ok('<span class="badge rejected">rejected</span>')
             except Exception as e:
                 return _alert(f"reject 失败：{e}")
-
-    # ── 审核台 ─────────────────────────────────────────────
-
-    @app.get("/review", response_class=HTMLResponse)
-    def review(request: Request) -> HTMLResponse:
-        with deps._db() as conn:
-            gated = db.get_contents_by_status(
-                conn, ContentStatus.GATED.value,
-            )
-            return templates.TemplateResponse(
-                request, "review.html",
-                {"gated": gated},
-            )
 
     @app.post("/review/{content_id}", response_class=HTMLResponse)
     def review_decide(
@@ -210,11 +148,7 @@ def create_app() -> FastAPI:
                         ContentStatus.GATED.value,
                         ContentStatus.APPROVED.value,
                     )
-                    return _ok(
-                        '<span class="badge ok">approved</span>'
-                    )
-                # reject: 写理由到 gate_verdict + 状态转移
-                # R7-3：写 SQL 抽到 db.set_gate_verdict，UI 不再裸 conn.execute
+                    return _ok('<span class="badge ok">approved</span>')
                 verdict = f"REJECTED_BY_HUMAN: {reason}".strip()
                 n = db.set_gate_verdict(
                     conn, content_id, verdict,
@@ -234,43 +168,14 @@ def create_app() -> FastAPI:
             except Exception as e:
                 return _alert(f"{decision} 失败：{e}")
 
-    # ── 发布日历（M4-4 周视图） ────────────────────────────────
-
-    @app.get("/calendar", response_class=HTMLResponse)
-    def calendar(
-        request: Request, week: str | None = None,
-    ) -> HTMLResponse:
-        """周视图日历（htmx 换周）。
-
-        ?week=YYYY-MM-DD 为周锚定日（缺省 = 今天 UTC）。
-        hx-get="/calendar?week=..." hx-target="#calendar-grid" hx-swap="innerHTML"
-        """
-        from pipeline.webui.calendar import bucket_week
-
-        with deps._db() as conn:
-            pubs = []
-            for st in PublicationStatus:
-                pubs.extend(db.get_publications_by_status(conn, st.value))
-            bucket = bucket_week(pubs, anchor_iso=week)
-            return templates.TemplateResponse(
-                request, "calendar.html",
-                {"bucket": bucket, "week": week or bucket.this_week},
-            )
-
     @app.post(
         "/publications/{pub_id}/reschedule", response_class=HTMLResponse
     )
     def pub_reschedule(
         pub_id: str, scheduled_at: str = Form(...)
     ) -> HTMLResponse:
-        """reschedule 语义：仅 queued 状态的 publication 可改时间。
-
-        TECH_SPEC §4 没有 reschedule 这条状态边——保留 scheduled_at 字段
-        可变但 status 限定为 queued（发布中/已完成/失败/取消 的不能再改）。
-        """
         with deps._db() as conn:
             try:
-                # R7-3：写 SQL 抽到 db.reschedule_publication
                 n = db.reschedule_publication(
                     conn, pub_id, scheduled_at,
                     expect_status=PublicationStatus.QUEUED.value,
@@ -304,9 +209,9 @@ def create_app() -> FastAPI:
         "/publications/{pub_id}/retry", response_class=HTMLResponse
     )
     def pub_retry(pub_id: str) -> HTMLResponse:
-        """failed→queued 走 reset 逻辑（§7）。
-        注意：不调真实 publish——发布由 `pipeline.run publish` 触发，
-        且 publish.enabled=false 时整体阻断。三重锁天然生效。
+        """failed→queued —— 只改状态,不调真实 publish。
+        三重锁天然生效：实际发布由 `pipeline.run publish` 触发,
+        publish.enabled=false 时整体阻断。
         """
         with deps._db() as conn:
             try:
@@ -319,61 +224,16 @@ def create_app() -> FastAPI:
             except Exception as e:
                 return _alert(f"retry 失败：{e}")
 
-    # ── 内容详情 ───────────────────────────────────────────
-
-    @app.get("/contents/{content_id}", response_class=HTMLResponse)
-    def content_detail(
-        request: Request, content_id: str
-    ) -> HTMLResponse:
-        with deps._db() as conn:
-            c = db.get_content(conn, content_id)
-            if c is None:
-                raise HTTPException(404, "content not found")
-            canonical_html = ""
-            try:
-                cp = Path(c.canonical_path)
-                if cp.exists():
-                    canonical_html = md_to_html(cp.read_text(encoding="utf-8"))
-            except Exception:
-                canonical_html = "(无法读取 canonical.md)"
-            return templates.TemplateResponse(
-                request, "content_detail.html",
-                {"content": c, "canonical_html": canonical_html},
-            )
-
-    # ── 设置 ───────────────────────────────────────────────
-
-    @app.get("/settings", response_class=HTMLResponse)
-    def settings(request: Request) -> HTMLResponse:
-        cfg, err = deps.get_config()
-        # 脱敏：把 webhook_url 等敏感字段值替换为 "***"
-        sanitized = sanitize_config(cfg.model_dump()) if cfg else {}
-        # cookie 健康状态（轻量级：只校验文件存在 + 格式合法；不实际探活）
-        cookie_health = []
-        if cfg is not None:
-            from pipeline.webui.cookie_health_views import collect_cookie_health
-            cookie_health = collect_cookie_health(cfg)
-        return templates.TemplateResponse(
-            request, "settings.html",
-            {
-                "config": sanitized,
-                "err": err,
-                "cookie_health": cookie_health,
-            },
-        )
-
-    # ── M10-6 SPA 客户端路由 catch-all ────────────────────────
-    # 必须在所有具体路由之后注册——FastAPI 按注册顺序匹配。
-    # 命中条件：路径不以 /api /output /static /assets 开头；
-    # dist 存在 → 返回 dist/index.html；不存在 → 返回构建提示页。
-    spa_index = base.parent.parent / "frontend" / "dist" / "index.html"
+    # ── SPA catch-all（最后注册;具体路径/api/output/assets 都已匹配） ──
+    spa_index = (
+        Path(__file__).parent.parent.parent / "frontend" / "dist" / "index.html"
+    )
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa_catch_all(full_path: str) -> HTMLResponse:
-        # 防御：理论上不应该命中这些前缀（前面的路由已匹配）
+        # 防御:前面的路由已匹配,这里不应该命中这些前缀
         if (full_path.startswith("api/")
                 or full_path.startswith("output/")
-                or full_path.startswith("static/")
                 or full_path.startswith("assets/")):
             raise HTTPException(status_code=404, detail="Not Found")
         if spa_index.is_file():
@@ -381,13 +241,12 @@ def create_app() -> FastAPI:
                 spa_index.read_text(encoding="utf-8"),
                 status_code=200,
             )
-        # dist 缺失：返回构建提示页（不 500）
+        # dist 缺失（罕见,正常 clone 后默认提交）
         return HTMLResponse(
             "<!DOCTYPE html><html><head><meta charset='utf-8'>"
             "<title>MediaForge</title></head><body>"
             "<h1>MediaForge frontend not built</h1>"
-            "<p>Run <code>cd frontend && npm ci && npm run build</code>, "
-            "or use the legacy htmx UI at <a href='/topics'>/topics</a>.</p>"
+            "<p>Run <code>cd frontend && npm ci && npm run build</code>.</p>"
             "</body></html>",
             status_code=200,
         )
@@ -395,11 +254,11 @@ def create_app() -> FastAPI:
     return app
 
 
-# ── 辅助函数 ────────────────────────────────────────────────
+# ── 入口 ──────────────────────────────────────────────────
 
 
 def main() -> int:
-    """启动入口（cmd_webui 调用）。"""
+    """启动入口(cmd_webui 调用)。"""
     import uvicorn
     try:
         cfg = deps.load_config(deps._CONFIG_PATH)

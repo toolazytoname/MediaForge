@@ -1,6 +1,11 @@
-"""M3-3 Web 控制台 v1。
+"""M3-3 → M10-9 Web 控制台测试。
 
-测试 TECH_SPEC §7 路由契约 + 状态机约束 + 三重锁生效。
+M10 P1 后:
+  - GET 页面路径（/、/topics、/review、/calendar、/contents/{id}、/settings）
+    由 SPA catch-all 服务 frontend/dist/index.html。
+  - POST 写操作（promote/reject/approve/reschedule/cancel/retry）保留旧
+    契约不变,curl/脚本可触发;断言照旧。
+  - JSON /api/status 保留（迁移期兼容）。
 """
 from __future__ import annotations
 
@@ -38,6 +43,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _spa_index_marker() -> str:
+    """SPA index.html 的最小特征（dist 存在时一定返回这些）。"""
+    # index.html 含 <div id="app">（Vue 挂载点）+ module script 标签
+    p = Path(__file__).parent.parent / "frontend" / "dist" / "index.html"
+    if p.is_file():
+        return p.read_text(encoding="utf-8")
+    return '<!DOCTYPE html><html>'  # dist 缺时的占位提示页
+
+
 @pytest.fixture
 def conn(tmp_path: Path) -> sqlite3.Connection:
     c = db.connect(tmp_path / "state.db")
@@ -70,7 +84,7 @@ def client(
     conn: sqlite3.Connection,
     minimal_config: AppConfig,
 ) -> TestClient:
-    """注入 db path + config，避免 webui 读默认 './state.db' / './config.yaml'。"""
+    """注入 db path + config,避免 webui 读默认 './state.db' / './config.yaml'。"""
     import pipeline.webui.app as app_mod
     import pipeline.webui.deps as deps
 
@@ -110,7 +124,6 @@ def _seed_content(
 ) -> Content:
     if topic_id is None:
         topic_id = "t_" + id.removeprefix("c_")
-    # 自动建 topic（contents.topic_id FK 需要）
     _seed_topic(conn, id=topic_id)
     now = _now()
     c = Content(
@@ -136,7 +149,6 @@ def _seed_publication(
     status: str = PublicationStatus.QUEUED.value,
     scheduled_at: str = "2026-07-06T10:00:00+00:00",
 ) -> Publication:
-    # 自动建 topic + content（publications.content_id FK）
     _seed_content(conn, id=content_id)
     now = _now()
     p = Publication(
@@ -151,20 +163,36 @@ def _seed_publication(
     return p
 
 
-# ── Dashboard / status ─────────────────────────────────────
+# ── SPA catch-all：所有 GET 页面路径全部进 SPA ──────────────
 
 
-class TestDashboard:
-    def test_root_returns_200(self, client: TestClient) -> None:
-        r = client.get("/")
+class TestSpaCatchAll:
+    """M10 P1：GET 页面路径不再由 app.py 服务端渲染,统一进 SPA catch-all."""
+
+    PATHS = [
+        "/",
+        "/topics",
+        "/topics?status=scored",
+        "/review",
+        "/calendar",
+        "/contents/c_detail01",
+        "/settings",
+        "/publish/calendar",
+        "/runs",
+    ]
+
+    @pytest.mark.parametrize("path", PATHS)
+    def test_get_returns_spa_index(self, client: TestClient, path: str) -> None:
+        r = client.get(path)
+        # SPA 返回 HTML 200（dist 存在）或提示页（dist 缺失）
         assert r.status_code == 200
-        # 应含 Dashboard 字样
-        assert "Dashboard" in r.text or "dashboard" in r.text.lower()
+        assert "<!doctype html>" in r.text.lower()
+        # SPA 产物含 id="app"（dist 存在时）或提示页（缺时）
+        # 不再含任何旧 htmx 字样（Pico 风格）
+        assert "pico" not in r.text.lower()
 
-    def test_api_status_json_shape(
-        self, client: TestClient, conn: sqlite3.Connection
-    ) -> None:
-        _seed_content(conn)
+    def test_api_status_still_json(self, client: TestClient) -> None:
+        """旧 /api/status 契约保留,curl/迁移期仍能用。"""
         r = client.get("/api/status")
         assert r.status_code == 200
         body = r.json()
@@ -173,26 +201,16 @@ class TestDashboard:
         assert "publications" in body
 
 
-# ── 选题池 ─────────────────────────────────────────────────
+# ── 写操作 POST：契约保留,curl/脚本可触发 ─────────────────
 
 
-class TestTopics:
-    def test_topics_list_filters_by_status(
-        self, client: TestClient, conn: sqlite3.Connection
-    ) -> None:
-        _seed_topic(conn, id="t_scored01", status=TopicStatus.SCORED.value)
-        _seed_topic(conn, id="t_raw00001", status=TopicStatus.RAW.value)
-        r = client.get("/topics?status=scored")
-        assert r.status_code == 200
-        assert "t_scored01" in r.text
-        assert "t_raw00001" not in r.text
-
+class TestTopicsWrite:
     def test_promote_scored_to_selected(
         self, client: TestClient, conn: sqlite3.Connection
     ) -> None:
         _seed_topic(conn, id="t_promote1", status=TopicStatus.SCORED.value)
         r = client.post("/topics/t_promote1/promote")
-        # htmx fragment — 2xx
+        # htmx fragment —— 2xx
         assert 200 <= r.status_code < 400
         row = conn.execute(
             "SELECT status FROM topics WHERE id=?", ("t_promote1",)
@@ -202,7 +220,7 @@ class TestTopics:
     def test_promote_already_selected_returns_alert(
         self, client: TestClient, conn: sqlite3.Connection
     ) -> None:
-        """状态机：selected → selected 非法，UI 返回 role=alert 片段（§7）。"""
+        """状态机：selected → selected 非法,UI 返回 role=alert 片段（§7）。"""
         _seed_topic(conn, id="t_already1", status=TopicStatus.SELECTED.value)
         r = client.post("/topics/t_already1/promote")
         assert r.status_code >= 400
@@ -220,22 +238,7 @@ class TestTopics:
         assert row["status"] == TopicStatus.REJECTED.value
 
 
-# ── 审核台 ─────────────────────────────────────────────────
-
-
-class TestReview:
-    def test_review_lists_gated_content(
-        self, client: TestClient, conn: sqlite3.Connection
-    ) -> None:
-        _seed_content(conn, id="c_review01",
-                      status=ContentStatus.GATED.value)
-        _seed_content(conn, id="c_approved1",
-                      status=ContentStatus.APPROVED.value)
-        r = client.get("/review")
-        assert r.status_code == 200
-        assert "c_review01" in r.text
-        assert "c_approved1" not in r.text
-
+class TestReviewWrite:
     def test_review_approve_moves_gated_to_approved(
         self, client: TestClient, conn: sqlite3.Connection
     ) -> None:
@@ -280,17 +283,7 @@ class TestReview:
         assert 'role="alert"' in r.text
 
 
-# ── 发布日历 ───────────────────────────────────────────────
-
-
-class TestCalendar:
-    def test_calendar_renders(
-        self, client: TestClient, conn: sqlite3.Connection
-    ) -> None:
-        _seed_publication(conn, id="p_cal001")
-        r = client.get("/calendar")
-        assert r.status_code == 200
-
+class TestPublicationWrite:
     def test_reschedule_updates_scheduled_at(
         self, client: TestClient, conn: sqlite3.Connection
     ) -> None:
@@ -315,8 +308,7 @@ class TestCalendar:
         r = client.post("/publications/p_cancel01/cancel")
         assert 200 <= r.status_code < 400
         row = conn.execute(
-            "SELECT status FROM publications WHERE id=?",
-            ("p_cancel01",),
+            "SELECT status FROM publications WHERE id=?", ("p_cancel01",)
         ).fetchone()
         assert row["status"] == PublicationStatus.CANCELLED.value
 
@@ -328,59 +320,22 @@ class TestCalendar:
         r = client.post("/publications/p_retry001/retry")
         assert 200 <= r.status_code < 400
         row = conn.execute(
-            "SELECT status FROM publications WHERE id=?",
-            ("p_retry001",),
+            "SELECT status FROM publications WHERE id=?", ("p_retry001",)
         ).fetchone()
         assert row["status"] == PublicationStatus.QUEUED.value
 
     def test_retry_does_not_publish_when_disabled(
         self, client: TestClient, conn: sqlite3.Connection,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """三重锁：publish.enabled=false 时 retry 只改状态不实际发布。"""
+        """三重锁：retry 只改状态不实际发布。"""
         _seed_publication(conn, id="p_retry002",
                           status=PublicationStatus.FAILED.value)
-        # 验证 publish 端点没被调用
         called = {"n": 0}
         def fake_publish(*a, **kw):
             called["n"] += 1
             return 0
-        # 这里 retry 不调 publish——它只走 db.transition；发布由 publish 命令触发
-        # 所以这条测试断言 retry 不直接发布——任何情况下都安全
+        # retry 不调 publish——它只走 db.transition；发布由 publish 命令触发
         r = client.post("/publications/p_retry002/retry")
         assert 200 <= r.status_code < 400
-        # retry 只走 transition，不调 publish——called 应为 0
+        # retry 只走 transition,不调 publish——called 应为 0
         assert called["n"] == 0
-
-
-# ── 内容详情 ───────────────────────────────────────────────
-
-
-class TestContentDetail:
-    def test_content_detail_renders(
-        self, client: TestClient, conn: sqlite3.Connection,
-        tmp_path: Path,
-    ) -> None:
-        # 创建真实 canonical.md 以渲染
-        cid = "c_detail01"
-        d = tmp_path / "output" / "2026-07-05" / cid
-        d.mkdir(parents=True)
-        (d / "canonical.md").write_text("# 标题\n\n正文", encoding="utf-8")
-        _seed_content(conn, id=cid)
-        r = client.get(f"/contents/{cid}")
-        assert r.status_code == 200
-        assert cid in r.text
-
-
-# ── Settings ───────────────────────────────────────────────
-
-
-class TestSettings:
-    def test_settings_renders_sanitized_config(
-        self, client: TestClient
-    ) -> None:
-        r = client.get("/settings")
-        assert r.status_code == 200
-        # 不应泄露 secret 类字段（本项目 settings 页不展示 secrets/）
-        assert "ANTHROPIC_API_KEY" not in r.text
-        assert "monthly_usd" in r.text.lower() or "budget" in r.text.lower()
