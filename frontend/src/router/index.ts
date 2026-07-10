@@ -7,6 +7,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/contents', name: 'contents', component: () => import('../views/Contents.vue') },
   { path: '/contents/:id', name: 'content-detail', component: () => import('../views/ContentDetail.vue') },
   { path: '/review', name: 'review', component: () => import('../views/Review.vue') },
+  { path: '/creation', name: 'creation', component: () => import('../views/Creation.vue') },
   { path: '/publish/calendar', name: 'publish-calendar', component: () => import('../views/PublishCalendar.vue') },
   { path: '/publish/records', name: 'publish-records', component: () => import('../views/PublishRecords.vue') },
   { path: '/analytics', name: 'analytics', component: () => import('../views/Analytics.vue') },

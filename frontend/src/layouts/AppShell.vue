@@ -12,6 +12,7 @@ import {
   PlayCircleOutlined,
   TeamOutlined,
   BulbOutlined,
+  EditOutlined,
 } from '@ant-design/icons-vue'
 
 const route = useRoute()
@@ -30,6 +31,7 @@ const groups: MenuGroup[] = [
     title: '内容生产',
     items: [
       { path: '/topics', label: '选题池', icon: BulbOutlined },
+      { path: '/creation', label: '图文创作', icon: EditOutlined },
       { path: '/contents', label: '内容库', icon: FileTextOutlined },
       { path: '/review', label: '审核台', icon: CheckCircleOutlined },
     ],

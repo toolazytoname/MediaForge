@@ -2,7 +2,7 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api } from '../api/client'
+import { api, unwrapError } from '../api/client'
 
 // ── Dashboard ──────────────────────────────────────────────
 
@@ -387,4 +387,36 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
   return { config, doctor, loading, error, load }
+})
+
+// ── Creation (M10 P2 阶段 A) ────────────────────────────
+
+export const useCreationStore = defineStore('creation', () => {
+  const running = ref(false)
+  const lastResult = ref<ContentItem | null>(null)
+  const lastError = ref<string | null>(null)
+
+  async function run(topicId: string): Promise<ContentItem | null> {
+    running.value = true
+    lastError.value = null
+    lastResult.value = null
+    try {
+      const r = await api.post<ContentItem>('/contents', { topic_id: topicId })
+      lastResult.value = r.data
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  function reset() {
+    running.value = false
+    lastResult.value = null
+    lastError.value = null
+  }
+
+  return { running, lastResult, lastError, run, reset }
 })
