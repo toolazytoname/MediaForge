@@ -1096,7 +1096,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **红线**：只读；不改 schema
 
 ### M11-G｜图文双模式创作：手动 + 自动，统一汇入 contents（内容生产，中低危）
-- [ ] **目标**：图文创作支持**两个入口、一个出口**——「AI 自动生成」(现有 canonical.create_one) 与「人工手写/编辑」都产出**同一张 `contents` 表的 draft**，之后共用门禁→审核→发布后半条流水线。**不独立成子系统/仓库**（用户已问过是否要独立，结论=否，理由见 `yixiaoer-teardown-and-plan.md` §1/§5）
+- [x] **目标**：图文创作支持**两个入口、一个出口**——「AI 自动生成」(现有 canonical.create_one) 与「人工手写/编辑」都产出**同一张 `contents` 表的 draft**，之后共用门禁→审核→发布后半条流水线。**不独立成子系统/仓库**（用户已问过是否要独立，结论=否，理由见 `yixiaoer-teardown-and-plan.md` §1/§5）
+  ✅ 完成于 2026-07-11，commit 由 M11-G 合入，备注：后端 creators/manual.py::create_manual + update_manual_draft（造 source='manual' topic，走 SELECTED→CONSUMED，INSERT contents status=draft，落 canonical.md，HARD_PARTS §5 tmp→rename，禁止调 LLM），db.update_content_draft 新增（状态条件 UPDATE 不裸 SQL），POST /api/v1/contents 二合一（body_markdown 分支走手动、topic_id 分支走自动），PATCH /api/v1/contents/{id}（仅 draft；非 draft→409）；前端 ManualEditor.vue 三模式（create/edit/readonly），/contents/new 与 /contents/:id/edit 路由，Contents.vue 顶部 [+ 新建草稿] + [🤖 AI 自动生成] 双入口；红线全守（topic_id NOT NULL 桥接 / 不调 LLM / 不 mock 状态机 / API 层零裸 SQL）；+23 新测试（14 manual + 9 API）全绿。
 - **缘起**：用户「图文创作可以手动，也可以自动」「我也有手动的创作需求，想参与」。蚁小二外包易撰是因它无流水线；MediaForge 拥有全自动流水线（差异化命根子），手动只是同漏斗多开一个人工入口
 - **契约关键（先读 TECH_SPEC §2 表结构）**：
   - `contents.topic_id` = **NOT NULL UNIQUE REFERENCES topics(id)**（1:1 强绑）→ 手动创作**必须先有 topic**：造一个轻量 `source='manual'` topic（`insert_topic`，状态 SELECTED→CONSUMED），再挂 Content。**不得改 schema 让 topic_id 可空**
