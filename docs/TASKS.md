@@ -925,6 +925,8 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 
   ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：scripts/build_frontend.sh 一键命令（npm ci + npm run build）。GETTING_STARTED.md §13 占位升级：dist 默认提交 / 改前端才 build / 开发模式 vite dev + 后端并行 / 显式 P1 只读。TS 严格模式 build 修复 3 vue-tsc 错误（Dashboard :format p 显式 number / loadRecords params 类型扩 boolean / Topics 解构多取 record → 删 / AppShell isActive 死代码）。**端到端 5/5 全过**：① build_frontend.sh 成功 ② pytest 1139 pass ③ /api/v1/dashboard 200 + 7 keys ④ /api/v1/settings 脱敏无明文 password/token/api_key/secret ⑤ import anthropic 护栏仅 llm.py 命中。**P1 里程碑达标**：左侧栏 SPA + 11 真实只读页面 + JSON 契约全打通 + 旧 htmx 兼容 + 状态机/三重锁护栏保持 + 模型零 diff + 写操作 P2 禁用。
 
+  ⚠️ **跑偏修正（2026-07-10 补）**：`npm create vite@latest` 脚手架自带的 `frontend/.gitignore` 里有一行 `dist`，优先级高于根 `.gitignore` 的「dist 默认提交」决策，导致 M10-7~M10-9 全程 `frontend/dist` 实际从未进 git（`git ls-files frontend/dist` 一直是 0）；`test_spa_serving.py` 探测不到 dist 会 `pytest.skip`，所以测试全程没报错，问题被掩盖。**影响**：全新 clone 后不 `npm run build` 直接跑 `webui` 只会看到构建提示页，不是承诺的「开箱即用」。**修复**：删掉 `frontend/.gitignore` 里的 `dist` 行（保留 `dist-ssr`），重新 build 后 `git add frontend/dist`，`test_spa_serving.py` 6 个测试从 skip 变为真正执行且全过。
+
 ---
 
 ### M10 P2/P3/P4 大纲（P1 完成后再拆细）

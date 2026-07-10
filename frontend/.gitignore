@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist 默认提交（根 .gitignore 的决策，见 M10-0）；不要在这里重新忽略
 dist-ssr
 *.local
 
