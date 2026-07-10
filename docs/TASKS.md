@@ -1050,3 +1050,93 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 
 ---
 
+## M11 — 蚁小二形态对标 v2：IA 精简 + 发布中心 + 浏览器扩展发布通道（2026-07-10，用户驱动）
+
+> **缘起**：用户以商业产品**蚁小二**（yixiaoer.cn）为模板重整前端与发布。一手侦察（登录态实抓 web 内页 + 官方手册 + 4 个开源发布项目 GitHub）沉淀于 `docs/research/yixiaoer-teardown-and-plan.md`（必读）。
+> **两项已拍板方向**：① 照抄范围 = **分模块对标**（发布/账号/数据抄蚁小二；创作/选题/内容/审核 = MediaForge 真实一等公民保留、**不藏**；后端不支撑的模块占位）；② 国内发布通道 = **引入浏览器扩展**（Wechatsync 5.9k⭐ / MultiPost 2.8k⭐）复用，headless 降级兜底。
+> **蚁小二真实 IA**（对标基准，一手实抓）：一级仅 7 项 `主页·发布·账号·数据·CLI·私信评论·更多`；发布=任务管理台（记录/草稿箱 tab + 新增发布 + 批量 + 4 筛选）；账号=40+ 平台授权中心 + 代理；数据=仪表盘/账号数据/作品数据/排行榜 + 昨日~近30日。**图文创作外包易撰、视频走"浏览器发布助手"，均不在其主导航**。
+> **执行规则**（同 M7/M8/M10）：不改契约（models 字段/SQL schema/Adapter 签名/状态机转移表/TECH_SPEC §3-5）；新增只读 SELECT 允许（增量）；写走 `db.transition`/`set_gate_verdict`/编排，API 不裸 SQL；**真发高危不进自治流，人工确认**。每任务独立 commit + `pytest -q` 全绿 + `git diff` ⊆ 声明改动文件集。
+> **顺序**：`M11-A→B→C→D`（UI 对标，低危，弱模型可批量接棒，可并行）‖ `M11-0→M11-E`（发布通道，高危，需用户）→ `M11-F`（真账号验证，高危）→ `M12`（视频）。
+
+### M11-A｜IA 精简对标（拨正导航，低危，先做）
+- [ ] **目标**：把侧栏从"外壳完全照抄"（把创作藏成占位）拨正为"分模块对标"——发布/账号/数据对标蚁小二，创作/选题/内容/审核作为**真实一等公民**保留在导航
+- **前置**：先固化基线——工作区未提交的 `AppShell.vue`/`TopNavIcon.vue`/dist 改动先由用户确认 commit 或 reset（见 `git status`），M11-A 在确定基线上做
+- **步骤**：
+  1. `frontend/src/layouts/AppShell.vue` 导航重组为分组：**概览**(仪表盘 `/`) · **发布**(发布中心 → M11-B `/publish`) · **账号**(`/accounts`) · **数据**(`/analytics`) · **内容生产**(创作 `/creation`、选题池 `/topics`、内容库 `/contents`、审核台 `/review`) · **运营**(运行台 `/runs`、设置 `/settings`)
+  2. 删除指向 `/roadmap/creation` 的假"创作"入口，改指真实 `/creation`；"素材"若无后端支撑→移入"规划中"占位组或删除；私信评论/小蚁/团队/云托管等无后端模块统一进"规划中"占位(EmptyStub)，明确标注、可导航不假装可用
+  3. 保留 M10-13 紫色主题 + active pill；当前路由高亮
+- **验收**：侧栏含全部真实页面入口且创作/选题/内容/审核可直达真实页(非占位)；规划中模块显示占位；`npm run build` 绿；`pytest -q` 不回归
+- **声明改动文件**：`frontend/src/layouts/AppShell.vue`、（必要时）`frontend/src/router/index.ts`、`frontend/dist/**`、`docs/TASKS.md`
+- **红线**：不动后端/API/契约；**不把真实创作能力降级为占位**
+
+### M11-B｜发布中心重构（对标蚁小二发布页）
+- [ ] **目标**：把分裂的"发布日历+发布记录"合并为蚁小二式**发布中心**：tab【发布记录｜草稿箱】+ [新增发布] + 批量 + 筛选(发布人/类型/状态/模式)
+- **步骤**：
+  1. 新路由 `/publish`（发布中心）含 tab；日历降级为其中一个视图或保留 `/publish/calendar` 子路
+  2. "新增发布"= 对 approved 内容选平台+账号+时间造 queued（**复用 M10-11 `POST /contents/{id}/schedule` 端点，已存在**）
+  3. 筛选走现有 `GET /api/v1/publish/records?status=` + 需要时加只读过滤参数
+- **验收**：一个页面完成"看记录→筛选→新增发布→草稿"；写操作走已有 JSON 端点；`pytest -q` 不回归
+- **声明改动文件**：`frontend/src/views/Publish*.vue`、`frontend/src/router/index.ts`、（如需）`pipeline/webui/api/publish.py`+`pipeline/db.py`、`frontend/dist/**`
+- **红线**：写操作复用 M10 已迁移端点，不新造裸 SQL；真发仍走 M11-E/safe_publish，本任务只到"造 queued"
+
+### M11-C｜账号中心网格化（对标蚁小二账号页）
+- [ ] **目标**：`/accounts` 从 cookie 健康表升级为蚁小二式**平台网格授权中心**
+- **步骤**：前端改为按平台分类网格（config 支持平台 + cookie 健康 + 登录引导）；复用 `GET /api/v1/accounts` + `login-guidance`
+- **验收**：平台网格渲染真实 cookie 健康 + 授权引导；无账号显示引导态；`npm run build` 绿
+- **声明改动文件**：`frontend/src/views/Accounts.vue`、`frontend/dist/**`
+- **红线**：只读；真实授权走 CLI `login` 命令，UI 只展示与引导
+
+### M11-D｜数据看板补维度（对标蚁小二数据页）
+- [ ] **目标**：数据页补齐蚁小二式 tab【仪表盘｜账号数据｜作品数据｜排行榜】+ 时间窗(近7/14/30日)
+- **步骤**：前端加 tab + 时间窗；后端复用 `db_reads`，缺的维度加**只读 SELECT**(增量)
+- **验收**：各 tab 渲染真实数据(空库空态)；新增只读查询各有单测；`pytest -q` 不回归
+- **声明改动文件**：`frontend/src/views/Analytics.vue`、（如需）`pipeline/db_reads.py`+`pipeline/webui/api/analytics.py`+`tests/*`、`frontend/dist/**`
+- **红线**：只读；不改 schema
+
+### M11-G｜图文双模式创作：手动 + 自动，统一汇入 contents（内容生产，中低危）
+- [ ] **目标**：图文创作支持**两个入口、一个出口**——「AI 自动生成」(现有 canonical.create_one) 与「人工手写/编辑」都产出**同一张 `contents` 表的 draft**，之后共用门禁→审核→发布后半条流水线。**不独立成子系统/仓库**（用户已问过是否要独立，结论=否，理由见 `yixiaoer-teardown-and-plan.md` §1/§5）
+- **缘起**：用户「图文创作可以手动，也可以自动」「我也有手动的创作需求，想参与」。蚁小二外包易撰是因它无流水线；MediaForge 拥有全自动流水线（差异化命根子），手动只是同漏斗多开一个人工入口
+- **契约关键（先读 TECH_SPEC §2 表结构）**：
+  - `contents.topic_id` = **NOT NULL UNIQUE REFERENCES topics(id)**（1:1 强绑）→ 手动创作**必须先有 topic**：造一个轻量 `source='manual'` topic（`insert_topic`，状态 SELECTED→CONSUMED），再挂 Content。**不得改 schema 让 topic_id 可空**
+  - `canonical_path` NOT NULL → 人写的 markdown 落 `output/YYYY-MM-DD/<content_id>/canonical.md`，存相对路径，与自动路径**同格式同目录约定**
+  - 初始状态固定 `draft`（ContentStatus.DRAFT）；建行走 `db.insert_content` / `insert_topic`，**不裸 SQL、不新增状态、不绕状态机**
+- **步骤**：
+  1. **后端编排函数**（非新契约，是 canonical.create_one 的姊妹）：`pipeline/creators/manual.py::create_manual(conn, *, title, pillar, body_markdown, formats)` → 内部造 manual topic + 写 canonical.md + `Content(status=draft)` + `insert_content`，返回不可变 Content。**复用现有 db 写函数**，签名不碰 Adapter/models 字段
+  2. **写端点**：`POST /api/v1/contents`（新建手动草稿，调 create_manual）+ `PATCH /api/v1/contents/{id}`（编辑 draft 的 title/body/formats，仅限 status=draft，改后重写 canonical.md）——均走编排函数，API 层零裸 SQL（TECH_SPEC §6 UI 写规约）
+  3. **前端编辑器**（**参考易撰 `yizhuan5.com/app/` 编辑器布局**，侦察产物见 `/tmp/yxe/yz_editor*.txt`/`.html`）：内容库/创作页加「新建草稿」→ Markdown 编辑器（标题 + 正文 + 平台格式多选 + 保存草稿 / 送门禁按钮）；「AI 生成」入口保留（现有 6 步向导 = 自动模式）。两入口在 UI 上并列，出口都进内容库列表。抄易撰的**排版工具栏 + 左右分栏（编辑/预览）+ 右侧属性面板**观感，但字段只保留 MediaForge 契约需要的（title/body/formats），不引入易撰的热点/竞品/AI 改写等它自家增值功能
+  4. 手动 draft 送门禁 = 复用现有 `draft→gated` 转移（`db.transition`），与自动内容**同一条后半程**
+- **验收**：手动新建一条 draft 出现在内容库、`status=draft`、有 canonical.md、挂着 manual topic；能编辑、能送门禁并正常进审核；自动 6 步向导仍可用；`create_manual` + 两端点各有单测；`pytest -q` 不回归；`grep "import anthropic" pipeline/ | grep -v llm.py` 空（手动创作**不调 LLM**）
+- **声明改动文件**：`pipeline/creators/manual.py`（新增）、`pipeline/webui/api/contents.py`、`frontend/src/views/Contents.vue` + 新编辑器组件、`frontend/src/router/index.ts`(如需)、`tests/creators/test_manual.py` + `tests/webui/test_contents_api.py`、`frontend/dist/**`、`docs/TASKS.md`
+- **红线**：**不改 models 字段 / SQL schema / Adapter 签名 / 状态机转移表**；topic_id 保持 NOT NULL（用 manual topic 桥接，不改约束）；不新增状态；手动创作路径**禁止调用 LLM**（成本护栏 HARD_PARTS §4）；不 mock 状态机
+- **前置/顺序**：依赖 M11-A（内容生产分组导航就位）；与 M11-B/C/D 无冲突可并行；属**内容生产**而非发布，不涉真发→可进自治流
+
+### M11-0｜发布通道开源集成评估（先于 M11-E 一切编码，高危前置，M0-0 式时间盒）
+- [ ] **目标**：确定国内发布走 Wechatsync 还是 MultiPost、以何方式与编排层对接，输出 DECISION 与集成架构，**仅评估不真发**
+- **步骤**（写入 `docs/research/evaluation-notes.md` 新节）：
+  1. clone 深读 `wechatsync/Wechatsync`(v2, adapter 架构, 带 .claude/skills) 与 `leaperone/MultiPost-Extension`；对比平台覆盖/多账号/活跃度/License
+  2. 关键问题：浏览器扩展如何被 MediaForge 编排**触发**并**回传发布结果**？(native messaging / 本地 HTTP 桥 / CLI / 半自动人工触发)——画集成架构
+  3. 如何塞进 `PublisherAdapter` 契约(签名不变)：新增"扩展发布"适配作为 B 路线，与现有 headless A 路线并存
+  4. 输出 `DECISION: 采用 X 因为 …` + M11-E 拆细子任务
+- **验收**：evaluation-notes 有 DECISION + 集成架构草图 + HARD_PARTS §7 备选表更新；不写任何真发代码
+- **声明改动文件**：`docs/research/evaluation-notes.md`、`docs/HARD_PARTS.md`、`docs/TASKS.md`
+- **红线**：只评估；记录 License 合规；不碰真实账号
+
+### M11-E｜浏览器扩展发布通道集成（**高危，依赖 M11-0，涉真发，人工确认，不进自治流**）
+- [ ] **目标**：按 M11-0 DECISION 落地"浏览器发布"通道；国内平台从自写 headless 升级为扩展复用；PublisherAdapter 契约不变
+- **前置**：M11-0 完成 + 用户在场
+- **步骤**（细粒度由 M11-0 产出；大原则）：新增扩展发布 adapter；三重锁/safe_publish/dry-run/意图日志一律复用不绕过；频控在编排层；先 dry-run 校验 bundle，真发需 `publish.enabled=true`+白名单+用户显式确认
+- **验收**：dry-run 全通；真发经用户人工确认单条走通；`safe_publish` 未被绕过（HARD_PARTS §1）
+- **红线**：**高危任务，不进自治流**（CLAUDE.md 第 7 条）；不改 Adapter 签名/状态机；不弱化三重锁
+
+### M11-F｜图文全链路真账号连发验证（**高危，人工，赚钱验收**）
+- [ ] **目标**：1~2 个真实账号，图文全链路(选题→创作→门禁→审核→发布)连发 3 天，验证"能真发、不掉线、不撞风控"
+- **验收**：HARD_PARTS §2 验证法——无重复帖、失败有告警、cookie 失效可检测；3 天稳定
+- **红线**：真发高危，人工；出现风控/封号迹象立即停
+
+### M12｜视频线（图文闭环稳定后）
+- [ ] **目标**：图文全链路稳定后，同套编排复制到视频(MPT/Pixelle 引擎已接 M5)；对标蚁小二"浏览器发布助手"直连 AI 视频工具(可灵/即梦/海螺/Vidu)产物发布
+- **前置**：M11-F 图文验收达标
+- 备注：细粒度待图文闭环稳定后再拆
+
+---
+
