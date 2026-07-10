@@ -44,6 +44,15 @@ class RetryableError(Exception):
     """429 / 5xx / 网络瞬时错误——应触发重试。"""
 
 
+class ImageProviderError(Exception):
+    """image provider 不可用（key 缺 / 4xx / 重试耗尽 / provider 未初始化）。
+
+    M10 P2 阶段 B 引入：bridge 层把这类错误包成 ImageProviderError → API 层
+    映射为 503 envelope（image_provider_unavailable）。失败必须显式——按
+    用户决策**不静默降级到模板渲染**。
+    """
+
+
 class ImageProvider(ABC):
     """图像 provider 抽象。"""
 

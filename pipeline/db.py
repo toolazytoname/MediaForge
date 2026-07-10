@@ -794,3 +794,62 @@ def reschedule_publication(
     )
     conn.commit()
     return cur.rowcount
+
+
+# ── M10 P2 阶段 B 写图路径：cover + inline_images ──────────
+#
+# 与 set_gate_verdict / reschedule_publication 同构：行级 UPDATE 封装，
+# UI 层不裸写 SQL（TECH_SPEC §7）。inline_images 走 JSON 序列化（与
+# _row_to_content 解码对称）。
+
+
+def set_content_cover(
+    conn: sqlite3.Connection,
+    content_id: str,
+    cover_path: str,
+) -> int:
+    """UPDATE contents SET cover_path=?, updated_at=? WHERE id=? → rowcount。
+
+    Args:
+        conn: SQLite 连接
+        content_id: 内容 id
+        cover_path: 封面图相对路径（与 canonical_path 同形：
+            `output/<date>/<content_id>/cover.png`）。
+
+    Returns:
+        cursor.rowcount（1=成功，0=行不存在）。内部 conn.commit()。
+    """
+    cur = conn.execute(
+        "UPDATE contents SET cover_path=?, updated_at=? WHERE id=?",
+        (cover_path, now_utc(), content_id),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def set_content_inline_images(
+    conn: sqlite3.Connection,
+    content_id: str,
+    inline_paths: list[str],
+) -> int:
+    """UPDATE contents SET inline_images=?, updated_at=? WHERE id=? → rowcount。
+
+    Args:
+        conn: SQLite 连接
+        content_id: 内容 id
+        inline_paths: 文中插图路径列表（与 cover_path 同形，每项
+            `output/<date>/<content_id>/images/inline-N.png`）。
+
+    Returns:
+        cursor.rowcount（1=成功，0=行不存在）。内部 conn.commit()。
+    """
+    cur = conn.execute(
+        "UPDATE contents SET inline_images=?, updated_at=? WHERE id=?",
+        (
+            json.dumps(list(inline_paths), ensure_ascii=False),
+            now_utc(),
+            content_id,
+        ),
+    )
+    conn.commit()
+    return cur.rowcount

@@ -420,3 +420,67 @@ export const useCreationStore = defineStore('creation', () => {
 
   return { running, lastResult, lastError, run, reset }
 })
+
+// ── Derivative (M10 P2 阶段 B: 单条衍生小红书) ────────────
+
+export interface DerivativeResult {
+  slides_count: number
+  caption_chars: number
+  tags: string[]
+}
+
+export const useDerivativeStore = defineStore('derivative', () => {
+  const running = ref(false)
+  const lastError = ref<string | null>(null)
+
+  async function run(
+    contentId: string,
+  ): Promise<DerivativeResult | null> {
+    running.value = true
+    lastError.value = null
+    try {
+      const r = await api.post<{ derivative: DerivativeResult }>(
+        `/contents/${contentId}/derivative`,
+      )
+      return r.data.derivative
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  return { running, lastError, run }
+})
+
+// ── ImageGen (M10 P2 阶段 B: 真实 AI 出图) ──────────────
+
+export interface ImageGenResult {
+  cover_path: string
+  inline_images: string[]
+  cost_usd: number
+}
+
+export const useImageGenStore = defineStore('imagegen', () => {
+  const running = ref(false)
+  const lastError = ref<string | null>(null)
+
+  async function run(contentId: string): Promise<ImageGenResult | null> {
+    running.value = true
+    lastError.value = null
+    try {
+      const r = await api.post<ImageGenResult>(
+        `/contents/${contentId}/generate-images`,
+      )
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  return { running, lastError, run }
+})
