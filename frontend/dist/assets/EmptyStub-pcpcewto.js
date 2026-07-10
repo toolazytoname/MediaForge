@@ -1,1 +1,0 @@
-import{_ as e,c as t,d as n,m as r,o as i,w as a}from"./index-C1sKiqbe.js";var o=r({__name:`EmptyStub`,props:{msg:{}},setup(r){return(o,s)=>(e(),n(i,null,[t(`h2`,null,a(r.msg||`View`),1),s[0]||=t(`p`,null,`占位 — M10-8 接入真实数据。`,-1)],64))}});export{o as default};
