@@ -1,1 +1,0 @@
-import{O as e,f as t,h as n,l as r,s as i,y as a}from"./index-BTHB_XF5.js";var o=n({__name:`EmptyStub`,props:{msg:{}},setup(n){return(o,s)=>(a(),t(i,null,[r(`h2`,null,e(n.msg||`View`),1),s[0]||=r(`p`,null,`占位 — M10-8 接入真实数据。`,-1)],64))}});export{o as default};

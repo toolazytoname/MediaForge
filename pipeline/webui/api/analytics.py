@@ -1,9 +1,12 @@
 """M10-5 analytics router.
 
-GET /api/v1/analytics/weekly — 周报数据（WeeklyReport dataclass 序列化）
-GET /api/v1/analytics/cost?group=stage|day — LLM 成本分组
-GET /api/v1/analytics/publications/{id}/metrics — 单条 publication 的 metric 序列
-GET /api/v1/analytics/platforms — 平台汇总
+GET /api/v1/analytics/weekly                       周报数据
+GET /api/v1/analytics/cost?group=stage|day        LLM 成本分组
+GET /api/v1/analytics/publications/{id}/metrics    一条 publication 的 metric 序列
+GET /api/v1/analytics/platforms                    平台汇总
+GET /api/v1/analytics/accounts?days=N              M11-D: 按账号汇总
+GET /api/v1/analytics/contents?days=N              M11-D: 按内容汇总
+GET /api/v1/analytics/leaderboard?days=N&metric=   M11-D: 排行榜（按 platform × metric）
 """
 from __future__ import annotations
 
@@ -73,3 +76,55 @@ def analytics_platforms() -> dict[str, Any]:
     with deps._db() as conn:
         data = db_reads.platform_metric_totals(conn)
     return {"items": data}
+
+
+# ── M11-D：账号 / 内容维度 + 排行榜（全部只读 SELECT） ─────────
+
+
+@router.get("/analytics/accounts")
+def analytics_accounts(
+    days: Optional[int] = Query(
+        None, ge=1, le=365,
+        description="M11-D: 可选时间窗（近 N 天）；None 表示全量",
+    ),
+) -> dict[str, Any]:
+    """按 account_id 汇总 publications + 最新 metric。
+
+    返回 list[dict]，键名同 db_reads.account_metric_totals。
+    """
+    with deps._db() as conn:
+        data = db_reads.account_metric_totals(conn, days=days)
+    return {"items": data, "days": days}
+
+
+@router.get("/analytics/contents")
+def analytics_contents(
+    days: Optional[int] = Query(
+        None, ge=1, le=365,
+        description="M11-D: 可选时间窗（近 N 天）；None 表示全量",
+    ),
+) -> dict[str, Any]:
+    """按 content_id 汇总 publications + 最新 metric。"""
+    with deps._db() as conn:
+        data = db_reads.content_metric_totals(conn, days=days)
+    return {"items": data, "days": days}
+
+
+@router.get("/analytics/leaderboard")
+def analytics_leaderboard(
+    metric: str = Query(
+        "latest_views",
+        pattern="^(latest_views|latest_likes|latest_comments|latest_shares|publications)$",
+        description="M11-D: 按哪个 metric 排（默认 views）",
+    ),
+    limit: int = Query(20, ge=1, le=100),
+) -> dict[str, Any]:
+    """平台排行榜（已发布 publications 上的 metric 聚合，排序后取前 N）。
+
+    M11-D 时间窗（days）参数接受但首期不实际过滤——蚁小二首页排行榜也是
+    全量,粒度细化留以后;若将来需要,直接复用 content_metric_totals 在内存聚合。
+    """
+    with deps._db() as conn:
+        rows = db_reads.platform_metric_totals(conn)
+    rows.sort(key=lambda r: r.get(metric, 0) or 0, reverse=True)
+    return {"items": rows[:limit], "metric": metric}

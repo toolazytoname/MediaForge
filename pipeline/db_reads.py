@@ -22,7 +22,7 @@ llm 的「读视角」查询，serialize / api / webui 共用。
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pipeline import db
@@ -222,6 +222,142 @@ def platform_metric_totals(conn: sqlite3.Connection) -> list[dict]:
     ]
 
 
+def account_metric_totals(
+    conn: sqlite3.Connection,
+    *,
+    days: int | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """M11-D：按 account_id 汇总 publications + 最新 metric。
+
+    返回 list[dict]，每项：
+        {platform, account, publications, latest_views, latest_likes,
+         latest_comments, latest_shares}
+    ORDER BY publications DESC, account ASC。
+
+    只统计 published 状态；LEFT JOIN metrics 拿最新一条。
+
+    可选时间窗过滤：`days=N` 表示只看最近 N 天内 published 的 publication
+    （按 published_at 过滤）。`days=None` 即全量。
+    """
+    where_extra = ""
+    params: tuple[Any, ...] = ()
+    if days is not None:
+        if now is None:
+            now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=days)
+        where_extra = " AND p.published_at >= ?"
+        params = (cutoff.isoformat(),)
+
+    rows = conn.execute(
+        f"""
+        SELECT p.platform, p.account_id,
+               COUNT(*) AS publications,
+               SUM(COALESCE(m.views, 0)) AS latest_views,
+               SUM(COALESCE(m.likes, 0)) AS latest_likes,
+               SUM(COALESCE(m.comments, 0)) AS latest_comments,
+               SUM(COALESCE(m.shares, 0)) AS latest_shares
+        FROM publications p
+        LEFT JOIN (
+            SELECT m1.publication_id, m1.views, m1.likes,
+                   m1.comments, m1.shares
+            FROM metrics m1
+            INNER JOIN (
+                SELECT publication_id,
+                       MAX(collected_at) AS max_collected
+                FROM metrics
+                GROUP BY publication_id
+            ) m2
+              ON m1.publication_id = m2.publication_id
+             AND m1.collected_at = m2.max_collected
+        ) m ON m.publication_id = p.id
+        WHERE p.status = 'published'{where_extra}
+        GROUP BY p.platform, p.account_id
+        ORDER BY publications DESC, p.account_id ASC
+        """,
+        params,
+    ).fetchall()
+    return [
+        {
+            "platform": r["platform"],
+            "account": r["account_id"],
+            "publications": int(r["publications"]),
+            "latest_views": int(r["latest_views"] or 0),
+            "latest_likes": int(r["latest_likes"] or 0),
+            "latest_comments": int(r["latest_comments"] or 0),
+            "latest_shares": int(r["latest_shares"] or 0),
+        }
+        for r in rows
+    ]
+
+
+def content_metric_totals(
+    conn: sqlite3.Connection,
+    *,
+    days: int | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """M11-D：按 content_id 汇总 publications + 最新 metric + 内容标题。
+
+    返回 list[dict]，每项：
+        {content_id, title, publications, latest_views, latest_likes,
+         latest_comments, latest_shares}
+    ORDER BY latest_views DESC, content_id ASC。
+
+    JOIN contents 拿 title；LEFT JOIN metrics 拿最新一条；可选 days 时间窗。
+    """
+    where_extra = ""
+    params: tuple[Any, ...] = ()
+    if days is not None:
+        if now is None:
+            now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=days)
+        where_extra = " AND p.published_at >= ?"
+        params = (cutoff.isoformat(),)
+
+    rows = conn.execute(
+        f"""
+        SELECT p.content_id, c.title,
+               COUNT(*) AS publications,
+               SUM(COALESCE(m.views, 0)) AS latest_views,
+               SUM(COALESCE(m.likes, 0)) AS latest_likes,
+               SUM(COALESCE(m.comments, 0)) AS latest_comments,
+               SUM(COALESCE(m.shares, 0)) AS latest_shares
+        FROM publications p
+        LEFT JOIN contents c ON c.id = p.content_id
+        LEFT JOIN (
+            SELECT m1.publication_id, m1.views, m1.likes,
+                   m1.comments, m1.shares
+            FROM metrics m1
+            INNER JOIN (
+                SELECT publication_id,
+                       MAX(collected_at) AS max_collected
+                FROM metrics
+                GROUP BY publication_id
+            ) m2
+              ON m1.publication_id = m2.publication_id
+             AND m1.collected_at = m2.max_collected
+        ) m ON m.publication_id = p.id
+        WHERE p.status = 'published'{where_extra}
+        GROUP BY p.content_id, c.title
+        ORDER BY latest_views DESC, p.content_id ASC
+        """,
+        params,
+    ).fetchall()
+    return [
+        {
+            "content_id": r["content_id"],
+            "title": r["title"],
+            "publications": int(r["publications"]),
+            "latest_views": int(r["latest_views"] or 0),
+            "latest_likes": int(r["latest_likes"] or 0),
+            "latest_comments": int(r["latest_comments"] or 0),
+            "latest_shares": int(r["latest_shares"] or 0),
+        }
+        for r in rows
+    ]
+
+
 __all__ = [
     "row_to_metric",
     "get_latest_metric",
@@ -229,4 +365,6 @@ __all__ = [
     "llm_cost_by_stage",
     "llm_cost_by_day",
     "platform_metric_totals",
+    "account_metric_totals",
+    "content_metric_totals",
 ]

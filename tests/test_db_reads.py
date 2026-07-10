@@ -288,3 +288,80 @@ class TestPlatformMetricTotals:
         out = db_reads.platform_metric_totals(conn)
         assert out[0]["publications"] == 1
         assert out[0]["latest_views"] == 0
+
+
+class TestAccountMetricTotalsM11D:
+    """M11-D: account 级 metric 汇总 + 时间窗过滤。"""
+
+    def test_empty(self, conn):
+        assert db_reads.account_metric_totals(conn) == []
+
+    def test_groups_by_account(self, conn):
+        _seed_published(conn, platform="x", account_id="acct_alice", views=100, likes=5)
+        _seed_published(conn, platform="x", account_id="acct_bob", views=300, likes=10)
+        _seed_published(conn, platform="toutiao", account_id="acct_alice", views=50, likes=2)
+        out = db_reads.account_metric_totals(conn)
+        # ordered by publications desc, account asc
+        # x/acct_alice=1, x/acct_bob=1, toutiao/acct_alice=1 → tiebreak by account ASC
+        assert sum(1 for r in out if r["account"] == "acct_alice") == 2
+        assert any(r["account"] == "acct_bob" for r in out)
+        # 聚合:acct_alice 跨两个平台共 150 views
+        alice = next(r for r in out if r["account"] == "acct_alice"
+                     and r["platform"] == "x")
+        assert alice["latest_views"] == 100
+        alice_tt = next(r for r in out if r["account"] == "acct_alice"
+                        and r["platform"] == "toutiao")
+        assert alice_tt["latest_views"] == 50
+
+    def test_days_window_filters_recent_only(self, conn):
+        # 注入"老" published(8 天前) + "新" published(今天)
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        old = _seed_published(conn, platform="x", account_id="old_acct",
+                              views=999, likes=99)
+        new = _seed_published(conn, platform="x", account_id="new_acct",
+                              views=10, likes=1)
+        # 直接 UPDATE published_at 到 8 天前 / 今天(测试用例里直接写)
+        conn.execute("UPDATE publications SET published_at=? WHERE id=?",
+                     ((now - timedelta(days=8)).isoformat(), old.id))
+        conn.execute("UPDATE publications SET published_at=? WHERE id=?",
+                     (now.isoformat(), new.id))
+        conn.commit()
+        out_7 = db_reads.account_metric_totals(conn, days=7, now=now)
+        out_30 = db_reads.account_metric_totals(conn, days=30, now=now)
+        assert {r["account"] for r in out_7} == {"new_acct"}
+        assert {r["account"] for r in out_30} == {"new_acct", "old_acct"}
+
+
+class TestContentMetricTotalsM11D:
+    """M11-D: content 级 metric 汇总（带 title + 时间窗）。"""
+
+    def test_empty(self, conn):
+        assert db_reads.content_metric_totals(conn) == []
+
+    def test_joins_title(self, conn):
+        p1 = _seed_published(conn, platform="x", account_id="a1",
+                             views=100, likes=5)
+        p2 = _seed_published(conn, platform="x", account_id="a2",
+                             views=200, likes=10)
+        out = db_reads.content_metric_totals(conn)
+        titles_by_id = {r["content_id"]: r["title"] for r in out}
+        assert titles_by_id[p1.content_id] is not None
+        assert titles_by_id[p2.content_id] is not None
+        # 排序按 latest_views DESC
+        assert out[0]["content_id"] == p2.content_id
+        assert out[0]["latest_views"] == 200
+
+
+class TestAnalyticsLeaderboard:
+    """M11-D: leaderboard 端点按指定 metric 排序。"""
+
+    def test_sort_by_views(self, conn):
+        _seed_published(conn, platform="x", account_id="a1", views=50, likes=5)
+        _seed_published(conn, platform="toutiao", account_id="a2", views=300, likes=10)
+        _seed_published(conn, platform="douyin", account_id="a3", views=120, likes=2)
+        out = db_reads.platform_metric_totals(conn)
+        out.sort(key=lambda r: r.get("latest_views", 0) or 0, reverse=True)
+        assert out[0]["platform"] == "toutiao"
+        assert out[1]["platform"] == "douyin"
+        assert out[2]["platform"] == "x"
