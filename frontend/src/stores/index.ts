@@ -2,7 +2,7 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api, unwrapError } from '../api/client'
+import { api, apiPost, unwrapError } from '../api/client'
 
 // ── Dashboard ──────────────────────────────────────────────
 
@@ -452,6 +452,146 @@ export const useDerivativeStore = defineStore('derivative', () => {
   }
 
   return { running, lastError, run }
+})
+
+// ── TopicAction (M10 P2 阶段 C: topics promote/reject) ──────
+
+export const useTopicActionStore = defineStore('topic-action', () => {
+  const running = ref(false)
+  const lastError = ref<string | null>(null)
+
+  async function run(
+    topicId: string,
+    action: 'promote' | 'reject',
+  ): Promise<TopicItem | null> {
+    running.value = true
+    lastError.value = null
+    try {
+      const r = await apiPost<TopicItem>(
+        `/topics/${topicId}/${action}`,
+      )
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  function reset() {
+    running.value = false
+    lastError.value = null
+  }
+
+  return { running, lastError, run, reset }
+})
+
+// ── ReviewAction (M10 P2 阶段 C: review approve/reject) ────
+
+export interface ReviewActionResult {
+  id: string
+  status: string
+  gate_verdict: string | null
+}
+
+export const useReviewActionStore = defineStore('review-action', () => {
+  const running = ref(false)
+  const lastError = ref<string | null>(null)
+
+  async function run(
+    contentId: string,
+    decision: 'approve' | 'reject',
+    reason: string = '',
+  ): Promise<ReviewActionResult | null> {
+    running.value = true
+    lastError.value = null
+    try {
+      const r = await apiPost<ReviewActionResult>(
+        `/review/${contentId}`,
+        { decision, reason },
+      )
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  function reset() {
+    running.value = false
+    lastError.value = null
+  }
+
+  return { running, lastError, run, reset }
+})
+
+// ── PubAction (M10 P2 阶段 C: publications reschedule/cancel/retry) ──
+
+export const usePubActionStore = defineStore('pub-action', () => {
+  const running = ref(false)
+  const lastError = ref<string | null>(null)
+
+  async function reschedule(
+    pubId: string,
+    scheduledAt: string,
+  ): Promise<PublicationItem | null> {
+    running.value = true
+    lastError.value = null
+    try {
+      const r = await apiPost<PublicationItem>(
+        `/publications/${pubId}/reschedule`,
+        { scheduled_at: scheduledAt },
+      )
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  async function cancel(pubId: string): Promise<PublicationItem | null> {
+    running.value = true
+    lastError.value = null
+    try {
+      const r = await apiPost<PublicationItem>(
+        `/publications/${pubId}/cancel`,
+      )
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  async function retry(pubId: string): Promise<PublicationItem | null> {
+    running.value = true
+    lastError.value = null
+    try {
+      const r = await apiPost<PublicationItem>(
+        `/publications/${pubId}/retry`,
+      )
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  function reset() {
+    running.value = false
+    lastError.value = null
+  }
+
+  return { running, lastError, reschedule, cancel, retry, reset }
 })
 
 // ── ImageGen (M10 P2 阶段 B: 真实 AI 出图) ──────────────

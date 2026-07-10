@@ -1,11 +1,20 @@
 // M10-7 axios 客户端：baseURL = /api/v1，统一错误解包
 
-import axios, { type AxiosError } from 'axios'
+import axios, { type AxiosError, type AxiosResponse } from 'axios'
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || '/api/v1',
   timeout: 30_000,
 })
+
+// M10 P2 阶段 C：写端点（POST）共用 helper
+// 直接暴露 axios.post 不需要 wrapper——但为类型清晰提供一个泛型版
+export async function apiPost<T = unknown>(
+  url: string,
+  body?: unknown,
+): Promise<AxiosResponse<T>> {
+  return api.post<T>(url, body)
+}
 
 export interface ApiError {
   code: string
