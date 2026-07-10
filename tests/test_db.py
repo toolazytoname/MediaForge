@@ -867,6 +867,52 @@ class TestListPublications:
         assert out[0].platform == "toutiao"
 
 
+class TestListPublicationsM11B:
+    """M11-B 新增只读过滤参数：account_id / pending_only。"""
+
+    def test_filter_by_account_id(self, conn):
+        topic = _topic(content_hash="h_lpa")
+        db.insert_topic(conn, topic)
+        content = _content(topic.id)
+        db.insert_content(conn, content)
+        db.insert_publication(conn, _pub(content.id, account_id="acct_alice"))
+        db.insert_publication(conn, _pub(content.id, platform="x", account_id="acct_bob"))
+        out = db.list_publications(conn, account_id="acct_alice")
+        assert len(out) == 1
+        assert out[0].account_id == "acct_alice"
+
+    def test_pending_only_excludes_published(self, conn):
+        topic = _topic(content_hash="h_lpo")
+        db.insert_topic(conn, topic)
+        content = _content(topic.id)
+        db.insert_content(conn, content)
+        # 一个 pending(queued) + 一个已 published（直接 INSERT，模拟完整链路结果）
+        db.insert_publication(conn, _pub(content.id, account_id="pending_one"))
+        db.insert_publication(conn, _pub(
+            content.id, platform="x", account_id="done_one",
+            status=PublicationStatus.PUBLISHED,
+            published_at="2026-07-11T10:00:00+00:00",
+        ))
+        out = db.list_publications(conn, pending_only=True)
+        ids = {r.account_id for r in out}
+        assert "pending_one" in ids
+        assert "done_one" not in ids
+
+    def test_combined_filters(self, conn):
+        """status + account_id + pending_only 三个过滤同时生效。"""
+        topic = _topic(content_hash="h_lpc")
+        db.insert_topic(conn, topic)
+        content = _content(topic.id)
+        db.insert_content(conn, content)
+        db.insert_publication(conn, _pub(content.id, account_id="u1"))
+        db.insert_publication(conn, _pub(content.id, platform="x", account_id="u2"))
+        out = db.list_publications(
+            conn, status="queued", account_id="u1", pending_only=True,
+        )
+        assert len(out) == 1
+        assert out[0].account_id == "u1"
+
+
 class TestGetPublicationsByContent:
     def test_returns_empty_for_unknown_content(self, conn):
         assert db.get_publications_by_content(conn, "c_nope") == []

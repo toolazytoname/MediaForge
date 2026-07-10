@@ -503,7 +503,7 @@ def sum_llm_cost_this_month(
 # 各表的「可过滤列」白名单——防止 SQL 注入。filter 列名字符串硬编码到 SQL。
 _TOPICS_FILTER_COLS = frozenset({"status", "pillar", "source"})
 _CONTENTS_FILTER_COLS = frozenset({"status", "pillar"})
-_PUBS_FILTER_COLS = frozenset({"status", "platform"})
+_PUBS_FILTER_COLS = frozenset({"status", "platform", "account_id"})
 
 
 def _build_filter_where(
@@ -615,6 +615,8 @@ def list_publications(
     *,
     status: str | None = None,
     platform: str | None = None,
+    account_id: str | None = None,
+    pending_only: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> list[Publication]:
@@ -622,10 +624,22 @@ def list_publications(
 
     注意：contents/topics 用 updated_at DESC（最近活动优先），publications
     用 scheduled_at ASC（即将发布的在前），这是 M3-1 / M4-4 的日历语义。
+
+    M11-B 新增可选过滤（只读、不动 schema）：
+      - account_id：按发布账号过滤（white-list 列名由 _PUBS_FILTER_COLS 守护）
+      - pending_only：只返回尚未成功发布的（published_at IS NULL），
+        用于蚁小二式「发布模式」筛（计划中 vs 已完成）
     """
     where, vals = _build_filter_where(
         _PUBS_FILTER_COLS, status=status, platform=platform,
+        account_id=account_id,
     )
+    if pending_only:
+        clause = "published_at IS NULL"
+        if where:
+            where = f"{where} AND {clause}"
+        else:
+            where = f"WHERE {clause}"
     rows = conn.execute(
         f'SELECT * FROM publications {where} '
         f'ORDER BY scheduled_at ASC, id LIMIT ? OFFSET ?',

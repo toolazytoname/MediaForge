@@ -63,13 +63,16 @@ def publish_calendar(
 def publish_records(
     status: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
+    account_id: Optional[str] = Query(None, description="M11-B: 按发布账号过滤"),
+    pending_only: bool = Query(False, description="M11-B: 仅未成功发布（published_at IS NULL）"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     with_metric: bool = Query(False, description="每条带最新 metric"),
 ) -> dict[str, Any]:
     with deps._db() as conn:
         pubs = db.list_publications(
-            conn, status=status, platform=platform, limit=limit, offset=offset,
+            conn, status=status, platform=platform, account_id=account_id,
+            pending_only=pending_only, limit=limit, offset=offset,
         )
         items = []
         for p in pubs:
