@@ -987,6 +987,21 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 
   ✅ 完成于 2026-07-10，commit 9891a6f，备注：`preview_bridge.py` (~210 行) + `POST /api/v1/publications/{id}/publish/preview` 端点（`status_code=202` + BackgroundTasks）+ `runs.register_run` / `get_run_record` 辅助 + `GET /api/v1/runs/{run_id}` 真正可查。16 测试全绿。`safe_publish` 跑在内存 DB 副本上（`conn.backup(:memory:)`），真实 `state.db` 不变；`_NoPublishPreviewAdapter` 双保险拒绝 `dry_run=False`；真发护栏 grep 验证通过。前端 `usePreviewStore` 1s 轮询 30s 超时；`PublishRecords/Calendar.vue` 加 🔍 预演按钮 + a-drawer 展示 validate + preview + safe_publish_result；`publishEnabled` 来自 settings 控制 a-alert 提示。dist rebuild 1495KB gzipped 462KB git add。**契约零变更**：models.py / db.py SQL schema / safe_publish.py / base.py / `get_adapter` 签名 / TECH_SPEC §3-5 全部不动；7 pre-existing failures 与本任务无关（stash 验证）。
 
+### M10-13 P2 阶段 F：精修左侧栏——蚁小二浅色侧栏 + 紫色主色 + active pill
+
+- [x] **目标**：把现有暗色 AntD 默认蓝左侧栏换成蚁小二风格——浅色白底侧栏 + 紫色 `#7C4DFF` 强调色 + outline 图标 + 当前路由 active pill 高亮（浅紫底 + 紫字）。M10 P2「图文全流程」第六步（也是 M10 整体收尾），前五步（阶段 A 创建页、阶段 B 衍生+出图、阶段 C 写端点迁移、阶段 D 手动排期、阶段 E dry-run 预演）已完成。
+- **步骤**：
+  1. **全局 ConfigProvider**：`frontend/src/App.vue` 包 `<a-config-provider>` 注入 theme token（`colorPrimary: #7C4DFF` / `borderRadius: 6` / 中文字体栈）+ 组件 Menu token（`itemSelectedBg: #F3EEFF` / `itemSelectedColor: #7C4DFF` / `itemHoverBg: #F8F8FA`）+ `:locale="zhCN"`
+  2. **AppShell 视觉重做**：`frontend/src/layouts/AppShell.vue` 去掉 `theme="dark"` 改 `theme="light"`（白底 + 右边框 #f0f0f0）；logo 改紫 `#7C4DFF` + 副标「自媒体矩阵流水线」；头部白色 + 当前页标题（path→label 反查 Map）+ `v0.3.0` purple tag；内容区 `#f8f8fa` 浅灰底 + `min-height: calc(100vh - 64px)`
+  3. **菜单 router-link CSS 覆盖**：菜单项内 `<router-link>` 改 `.menu-link` class（去掉默认下划线/蓝字 + flex 布局 + hover 紫）+ `:deep(.ant-menu-item-selected .menu-link)` 选中态紫字 500 weight + `:deep(.ant-menu-item-group-title)` 大写小组标题样式
+  4. **当前页标题**：`currentPageTitle` 计算属性由 `pathToTitle: Map<string, string>` 反查（5 组 + 10 项），新增；`currentPath` 沿用
+  5. `npm run build` 重建 + `git add frontend/dist/`
+- **验收**：`cd frontend && npm run build` 绿；`pytest tests/ -q` 不挂（pre-existing 失败不变）；菜单 5 组 + 10 项结构完整（与改造前一一对应）；`/creation` 入口仍在「内容生产」组里；当前路由 active pill 浅紫底 + 紫字；logo 区紫字；头部白色 + 当前页标题 + v0.3.0 tag；内容区浅灰底；路由切换不闪烁、不报 404
+- **声明改动文件**：`frontend/src/App.vue`、`frontend/src/layouts/AppShell.vue`、`frontend/dist/**`、`docs/TASKS.md`
+- **红线**：不动 5 组菜单结构 + 10 项菜单项；不动路由表 `frontend/src/router/index.ts`；不动 Pinia stores；不动任何业务页面 `views/*.vue`；不动后端 / API 端点 / models.py / db.py / SQL schema / Adapter 签名；不动 `package.json` / `vite.config.ts`（不装新包）；不改图标变体（已是 outline）；不引入 anthropic import
+
+  ✅ 完成于 2026-07-10，commit 6e422e6，备注：`App.vue` 包 `<a-config-provider>` 注蚁小二紫主题（`colorPrimary #7C4DFF` + 中文字体栈 + Menu `itemSelectedBg #F3EEFF` / `itemSelectedColor #7C4DFF` / `itemHoverBg #F8F8FA`）+ zhCN locale。`AppShell.vue`：sider dark→light + 白底#fff + 右边框#f0f0f0；logo 紫字+副标；header 白底+currentPageTitle（path→label Map 反查）+ v0.3.0 purple tag；content 浅灰底#f8f8fa；菜单 router-link `.menu-link` CSS 覆盖（去下划线/蓝字+flex+hover紫） + `:deep(.ant-menu-item-selected .menu-link)` 选中态紫字500 + `:deep(.ant-menu-item-group-title)` 大写小组标题样式。`vue-tsc` 警告修一次（去掉 `ConfigProvider` 命名导入——组件已全局注册）。5 组菜单 + 10 项结构一字不动；`/creation` 仍在「内容生产」组里。`npm run build` 绿（dist index-C1sKiqbe.js 1499KB gzipped 464KB），dist 已 git add。**契约零变更**：models.py / db.py SQL schema / API / 路由表 / Pinia / 业务页面 / package.json / vite.config.ts 全部不动；anthropic import 护栏仅 llm.py；pytest 1286 pass + 12 skip + 9 pre-existing failures 不变（stash 验证过）。
+
 
 ### M10 P2/P3/P4 大纲（P1 完成后再拆细）
 

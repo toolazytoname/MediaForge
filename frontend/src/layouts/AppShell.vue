@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// M10-7 AppShell：蚁小二式左侧栏 App Shell
+// M10 P2 阶段 F: 精修左侧栏——蚁小二式浅色侧栏 + 紫色主色 + outline 图标 + active pill 高亮
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
@@ -17,9 +17,15 @@ import {
 
 const route = useRoute()
 
+interface MenuItem {
+  path: string
+  label: string
+  icon: any
+}
+
 interface MenuGroup {
   title: string
-  items: { path: string; label: string; icon: any }[]
+  items: MenuItem[]
 }
 
 const groups: MenuGroup[] = [
@@ -58,17 +64,37 @@ const groups: MenuGroup[] = [
 ]
 
 const currentPath = computed(() => route.path)
+
+// 头部当前页标题：path → label 反查（菜单项少，直接用 Map）
+const pathToTitle = computed<Map<string, string>>(() => {
+  const m = new Map<string, string>()
+  for (const g of groups) {
+    for (const it of g.items) {
+      m.set(it.path, it.label)
+    }
+  }
+  return m
+})
+
+const currentPageTitle = computed(() => pathToTitle.value.get(currentPath.value) ?? 'MediaForge')
 </script>
 
 <template>
   <a-layout style="min-height: 100vh">
-    <a-layout-sider width="220" theme="dark">
-      <div class="logo">MediaForge</div>
-      <a-menu theme="dark" mode="inline" :selected-keys="[currentPath]">
+    <a-layout-sider
+      width="220"
+      theme="light"
+      :style="{ background: '#fff', borderRight: '1px solid #f0f0f0' }"
+    >
+      <div class="logo">
+        <span style="font-size: 22px">⬢ MediaForge</span>
+        <div class="logo-subtitle">自媒体矩阵流水线</div>
+      </div>
+      <a-menu mode="inline" :selected-keys="[currentPath]" style="border-right: 0">
         <template v-for="g in groups" :key="g.title">
           <a-menu-item-group :title="g.title">
             <a-menu-item v-for="it in g.items" :key="it.path">
-              <router-link :to="it.path">
+              <router-link :to="it.path" class="menu-link">
                 <component :is="it.icon" />
                 {{ it.label }}
               </router-link>
@@ -78,10 +104,11 @@ const currentPath = computed(() => route.path)
       </a-menu>
     </a-layout-sider>
     <a-layout>
-      <a-layout-header style="background: #fff; padding: 0 16px">
-        <span style="font-size: 18px">蚁小二形态 · 控制台</span>
+      <a-layout-header class="app-header">
+        <span class="header-title">{{ currentPageTitle }}</span>
+        <a-tag color="purple">v0.3.0</a-tag>
       </a-layout-header>
-      <a-layout-content style="margin: 16px; padding: 16px; background: #fff">
+      <a-layout-content class="app-content">
         <router-view />
       </a-layout-content>
     </a-layout>
@@ -90,10 +117,57 @@ const currentPath = computed(() => route.path)
 
 <style scoped>
 .logo {
-  color: #fff;
+  color: #7c4dff;
   font-size: 18px;
   font-weight: bold;
-  padding: 16px;
+  padding: 20px 16px;
   text-align: center;
+  border-bottom: 1px solid #f0f0f0;
+}
+.logo-subtitle {
+  font-size: 11px;
+  color: #999;
+  font-weight: normal;
+  margin-top: 4px;
+}
+.app-header {
+  background: #fff;
+  padding: 0 24px;
+  border-bottom: 1px solid #f0f0f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.header-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: #1a1a1a;
+}
+.app-content {
+  margin: 16px;
+  padding: 24px;
+  background: #f8f8fa;
+  min-height: calc(100vh - 64px);
+}
+.menu-link {
+  color: rgba(0, 0, 0, 0.85);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.menu-link:hover {
+  color: #7c4dff;
+}
+:deep(.ant-menu-item-selected .menu-link) {
+  color: #7c4dff;
+  font-weight: 500;
+}
+:deep(.ant-menu-item-group-title) {
+  color: #999;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding-left: 16px;
 }
 </style>
