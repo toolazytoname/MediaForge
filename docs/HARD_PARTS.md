@@ -123,6 +123,9 @@
 | 国内发布（头条/抖音） | 自写 Playwright（M4-3 头条 / M5-2 抖音已实装；AiToEarn/xhs-toolkit M0-0 评估放弃） | AiToEarn 仅海外平台重评 | — |
 | 公众号图文 | 自研 lane + 官方 API 草稿箱（M0-0 决策：M2-2 已移植审稿协议/防幻觉条款；M0-0 不部署 TrendPublish；Backlog 待激活） | TrendPublish CLI dry-run 作对照产线 | 自研排版质量不达标 |
 | 海外发布 | X 官方 API（M4-2 已实装） | Postiz 自托管（一次接入 YouTube/TikTok/IG 等） | 扩到 ≥ 3 个海外平台时直接上 Postiz |
+| 国内发布（图文，B 路线扩展） | **MultiPost 浏览器扩展（Apache-2.0，RESTful API 触发；M11-0 决策，M11-E 集成中）** | 现有自写 headless（A 路线）降级 ‖ 参考 Wechatsync CLI/MCP（GPL-3.0，仅进程外调用不 vendor）作博客长尾 | 扩展桥不通 / 浏览器需常开不可接受 → 退 A 路线 |
+| 国内发布（视频，B 路线扩展） | **MultiPost 视频扩展（半自动、真人会话、风控最低；M11-E）** | MPP（social-auto-upload 系，Playwright 无人值守，MIT）‖ 现有 headless | 需无人值守量产 → 上 MPP/headless（风控高，接受降级） |
+| 无人值守兜底（A 路线 headless） | 现有自写 Playwright（M4-3/M5-2） | **移植 MPP `platform_configs.py` 配置化架构（MIT，加平台=改配置）** | 自写 headless 加平台成本过高时移植 MPP 架构 |
 | 视频生成（量产） | MoneyPrinterTurbo（M5-1 已实装，工厂降级） | NarratoAI（解说类）/ 直接 ffmpeg + edge-tts 自拼 | MPT 停更或质量不满意 |
 | 视频生成（精品/AI 生成类） | Pixelle-Video（M5-3 已实装为 VideoEngine 第二引擎，mode=fixed 注入我方脚本，404 重提交） | OpenMontage（远期观察）/ 人工 + Remotion | 生图成本失控或项目停更 |
 | 数字人 | AIGCPanel（M5-3 缩减为速评后留 Backlog） | HeyGen 等商业 API | 本地部署质量/性能不达标 + 账号过带货门槛 + 平台虚拟人报备完成 |
