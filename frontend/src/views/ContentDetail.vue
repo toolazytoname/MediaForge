@@ -1,12 +1,15 @@
 <script setup lang="ts">
 // M10-8 ContentDetail：内容详情（canonical HTML + 派生文件 + 图卡 + 出版时间线）
 // M10 P2 阶段 B：加「图文衍生」card，含 2 个按钮（衍生小红书 / 真实 AI 出图）
+// M10-11 阶段 D：approved 内容显示「手动排期」card
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   useContentsStore,
   useDerivativeStore,
   useImageGenStore,
+  useScheduleStore,
+  useAccountsStore,
   type ContentDetail,
 } from '../stores'
 
@@ -15,6 +18,8 @@ const router = useRouter()
 const store = useContentsStore()
 const derivStore = useDerivativeStore()
 const imgStore = useImageGenStore()
+const schedStore = useScheduleStore()
+const accountsStore = useAccountsStore()
 const data = ref<ContentDetail | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -25,10 +30,49 @@ const imgSuccess = ref<string | null>(null)    // "cover + N inline, $X"
 const derivErrorAlert = ref<{ msg: string; code: string } | null>(null)
 const imgErrorAlert = ref<{ msg: string; code: string } | null>(null)
 
+// 「手动排期」区块本地态（M10-11）
+const schedPlatform = ref<string | undefined>(undefined)
+const schedAccountId = ref<string | undefined>(undefined)
+const schedDatetime = ref<string | undefined>(undefined)
+const schedSuccess = ref<string | null>(null)
+const schedErrorAlert = ref<{ msg: string; code: string } | null>(null)
+
 // 已发出去别再改（done / published 不允许改）
 const derivDisabled = computed(() => {
   if (!data.value) return true
   return data.value.status === 'done'
+})
+
+// 已批准或待审的可手动排期（仅在 approved / gated 时显示表单）
+const schedEligible = computed(() => {
+  if (!data.value) return false
+  return data.value.status === 'approved' || data.value.status === 'gated'
+})
+
+// 平台选项（去重自 accountsStore.items；不硬编码）
+const platformOptions = computed(() => {
+  const set = new Set<string>()
+  for (const it of accountsStore.items) {
+    if (it.platform) set.add(it.platform)
+  }
+  return Array.from(set).sort()
+})
+
+// 当前平台下的账号选项
+const accountOptions = computed(() => {
+  if (!schedPlatform.value) return []
+  return accountsStore.items
+    .filter((it) => it.platform === schedPlatform.value)
+    .map((it) => it.account)
+})
+
+// 表单齐全才能提交
+const schedCanSubmit = computed(() => {
+  return Boolean(
+    schedPlatform.value
+      && schedAccountId.value
+      && schedDatetime.value,
+  )
 })
 
 async function refresh() {
@@ -44,6 +88,10 @@ onMounted(async () => {
   error.value = null
   try {
     data.value = await store.getDetail(route.params.id as string)
+    // 加载账号列表（驱动平台/账号下拉）——空数据也不阻塞
+    if (accountsStore.items.length === 0) {
+      await accountsStore.load().catch(() => null)
+    }
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -76,6 +124,27 @@ async function onGenerateImages() {
   } else {
     const [code, ...rest] = (imgStore.lastError ?? '').split(':')
     imgErrorAlert.value = { code: code ?? 'unknown', msg: rest.join(':').trim() }
+  }
+}
+
+async function onSchedule() {
+  if (!data.value || !schedCanSubmit.value) return
+  schedSuccess.value = null
+  schedErrorAlert.value = null
+  // datetime-local 给的是「本地时间无时区」，但我们收集的就是当前浏览器所在时区的字面值，
+  // 后端接受 ISO8601（带时区）会正常解析为 UTC。直接传字面值即可。
+  const isoLocal = schedDatetime.value!
+  const r = await schedStore.run(data.value.id, {
+    platform: schedPlatform.value!,
+    account_id: schedAccountId.value!,
+    scheduled_at: isoLocal,
+  })
+  if (r) {
+    schedSuccess.value = `已加入排期：${r.platform} / ${r.account_id} @ ${r.scheduled_at}`
+    await refresh()
+  } else {
+    const [code, ...rest] = (schedStore.lastError ?? '').split(':')
+    schedErrorAlert.value = { code: code ?? 'unknown', msg: rest.join(':').trim() }
   }
 }
 
@@ -181,6 +250,59 @@ function goSettings() {
                   </div>
                 </template>
               </a-alert>
+            </a-space>
+          </a-card>
+
+          <!-- 阶段 D：手动排期（M10-11） -->
+          <a-card v-if="schedEligible" title="手动排期" style="margin-bottom: 16px">
+            <a-space direction="vertical" style="width: 100%">
+              <a-select
+                v-model:value="schedPlatform"
+                placeholder="选平台"
+                :options="platformOptions.map(p => ({ value: p, label: p }))"
+                allow-clear
+                @change="schedAccountId = undefined"
+              />
+              <a-select
+                v-model:value="schedAccountId"
+                placeholder="选账号"
+                :options="accountOptions.map(a => ({ value: a, label: a }))"
+                :disabled="!schedPlatform"
+                allow-clear
+              />
+              <a-input
+                v-model:value="schedDatetime"
+                type="datetime-local"
+                placeholder="选时间"
+              />
+              <a-button
+                type="primary"
+                :loading="schedStore.running"
+                :disabled="!schedCanSubmit"
+                block
+                @click="onSchedule"
+              >
+                ▶ 加入排期
+              </a-button>
+              <a-alert
+                v-if="schedSuccess"
+                type="success"
+                :message="schedSuccess"
+                show-icon
+                closable
+                @close="schedSuccess = null"
+              />
+              <a-alert
+                v-if="schedErrorAlert"
+                type="error"
+                :message="`排期失败: ${schedErrorAlert.code} - ${schedErrorAlert.msg}`"
+                show-icon
+                closable
+                @close="schedErrorAlert = null"
+              />
+              <div v-if="platformOptions.length === 0" style="color: #888; font-size: 12px">
+                未配置任何平台账号，<a @click="goSettings">前往设置 →</a>
+              </div>
             </a-space>
           </a-card>
 

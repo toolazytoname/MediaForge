@@ -624,3 +624,47 @@ export const useImageGenStore = defineStore('imagegen', () => {
 
   return { running, lastError, run }
 })
+
+// ── Schedule (M10-11 阶段 D: 手动排期) ───────────────────
+
+export interface SchedulePayload {
+  platform: string
+  account_id: string
+  scheduled_at: string  // ISO8601
+}
+
+export const useScheduleStore = defineStore('schedule', () => {
+  const running = ref(false)
+  const lastResult = ref<PublicationItem | null>(null)
+  const lastError = ref<string | null>(null)
+
+  async function run(
+    contentId: string,
+    payload: SchedulePayload,
+  ): Promise<PublicationItem | null> {
+    running.value = true
+    lastError.value = null
+    lastResult.value = null
+    try {
+      const r = await apiPost<PublicationItem>(
+        `/contents/${contentId}/schedule`,
+        payload,
+      )
+      lastResult.value = r.data
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  function reset() {
+    running.value = false
+    lastResult.value = null
+    lastError.value = null
+  }
+
+  return { running, lastResult, lastError, run, reset }
+})

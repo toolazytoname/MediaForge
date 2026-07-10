@@ -951,6 +951,24 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 
 ---
 
+### M10-11 P2 阶段 D：手动排期端点 + ContentDetail 排期表单
+
+- [x] **目标**：在内容详情页对 approved (或 gated) 内容能选平台 + 账号 + 时间 → 立即造一条 queued publication。M10 P2「图文全流程」第四步（前三步：阶段 A 创建页、阶段 B 衍生+出图、阶段 C 写端点迁移已完成）。
+- **步骤**：
+  1. 新建 `pipeline/webui/schedule_bridge.py`：`schedule_for_content(conn, content_id, platform, account_id, scheduled_at, *, cfg_obj=None, now=None)` 纯函数 + 6 个 Error class（ContentNotFoundError / ContentWrongStatusError / PlatformNotConfiguredError / AccountNotFoundError / InvalidScheduledAtError / DuplicateScheduleError）。**薄封装不重写 db.insert_publication**；UNIQUE 冲突捕获 sqlite3.IntegrityError → DuplicateScheduleError；now 注入便于测试；cfg_obj=None 时跳过 platform/account 校验
+  2. `pipeline/webui/api/contents.py` 加 `POST /contents/{content_id}/schedule`（201 + pub_dict）；catch 6 个 Error → 404 / 400×4 / 409 envelope（content_not_found / wrong_status / platform_not_configured / account_not_found / invalid_scheduled_at / duplicate_schedule）
+  3. `tests/webui/test_api_schedule.py` 新建：18 测试覆盖 9 类（成功 × 2 [approved + gated] / content_not_found / 5 个禁止 status / platform_not_configured / account_not_found / 3 种 invalid_scheduled_at / 2 种 duplicate（含 UNIQUE 失败不增 DB）/ bridge 纯函数 × 2 / DB 幂等）+ envelope 形状 + 端到端 DB 真落库验证（`db.list_publications` 直查）
+  4. 前端 `stores/index.ts` 加 `useScheduleStore`（running / lastResult / lastError / run(contentId, payload) / reset，参照 PubAction store 模式）
+  5. 前端 `ContentDetail.vue` 在 approved/gated 内容显示「📅 手动排期」卡片：平台下拉 + 账号下拉（基于 `useAccountsStore.items` 真 cfg 账号列表，不硬编码平台名）+ datetime-local + ▶ 加入排期；成功刷新 publications 列表；错误 a-alert
+  6. `npm run build` + `git add frontend/dist/` 重建
+- **验收**：`pytest tests/webui/test_api_schedule.py -q` 18 全绿；`pytest tests/ -q` 1272 pass + 12 skip + 7 pre-existing（与本任务无关）；`grep -rn "import anthropic" pipeline/ | grep -v llm.py` 为空；`git diff models.py / db.py SQL schema / serialize.py / TECH_SPEC §3-5` 全空；前端 `npm run build` 绿，dist 已 rebuild + git add
+- **声明改动文件**：`pipeline/webui/schedule_bridge.py`(新)、`pipeline/webui/api/contents.py`、`tests/webui/test_api_schedule.py`(新)、`frontend/src/stores/index.ts`、`frontend/src/views/ContentDetail.vue`、`frontend/dist/**`、`docs/TASKS.md`
+- **红线**：不改 models.py / db.py SQL schema / serialize.py / Publication dataclass；不动 `pipeline/scheduler.py`（CLI 自动排期专用）；不引入 anthropic import；状态白名单仅 {approved, gated}，其余 status 一律 400；router 不兜底 `try/except Exception` → 500（每个 Error 映射具体 HTTP 码）
+
+  ✅ 完成于 2026-07-10，commit f1e7539，备注：`schedule_bridge.py` (~225 行) + `POST /contents/{id}/schedule` 端点（201 + pub_dict）。6 Error class → API 层映射：404 / 400×4 / 409。`tests/webui/test_api_schedule.py` 18 用例：成功（approved + gated）/ content_not_found / 5 禁止 status / platform_not_configured / account_not_found / 3 invalid_scheduled_at / 2 duplicate / bridge 纯函数 / DB 幂等。前端 `useScheduleStore` + ContentDetail 加 📅 手动排期 card（平台/账号下拉基于 `useAccountsStore.items` 真 cfg；datetime-local；成功刷新 publications 列表）。dist rebuild 1494KB gzipped 461KB git add。**契约零变更**：models.py / db.py / serialize.py / TECH_SPEC §3-5 / pipeline/scheduler.py 全部不动；7 pre-existing failures 与本任务无关（stash 验证）。
+
+---
+
 ### M10 P2/P3/P4 大纲（P1 完成后再拆细）
 
 - **P2 交互与写操作 + 运行台**：接线写端点——topics promote/reject/手动录入(`try_insert_topic`)、review approve/reject(`transition`/`set_gate_verdict`)、publications reschedule/cancel/retry(`reschedule_publication`/`transition`)、手动排期(`insert_publication`)、canonical 在线编辑(M10-3 已写的 jailed writer 接 `PUT /contents/{id}/canonical`)；`runner_bridge` 启用**一键触发白名单阶段**(ingest/score/create/gate/derivative/review/schedule/collect/generate-images，经 FastAPI BackgroundTasks + flock，**publish 排除**)。这是用户最强诉求「摆脱 terminal」。

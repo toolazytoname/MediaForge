@@ -1,4 +1,4 @@
-"""M10-4 + M10 P2 阶段 A + 阶段 B contents router。
+"""M10-4 + M10 P2 阶段 A/B/D contents router。
 
 GET  /api/v1/contents                内容列表（status/pillar 过滤 + 分页）
 GET  /api/v1/contents/{id}           内容详情：canonical.md → HTML + 派生文件 +
@@ -9,6 +9,8 @@ POST /api/v1/contents/{id}/derivative        阶段 B：单条 → 小红书 sli
                                               → 200 + {derivative: {...}}
 POST /api/v1/contents/{id}/generate-images   阶段 B：单条 → 真实 AI 出图
                                               → 200 + {cover_path, inline_images, cost_usd}
+POST /api/v1/contents/{id}/schedule          阶段 D：approved 内容手动排期
+                                              → 201 + pub_dict
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from fastapi import APIRouter, Body, HTTPException, Query
 
 from pipeline import db
 from pipeline.utils.errors import BudgetExceeded
-from pipeline.webui import creation_bridge, deps, derivative_bridge
+from pipeline.webui import creation_bridge, deps, derivative_bridge, schedule_bridge
 from pipeline.webui.mdrender import md_to_html
 from pipeline.webui.serialize import (
     content_dict,
@@ -224,3 +226,81 @@ def generate_images_endpoint(content_id: str) -> dict[str, Any]:
                 "message": f"{type(e).__name__}: {e}",
             }})
     return result
+
+
+# ── 阶段 D：手动排期 ─────────────────────────────────────
+
+
+@router.post("/contents/{content_id}/schedule", status_code=201)
+def schedule_content_endpoint(
+    content_id: str,
+    body: dict[str, Any] = Body(...),
+) -> dict[str, Any]:
+    """对一条 approved (或 gated) content 手动造一条 queued publication。
+
+    M10-11 阶段 D —— 用户在内容详情页选 platform + account + time
+    主动排一条 publication，不依赖 CLI scheduler 自动计划。
+
+    body: {
+      "platform": "xiaohongshu" | "x" | "toutiao" | "douyin",
+      "account_id": "<该 platform.accounts 中的 id>",
+      "scheduled_at": "<ISO8601，未来时间>"
+    }
+    → 201 + pub_dict
+    → 404 content_not_found / 400 wrong_status /
+      400 platform_not_configured / 400 account_not_found /
+      400 invalid_scheduled_at / 409 duplicate_schedule /
+      500 schedule_failed
+
+    复用 pipeline.webui.schedule_bridge.schedule_for_content（薄封装调
+    db.insert_publication + UNIQUE 兜底），不重写业务。
+    """
+    # cfg 必填——platform/account 校验必须真 cfg
+    cfg, err = deps.get_config()
+    if cfg is None:
+        # config 加载失败 → 500（系统性，schedule 无法继续）
+        raise HTTPException(status_code=500, detail={"error": {
+            "code": "config_load_failed",
+            "message": f"failed to load config: {err}",
+        }})
+
+    with deps._db() as conn:
+        try:
+            pub = schedule_bridge.schedule_for_content(
+                conn, content_id,
+                platform=body.get("platform", ""),
+                account_id=body.get("account_id", ""),
+                scheduled_at=body.get("scheduled_at", ""),
+                cfg_obj=cfg,
+            )
+        except schedule_bridge.ContentNotFoundError as e:
+            raise HTTPException(status_code=404, detail={"error": {
+                "code": "content_not_found", "message": str(e),
+            }})
+        except schedule_bridge.ContentWrongStatusError as e:
+            raise HTTPException(status_code=400, detail={"error": {
+                "code": "wrong_status", "message": str(e),
+            }})
+        except schedule_bridge.PlatformNotConfiguredError as e:
+            raise HTTPException(status_code=400, detail={"error": {
+                "code": "platform_not_configured", "message": str(e),
+            }})
+        except schedule_bridge.AccountNotFoundError as e:
+            raise HTTPException(status_code=400, detail={"error": {
+                "code": "account_not_found", "message": str(e),
+            }})
+        except schedule_bridge.InvalidScheduledAtError as e:
+            raise HTTPException(status_code=400, detail={"error": {
+                "code": "invalid_scheduled_at", "message": str(e),
+            }})
+        except schedule_bridge.DuplicateScheduleError as e:
+            raise HTTPException(status_code=409, detail={"error": {
+                "code": "duplicate_schedule", "message": str(e),
+            }})
+        except Exception as e:
+            # 兜底 → 500（其它异常，如 SQL 完整性错误非 UNIQUE 类）
+            raise HTTPException(status_code=500, detail={"error": {
+                "code": "schedule_failed",
+                "message": f"{type(e).__name__}: {e}",
+            }})
+    return pub_dict(pub)
