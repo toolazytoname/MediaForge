@@ -931,6 +931,26 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 
 ---
 
+### M10-10 P2 阶段 C：5 个旧 htmx POST → /api/v1/ JSON envelope（写端点迁移第三步）
+
+- [x] **目标**：把 5 个旧 htmx POST 写端点（promote/reject/approve/reschedule/cancel/retry）迁移到 `/api/v1/` JSON envelope，前端 SPA 解 disabled。完成本任务后所有写端点都可在 SPA 上触发。
+- **步骤**：
+  1. 新建 `pipeline/webui/write_action_bridge.py`：6 个 bridge 函数 + 9 个 Error 类（TopicNotFoundError / TopicWrongStatusError / ContentNotFoundError / ContentWrongStatusError / ContentStatusChangedError / PublicationNotFoundError / PublicationWrongStatusError / PublicationStatusChangedError / InvalidDecisionError / InvalidTimeError）。薄封装调 db.transition / db.set_gate_verdict / db.reschedule_publication，**不重写业务逻辑**
+  2. `pipeline/webui/api/topics.py`：POST /api/v1/topics/{id}/promote + reject
+  3. `pipeline/webui/api/review.py`：POST /api/v1/review/{content_id}（approve/reject + reason）
+  4. `pipeline/webui/api/publish.py`：POST /api/v1/publications/{id}/reschedule + cancel + retry
+  5. `tests/webui/test_api_write_endpoints.py` 新建：23 测试覆盖 6 端点 × {成功/状态错/不存在/envelope 形状}
+  6. 前端 `client.ts` 加 `apiPost<T>` 泛型 helper；`stores/index.ts` 新增 useTopicActionStore / useReviewActionStore / usePubActionStore 三个轻量 store
+  7. 前端 3 个 view 解 disabled：Review.vue（approve/reject + reason 输入）、Topics.vue（promote/reject）、PublishCalendar.vue（reschedule modal + cancel + retry）
+  8. `npm run build` + `git add frontend/dist/` 重建
+- **验收**：`pytest tests/` 全绿（1254 pass + 12 skip + 7 pre-existing failures stash verified）；`grep -rn "import anthropic" pipeline/ | grep -v llm.py` 为空；`git diff models.py / db.py SQL schema / TECH_SPEC §3-5` 全空；旧 htmx POST 测试 `tests/test_webui.py` 20/20 pass
+- **声明改动文件**：`pipeline/webui/api/{topics,review,publish}.py`、`pipeline/webui/write_action_bridge.py`(新)、`tests/webui/test_api_write_endpoints.py`(新)、`frontend/src/api/client.ts`、`frontend/src/stores/index.ts`、`frontend/src/views/{Review,Topics,PublishCalendar}.vue`、`frontend/dist/**`
+- **红线**：不重写 db.transition；不发明新状态；不动 models.py / db.py / SQL schema / Adapter 签名；不引入 anthropic import；旧 htmx POST 路由保留（curl 兼容）
+
+  ✅ 完成于 2026-07-10，commit 3ce25a8，备注：6 个 JSON 写端点上线。bridge 错误分类三层（NotFound 404 / WrongStatus 400 / StatusChanged 409 / Invalid 400）+ API 层映射到具体 envelope。`TopicWrongStatusError` (promote/reject 非 scored) → 400 wrong_status；`PublicationWrongStatusError` (reschedule/cancel/retry 非 queued/failed) → 409 not_queued/status_changed（与 topics 故意区分：UI 列表现 409 让前端可分流「非法操作」vs「状态已变」）；review approve 乐观锁失败 → 409 status_changed；reject 走「先 set_gate_verdict + expect_status=gated 再 transition」两步（与旧 htmx 路由同构）。前端 store 三个（topic-action/review-action/pub-action）+ 3 个 view 解 disabled + Topics 行级 disabled 由 status==scored 控制 + reschedule 弹 a-modal 改时间。dist 1.49MB gzipped 461KB 重建并 git add（防 M10-9 跑偏 #1 复发）。**契约零变更**：models.py / db.py / SQL schema / Adapter 签名 / TECH_SPEC §3-5 / 旧 htmx POST 路由 全保留；7 pre-existing failures 与本任务无关（stash 验证）。
+
+---
+
 ### M10 P2/P3/P4 大纲（P1 完成后再拆细）
 
 - **P2 交互与写操作 + 运行台**：接线写端点——topics promote/reject/手动录入(`try_insert_topic`)、review approve/reject(`transition`/`set_gate_verdict`)、publications reschedule/cancel/retry(`reschedule_publication`/`transition`)、手动排期(`insert_publication`)、canonical 在线编辑(M10-3 已写的 jailed writer 接 `PUT /contents/{id}/canonical`)；`runner_bridge` 启用**一键触发白名单阶段**(ingest/score/create/gate/derivative/review/schedule/collect/generate-images，经 FastAPI BackgroundTasks + flock，**publish 排除**)。这是用户最强诉求「摆脱 terminal」。
