@@ -1112,7 +1112,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 
 ### M11-0｜发布通道开源集成评估（先于 M11-E 一切编码，高危前置，M0-0 式时间盒）
 - [x] **目标**：确定国内发布走 Wechatsync 还是 MultiPost、以何方式与编排层对接，输出 DECISION 与集成架构，**仅评估不真发**
-  ✅ 完成于 2026-07-10，commit <本 commit sha>，备注：`gh api` + `git clone --depth 1` 实读三仓；DECISION 落 `evaluation-notes.md` M11-0 节 + HARD_PARTS §7 增 3 行。**结论**：图文+视频主通道=**MultiPost**（Apache-2.0 + RESTful API + video/ 29 平台全覆盖，触发/回传最清晰）；图文长尾=**参考 Wechatsync**（MCP/CLI 现成但 GPL-3.0→仅进程外调用不 vendor，且它**图文 only 不做视频**）；无人值守兜底=**参考 MPP**（Python+Playwright 同构，移植 `platform_configs.py`）。触发经 `MultiPostExtensionPublisher(PublisherAdapter)`（签名不变）+ 编排层三重锁不绕。M11-E 拆细为 E-1(读平台/账号)→E-2(dry-run 骨架)→E-3(真发·高危人工)→E-4(MPP 兜底参考)。
+  ✅ 完成于 2026-07-10，commit 2a4ee47，备注：`gh api` + `git clone --depth 1` 实读三仓；DECISION 落 `evaluation-notes.md` M11-0 节 + HARD_PARTS §7 增 3 行。**结论**：图文+视频主通道=**MultiPost**（Apache-2.0 + RESTful API + video/ 29 平台全覆盖，触发/回传最清晰）；图文长尾=**参考 Wechatsync**（MCP/CLI 现成但 GPL-3.0→仅进程外调用不 vendor，且它**图文 only 不做视频**）；无人值守兜底=**参考 MPP**（Python+Playwright 同构，移植 `platform_configs.py`）。触发经 `MultiPostExtensionPublisher(PublisherAdapter)`（签名不变）+ 编排层三重锁不绕。M11-E 拆细为 E-1(读平台/账号)→E-2(dry-run 骨架)→E-3(真发·高危人工)→E-4(MPP 兜底参考)。
 - **DECISION 摘要**：见 `docs/research/evaluation-notes.md` 「M11-0 发布通道开源集成评估」节（对比表 + 触发架构 + License 红线 + E 子任务）
 - **步骤**（写入 `docs/research/evaluation-notes.md` 新节）：
   1. clone 深读 `wechatsync/Wechatsync`(v2, adapter 架构, 带 .claude/skills) 与 `leaperone/MultiPost-Extension`；对比平台覆盖/多账号/活跃度/License
