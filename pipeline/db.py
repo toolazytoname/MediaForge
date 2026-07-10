@@ -341,6 +341,50 @@ def get_content(conn: sqlite3.Connection, content_id: str) -> Content | None:
     return _row_to_content(row) if row else None
 
 
+def update_content_draft(
+    conn: sqlite3.Connection,
+    content_id: str,
+    *,
+    title: str | None = None,
+    pillar: str | None = None,
+    formats_json: str | None = None,
+    expect_status: str,
+    now: str,
+) -> int:
+    """M11-G：仅在 status=expect_status 时批量更新 contents 的可写字段。
+
+    允许 None 表示不改该字段；非 None 表覆盖。
+    status 改 status 不在此函数 —— 业务流转仍走 db.transition。
+
+    Returns:
+        实际更新行数（0 表示行不存在或 status 不匹配）
+    """
+    sets: list[str] = []
+    vals: list = []
+    if title is not None:
+        sets.append("title = ?")
+        vals.append(title)
+    if pillar is not None:
+        sets.append("pillar = ?")
+        vals.append(pillar)
+    if formats_json is not None:
+        sets.append("formats = ?")
+        vals.append(formats_json)
+    if not sets:
+        return 0
+    sets.append("updated_at = ?")
+    vals.append(now)
+    vals.append(content_id)
+    vals.append(expect_status)
+    cur = conn.execute(
+        f'UPDATE contents SET {", ".join(sets)} '
+        "WHERE id = ? AND status = ?",
+        vals,
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def get_contents_by_status(
     conn: sqlite3.Connection, status: str
 ) -> list[Content]:

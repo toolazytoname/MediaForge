@@ -17,7 +17,18 @@ onMounted(reload)
 </script>
 
 <template>
-  <h2>内容库</h2>
+  <div>
+    <a-row align="middle" :gutter="8" style="margin-bottom: 12px">
+      <a-col flex="auto">
+        <h2 style="margin: 0">内容库</h2>
+      </a-col>
+      <a-col>
+        <a-space>
+          <a-button type="primary" href="/contents/new">+ 新建草稿（手动）</a-button>
+          <a-button href="/creation">🤖 AI 自动生成</a-button>
+        </a-space>
+      </a-col>
+    </a-row>
   <a-space style="margin-bottom: 12px">
     <a-select v-model:value="filters.status" placeholder="status" allow-clear style="width: 140px"
               @change="reload">
@@ -64,4 +75,5 @@ onMounted(reload)
       </template>
     </a-table>
   </a-spin>
+  </div>
 </template>
