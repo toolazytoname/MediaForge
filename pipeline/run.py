@@ -511,6 +511,20 @@ def cmd_derivative(args: argparse.Namespace) -> int:
     return 0
 
 
+def _active_platform_configs(platforms_cfg) -> dict:
+    """PlatformsConfig → {name: PlatformAPI|PlatformPlaywright}，过滤未配置（None）的平台。
+
+    PlatformsConfig 的每个平台字段都是可选的（"缺则视为未启用"）；未在 config.yaml
+    里写的平台（如 douyin）字段值是 None，必须过滤掉再传给 scheduler.plan()，
+    否则对 None 取 .windows 会 AttributeError（真实 config 冒烟时发现，见 CLAUDE.md 工作日志）。
+    """
+    return {
+        name: getattr(platforms_cfg, name)
+        for name in platforms_cfg.model_dump()
+        if getattr(platforms_cfg, name) is not None
+    }
+
+
 @_stage_lock("schedule")
 def cmd_schedule(args: argparse.Namespace) -> int:
     """为 approved 内容排期（M3-1）。
@@ -542,11 +556,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
                 db.get_publications_by_status(conn, st.value)
             )
 
-        # platforms 配置 dict：{"x": PlatformAPI, "toutiao": PlatformPlaywright, ...}
-        platforms_cfg = {
-            name: getattr(cfg.platforms, name)
-            for name in cfg.platforms.model_dump()
-        }
+        platforms_cfg = _active_platform_configs(cfg.platforms)
 
         result = plan(
             approved_contents=approved,
