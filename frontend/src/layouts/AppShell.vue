@@ -97,79 +97,68 @@ function openModal(): void {
 </script>
 
 <template>
-  <a-layout style="min-height: 100vh">
-    <!-- 顶部 header：64px 高，左上角头像菜单 -->
-    <a-layout-header class="app-header">
-      <UserAvatarMenu />
-    </a-layout-header>
+  <div class="shell">
+    <!-- 全高左栏：logo 顶 / 分组导航 中(滚动) / 用户 底 -->
+    <aside class="app-sider">
+      <!-- 顶部 logo：紫色 ⬢ MediaForge -->
+      <div class="sidebar-logo">
+        <div class="logo-icon">⬢</div>
+        <div class="logo-text">MediaForge</div>
+      </div>
 
-    <a-layout>
-      <!-- 220px 侧栏：分组导航 + 紫底 active pill -->
-      <a-layout-sider
-        width="220"
-        class="app-sider"
-      >
-        <!-- 顶部 logo：紫色 ⬢ MediaForge -->
-        <div class="sidebar-logo">
-          <div class="logo-icon">⬢</div>
-          <div class="logo-text">MediaForge</div>
+      <!-- 中间：分组导航（唯一滚动区） -->
+      <nav class="sidebar-nav" aria-label="主导航">
+        <div v-for="group in groups" :key="group.label" class="nav-group">
+          <div class="nav-group-label">{{ group.label }}</div>
+          <SidebarNavItem
+            v-for="item in group.items"
+            :key="item.path + '|' + item.label"
+            :path="item.path"
+            :label="item.label"
+            :icon="item.icon"
+            :exact="item.exact === true"
+          />
         </div>
+      </nav>
 
-        <!-- 中间：分组导航 -->
-        <nav class="sidebar-nav" aria-label="主导航">
-          <div v-for="group in groups" :key="group.label" class="nav-group">
-            <div class="nav-group-label">{{ group.label }}</div>
-            <SidebarNavItem
-              v-for="item in group.items"
-              :key="item.path + '|' + item.label"
-              :path="item.path"
-              :label="item.label"
-              :icon="item.icon"
-              :exact="item.exact === true"
-            />
-          </div>
-        </nav>
-      </a-layout-sider>
+      <!-- 底部：用户头像菜单（贴底，替代原全宽空顶栏） -->
+      <div class="sidebar-footer">
+        <UserAvatarMenu />
+        <span class="sidebar-footer-name">lazy</span>
+      </div>
+    </aside>
 
-      <!-- 主区域：sider 是 layout 子元素，无需手动 marginLeft -->
-      <a-layout-content class="app-content">
-        <div class="content-inner">
-          <!-- hero 大卡：仅 root 路由显示 -->
-          <StartPublishHero v-if="showHero" @click="openModal" />
-          <router-view />
-        </div>
-      </a-layout-content>
-    </a-layout>
+    <!-- 主区域：右侧独立滚动，无全局空顶带 -->
+    <main class="app-content">
+      <div class="content-inner">
+        <!-- hero 大卡：仅 root 路由显示 -->
+        <StartPublishHero v-if="showHero" @click="openModal" />
+        <router-view />
+      </div>
+    </main>
 
     <!-- 4 选 1 弹窗：hero 卡点击或侧栏「发布」触发 -->
     <StartPublishModal v-model:open="modalOpen" />
-  </a-layout>
+  </div>
 </template>
 
 <style scoped>
-.app-header {
-  background: #fff;
-  height: 64px;
-  line-height: 64px;
-  padding: 0 16px;
-  border-bottom: 1px solid #f0f0f0;
-  display: flex;
-  align-items: center;
-  position: sticky;
-  top: 0;
-  z-index: 10;
+/* 全高两栏：左栏 fixed，右侧内容让出 220px，各自独立滚动 */
+.shell {
+  min-height: 100vh;
 }
 
 .app-sider {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 220px;
+  height: 100vh;
   background: #fff;
   border-right: 1px solid #f0f0f0;
-  position: sticky;
-  top: 64px; /* 顶 header 占 64px */
-  height: calc(100vh - 64px);
-  overflow: auto;
   display: flex;
   flex-direction: column;
-  padding: 0;
+  z-index: 20;
 }
 
 /* logo：竖栏顶部，左侧 logo 图标 + 右侧品牌名 */
@@ -177,8 +166,8 @@ function openModal(): void {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 16px;
-  height: 56px;
+  padding: 0 20px;
+  height: 60px;
   border-bottom: 1px solid #f0f0f0;
   flex-shrink: 0;
 }
@@ -196,11 +185,12 @@ function openModal(): void {
   letter-spacing: 0.2px;
 }
 
+/* 导航是唯一滚动区 */
 .sidebar-nav {
   display: flex;
   flex-direction: column;
   flex: 1;
-  padding: 8px 0 16px;
+  padding: 12px 0;
   min-height: 0;
   overflow-y: auto;
 }
@@ -218,21 +208,35 @@ function openModal(): void {
   padding: 4px 20px 6px;
 }
 
-/* 主区域 overflow 多重兜底（不动业务页面） */
+/* 底部用户区：贴底，替代原来那条全宽空顶栏 */
+.sidebar-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.sidebar-footer-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #595959;
+}
+
+/* 主区域：让出 220px 左栏，独立滚动 */
 .app-content {
-  margin: 0;
+  margin-left: 220px;
+  min-height: 100vh;
   padding: 24px;
   background: #f8f8fa;
-  min-height: calc(100vh - 64px);
-  overflow-x: auto;
-  max-width: 100%;
   box-sizing: border-box;
 }
 
 .content-inner {
+  max-width: 1280px;
+  margin: 0 auto;
   min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
 }
 
 /* 卡片标题 / 卡片体兜底：长串内容自动换行（不撑爆外层） */
@@ -245,19 +249,22 @@ function openModal(): void {
   word-break: break-word;
 }
 
-/* 窄屏响应式：内容区收紧 padding；侧栏收缩到 68px 图标列（只露图标，组标题隐藏） */
+/* 窄屏响应式：左栏收到 64px 只露图标，内容区让出 64px */
 @media (max-width: 1024px) {
   .app-sider {
-    width: 68px !important;
-    min-width: 68px !important;
+    width: 64px;
   }
-  .logo-text {
+  .logo-text,
+  .nav-group-label,
+  .sidebar-footer-name {
     display: none;
   }
-  .nav-group-label {
-    display: none;
+  .sidebar-footer {
+    justify-content: center;
+    padding: 12px 0;
   }
   .app-content {
+    margin-left: 64px;
     padding: 16px;
   }
 }

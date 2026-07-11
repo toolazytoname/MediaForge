@@ -1,0 +1,1 @@
+import{f as e,h as t,k as n,l as r,s as i,y as a}from"./index-D9m6M-tS.js";var o=t({__name:`EmptyStub`,props:{msg:{}},setup(t){return(o,s)=>(a(),e(i,null,[r(`h2`,null,n(t.msg||`View`),1),s[0]||=r(`p`,null,`占位 — M10-8 接入真实数据。`,-1)],64))}});export{o as default};
