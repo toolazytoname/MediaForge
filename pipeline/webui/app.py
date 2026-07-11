@@ -27,6 +27,7 @@ Router 渲染并通过 `/api/v1` 取数据。
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -36,8 +37,11 @@ from fastapi.staticfiles import StaticFiles
 
 from pipeline import db
 from pipeline.models import ContentStatus, PublicationStatus, TopicStatus
+from pipeline.utils.log import get_logger, log_event
 from pipeline.webui import deps
 from pipeline.webui.api import api_router
+
+_LOGGER = get_logger("pipeline.webui.app", "logs")
 
 
 # ── 工具 ────────────────────────────────────────────────────
@@ -270,9 +274,18 @@ def main() -> int:
         port = cfg.webui.port
     except Exception:
         host, port = "127.0.0.1", 8787
-    # 按 env 选真实 provider（否则全程 MockProvider，衍生/出图必然失败）
+    # 按 env 选真实 provider（否则全程 MockProvider，衍生/出图必然失败）。
+    # llm 有 MockProvider 兜底不会抛；image_gen 没有兜底，key 缺失会直接
+    # ValueError——图片出图是可选功能，不应该因为没配 key 就拖垮整个服务。
     llm_mod.setup_provider_from_env()
-    image_gen.setup_provider_from_env()
+    try:
+        image_gen.setup_provider_from_env()
+    except Exception as e:
+        log_event(
+            _LOGGER, logging.WARNING,
+            f"image_gen provider init failed, image generation will be unavailable: {e}",
+            stage="webui_startup",
+        )
     uvicorn.run(create_app(), host=host, port=port, log_level="info")
     return 0
 
