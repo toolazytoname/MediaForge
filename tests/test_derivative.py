@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -508,6 +509,31 @@ def test_derive_one_isolates_platform_failures(tmp_path) -> None:
     assert (out_dir / "toutiao.md").exists()
     assert not (out_dir / "xiaohongshu").exists()
     assert (out_dir / "x" / "thread.md").exists()
+
+
+def test_derive_one_logs_platform_failure(tmp_path, caplog) -> None:
+    """某平台 CreateError → 记录 WARNING 日志（TECH_SPEC §8：异常分支不可静默吞没）。"""
+    conn = _open_db(tmp_path)
+    content = _seed_gated_content(tmp_path, conn, content_id="c_der005b")
+
+    set_provider(ScriptedProvider([
+        json.dumps(_toutiao_payload()),
+        "garbage 1",  # xhs 第一次坏
+        "garbage 2",  # xhs 第二次也坏 → CreateError
+        json.dumps(_x_payload()),
+    ]))
+
+    # get_logger() 默认 propagate=False，caplog 挂在 root logger 上抓不到，
+    # 测试内显式打开传播（仿照 tests/test_metrics_logging_r7_4.py 的做法）。
+    deriv._LOGGER.propagate = True
+    with caplog.at_level(logging.WARNING, logger=deriv._LOGGER.name):
+        derive_one(
+            content, output_dir=Path(content.canonical_path).parent,
+            now="2026-07-05T05:00:00+00:00", conn=conn,
+        )
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("xiaohongshu" in r.getMessage() for r in warnings)
 
 
 def test_derive_one_idempotent(tmp_path) -> None:

@@ -260,12 +260,19 @@ def create_app() -> FastAPI:
 def main() -> int:
     """启动入口(cmd_webui 调用)。"""
     import uvicorn
+
+    from pipeline.creators import image_gen
+    from pipeline.creators import llm as llm_mod
+
     try:
         cfg = deps.load_config(deps._CONFIG_PATH)
         host = cfg.webui.host
         port = cfg.webui.port
     except Exception:
         host, port = "127.0.0.1", 8787
+    # 按 env 选真实 provider（否则全程 MockProvider，衍生/出图必然失败）
+    llm_mod.setup_provider_from_env()
+    image_gen.setup_provider_from_env()
     uvicorn.run(create_app(), host=host, port=port, log_level="info")
     return 0
 

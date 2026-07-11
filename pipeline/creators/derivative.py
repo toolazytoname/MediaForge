@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import sqlite3
@@ -24,6 +25,9 @@ from pipeline.creators import llm as llm_mod
 from pipeline.creators.llm import complete_json
 from pipeline.models import Content
 from pipeline.utils.errors import BudgetExceeded, CreateError
+from pipeline.utils.log import get_logger, log_event
+
+_LOGGER = get_logger("pipeline.creators.derivative", "logs")
 
 
 # ── prompts ────────────────────────────────────────────────
@@ -420,7 +424,9 @@ def derive_one(
                 conn=conn, ref_id=content.id,
             )
             _write_toutiao(output_dir, toutiao)
-        except CreateError:
+        except CreateError as e:
+            log_event(_LOGGER, logging.WARNING, f"toutiao derivative failed: {e}",
+                       stage="derive", ref_id=content.id)
             failed.append("toutiao")
 
     if "xiaohongshu" in platforms:
@@ -430,7 +436,9 @@ def derive_one(
                 conn=conn, ref_id=content.id,
             )
             _write_xhs(output_dir, xiaohongshu)
-        except CreateError:
+        except CreateError as e:
+            log_event(_LOGGER, logging.WARNING, f"xiaohongshu derivative failed: {e}",
+                       stage="derive", ref_id=content.id)
             failed.append("xiaohongshu")
 
     if "x" in platforms:
@@ -440,7 +448,9 @@ def derive_one(
                 conn=conn, ref_id=content.id,
             )
             _write_x(output_dir, x)
-        except CreateError:
+        except CreateError as e:
+            log_event(_LOGGER, logging.WARNING, f"x derivative failed: {e}",
+                       stage="derive", ref_id=content.id)
             failed.append("x")
 
     return DerivativeResult(
