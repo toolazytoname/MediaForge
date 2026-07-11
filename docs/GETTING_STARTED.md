@@ -190,6 +190,10 @@ python -m pipeline.run generate-images
 ## §9 打开 Web 控制台
 
 ```bash
+# 启动前先 source 所需 provider key（不 source 也能起服务，但衍生/出图会
+# 因 provider 未初始化而报错——衍生走 MockProvider 兜底不崩但产出无效，
+# 出图没有兜底会直接 503 image_provider_unavailable）：
+set -a; source secrets/agnes.env; source secrets/minimax.env; set +a
 python -m pipeline.run webui
 # 监听 http://127.0.0.1:8787
 ```
