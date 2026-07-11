@@ -596,6 +596,22 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
+def _account_credentials_path(platform: str, account_cfg_pyd) -> str:
+    """取账号配置里的凭据文件路径字符串。
+
+    x 平台账号是 AccountAPI（字段 credentials），Playwright 三平台
+    （toutiao/xiaohongshu/douyin）是 AccountPlaywright（字段 cookies）——
+    两个 pydantic 模型字段名不同，取错字段会 AttributeError（真实 config
+    冒烟时发现，见 CLAUDE.md 工作日志；同款判断已在
+    pipeline/publishers/__init__.py::build_adapters() 用过）。
+    """
+    return (
+        account_cfg_pyd.credentials
+        if platform == "x"
+        else account_cfg_pyd.cookies
+    )
+
+
 @_stage_lock("publish")
 def cmd_publish(args: argparse.Namespace) -> int:
     """发布到期的 publication（M4-1 安全框架 + M4-2 接入 X）。
@@ -676,7 +692,9 @@ def cmd_publish(args: argparse.Namespace) -> int:
             from pipeline.publishers.base import AccountConfig
             account = AccountConfig(
                 id=account_cfg_pyd.id,
-                credentials_path=Path(account_cfg_pyd.credentials),
+                credentials_path=Path(
+                    _account_credentials_path(pub.platform, account_cfg_pyd)
+                ),
             )
             try:
                 adapter = get_adapter(
@@ -712,6 +730,14 @@ def cmd_publish(args: argparse.Namespace) -> int:
                 # 排期未到/另一进程抢占 → 正常跳过（不计入 failed）
                 skipped += 1
             else:
+                # 真实 config 冒烟发现：这个分支之前不打印 reason，"N failed"
+                # 汇总行没法看出具体是哪条 pub 为什么失败（如 publish.enabled=false
+                # 命中 safe_publish 的 disabled 短路）——补上，跟其它 FAIL 分支一致。
+                print(
+                    f"publish: FAIL {pub.id} platform={pub.platform!r}: "
+                    f"{result.reason}",
+                    file=sys.stderr,
+                )
                 failed += 1
     finally:
         conn.close()
