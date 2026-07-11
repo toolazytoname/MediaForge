@@ -1,1 +1,0 @@
-import{A as e,b as t,c as n,g as r,p as i,u as a}from"./index-CTwNUR_W.js";var o=r({__name:`EmptyStub`,props:{msg:{}},setup(r){return(o,s)=>(t(),i(n,null,[a(`h2`,null,e(r.msg||`View`),1),s[0]||=a(`p`,null,`占位 — M10-8 接入真实数据。`,-1)],64))}});export{o as default};

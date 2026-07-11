@@ -8,6 +8,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAnalyticsStore } from '../stores'
 import { storeToRefs } from 'pinia'
+import { formatDateTime } from '../utils/format'
 
 const store = useAnalyticsStore()
 const { weekly, cost, platforms } = storeToRefs(store)
@@ -160,7 +161,10 @@ const dashboardHasData = computed(() => Boolean(
                   :columns="[
                     { title: 'stage', dataIndex: 'stage' },
                     { title: 'calls', dataIndex: 'calls', width: 80 },
-                    { title: 'cost_usd', dataIndex: 'cost_usd', width: 120 },
+                    {
+                      title: 'cost_usd', dataIndex: 'cost_usd', width: 120,
+                      customRender: ({ text }: { text: number }) => `$${text.toFixed(4)}`,
+                    },
                   ]"
                   :pagination="false"
                   size="small"
@@ -185,7 +189,25 @@ const dashboardHasData = computed(() => Boolean(
             </a-col>
           </a-row>
           <a-card v-if="weekly" title="周报概览">
-            <pre style="background: #f5f5f5; padding: 12px; border-radius: 4px; overflow: auto">{{ JSON.stringify(weekly.overview, null, 2) }}</pre>
+            <a-descriptions :column="3" size="small" bordered>
+              <a-descriptions-item label="统计周期">
+                {{ formatDateTime(weekly.overview.period_start) }} ~ {{ formatDateTime(weekly.overview.period_end) }}
+              </a-descriptions-item>
+              <a-descriptions-item label="选题总数">{{ weekly.overview.topics_raw }}</a-descriptions-item>
+              <a-descriptions-item label="创作内容数">{{ weekly.overview.contents_created }}</a-descriptions-item>
+              <a-descriptions-item label="门禁通过(gated)">{{ weekly.overview.gated_count }}</a-descriptions-item>
+              <a-descriptions-item label="已批准(approved)">{{ weekly.overview.approved_count }}</a-descriptions-item>
+              <a-descriptions-item label="已丢弃(discarded)">{{ weekly.overview.discarded_count }}</a-descriptions-item>
+              <a-descriptions-item label="失败(failed)">{{ weekly.overview.failed_count }}</a-descriptions-item>
+              <a-descriptions-item label="已发布(published)">{{ weekly.overview.published_count }}</a-descriptions-item>
+              <a-descriptions-item label="已排期(scheduled)">{{ weekly.overview.scheduled_count }}</a-descriptions-item>
+              <a-descriptions-item label="门禁通过率">
+                {{ (weekly.overview.gate_pass_rate * 100).toFixed(1) }}%
+              </a-descriptions-item>
+              <a-descriptions-item label="丢弃率">
+                {{ (weekly.overview.discard_rate * 100).toFixed(1) }}%
+              </a-descriptions-item>
+            </a-descriptions>
           </a-card>
         </a-spin>
       </a-tab-pane>
