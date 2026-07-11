@@ -24,6 +24,7 @@ from pipeline.models import (
 from pipeline.webui.serialize import (
     content_dict,
     content_image_urls,
+    content_output_url_prefix,
     list_content_files,
     metric_dict,
     pub_dict,
@@ -250,6 +251,16 @@ class TestContentImageUrls:
         c = _content(inline_images=())
         urls = content_image_urls(c)
         assert urls["inline"] == []
+
+
+class TestContentOutputUrlPrefix:
+    def test_normal_canonical_path(self):
+        c = _content(canonical_path="output/2026-07-05/c_001/canonical.md")
+        assert content_output_url_prefix(c) == "/output/2026-07-05/c_001/"
+
+    def test_non_canonical_filename_returns_empty(self):
+        c = _content(canonical_path="output/2026-07-05/c_001/other.md")
+        assert content_output_url_prefix(c) == ""
 
 
 # ── write_canonical_jailed ─────────────────────────────────

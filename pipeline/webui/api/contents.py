@@ -30,6 +30,7 @@ from pipeline.webui.mdrender import md_to_html
 from pipeline.webui.serialize import (
     content_dict,
     content_image_urls,
+    content_output_url_prefix,
     list_content_files,
     pub_dict,
 )
@@ -72,7 +73,10 @@ def get_content_detail(content_id: str) -> dict[str, Any]:
     try:
         cp = Path(c.canonical_path)
         if cp.exists():
-            canonical_html = md_to_html(cp.read_text(encoding="utf-8"))
+            canonical_html = md_to_html(
+                cp.read_text(encoding="utf-8"),
+                image_base_url=content_output_url_prefix(c),
+            )
     except Exception:
         canonical_html = ""
     return {

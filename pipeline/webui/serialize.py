@@ -188,6 +188,19 @@ def list_content_files(content: Content) -> list[dict[str, Any]]:
     return out
 
 
+def content_output_url_prefix(content: Content) -> str:
+    """内容输出目录的 `/output/...` URL 前缀（末尾带 `/`）。
+
+    用于 md_to_html 把 canonical.md 里的图片相对路径（如
+    `images/inline-1.png`）解析成可访问的 URL。解析失败（canonical_path
+    不是标准 `output/.../canonical.md` 形式）返回空串。
+    """
+    base = _content_output_dir(content)
+    if base is None:
+        return ""
+    return f"/output/{str(base).removeprefix('output/')}/"
+
+
 def content_image_urls(content: Content) -> dict[str, Any]:
     """把 cover_path / inline_images 转 `/output/...` 形式的 URL。
 
@@ -305,5 +318,6 @@ __all__ = [
     "metric_dict",
     "list_content_files",
     "content_image_urls",
+    "content_output_url_prefix",
     "write_canonical_jailed",
 ]

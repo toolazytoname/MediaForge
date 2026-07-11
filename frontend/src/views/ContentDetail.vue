@@ -179,7 +179,7 @@ function goSettings() {
 
       <a-row :gutter="16">
         <a-col :span="14">
-          <a-card title="canonical 预览">
+          <a-card title="最终效果预览（图文）">
             <div v-html="data.canonical_html" class="md-body" />
             <p v-if="!data.canonical_html" style="color: #999">（无 canonical.md 或为空）</p>
           </a-card>

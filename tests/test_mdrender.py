@@ -96,6 +96,40 @@ class TestMdToHtmlLists:
         assert md_to_html("- <x>") == "<ul>\n<li>&lt;x&gt;</li>\n</ul>"
 
 
+class TestMdToHtmlImages:
+    def test_image_line_no_base_url(self):
+        out = md_to_html("![封面](images/inline-1.png)")
+        assert out == '<img src="images/inline-1.png" alt="封面">'
+
+    def test_image_line_with_base_url(self):
+        out = md_to_html(
+            "![封面](images/inline-1.png)",
+            image_base_url="/output/2026-07-05/c_001/",
+        )
+        assert out == '<img src="/output/2026-07-05/c_001/images/inline-1.png" alt="封面">'
+
+    def test_image_closes_open_list(self):
+        out = md_to_html("- a\n![x](img.png)")
+        assert out == '<ul>\n<li>a</li>\n</ul>\n<img src="img.png" alt="x">'
+
+    def test_image_mixed_with_paragraphs(self):
+        md = "第一段。\n\n![说明文字](images/inline-1.png)\n\n第二段。"
+        out = md_to_html(md, image_base_url="/output/2026-07-05/c_001/")
+        assert out == (
+            "<p>第一段。</p>\n"
+            '<img src="/output/2026-07-05/c_001/images/inline-1.png" alt="说明文字">\n'
+            "<p>第二段。</p>"
+        )
+
+    def test_image_alt_escaped(self):
+        out = md_to_html("![a & <b>](x.png)")
+        assert out == '<img src="x.png" alt="a &amp; &lt;b&gt;">'
+
+    def test_image_path_escaped(self):
+        out = md_to_html("![a](x&y.png)")
+        assert out == '<img src="x&amp;y.png" alt="a">'
+
+
 class TestMdToHtmlMixed:
     def test_realistic_doc(self):
         md = (
