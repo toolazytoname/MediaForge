@@ -38,6 +38,7 @@ from pipeline.gate.critic import (
     critique_one,
     render_critique_text,
     _parse_critique,
+    _render_critic_prompt,
 )
 from pipeline.gate.decision import (
     Action,
@@ -415,6 +416,27 @@ def test_critic_render_text_format() -> None:
     assert "summary" in text
 
 
+def test_critic_prompt_includes_source_text() -> None:
+    """source_text 非空 → 原样嵌入 prompt，供 critic 核对事实。
+
+    回归：真实数据冒烟发现 critic 无原文参照时，会把训练知识截止日期
+    之后的真实新事实（如 2026 年的 CPython 3.14、真实项目文案）误判为
+    编造，导致 100% discard。修复：critic 拿到与创作时同一份原文用于
+    核对，而非凭自己的训练知识猜测"合不合理"。
+    """
+    prompt = _render_critic_prompt(
+        title="x", canonical_md="body", source_text="真实原文片段 ABC123",
+    )
+    assert "真实原文片段 ABC123" in prompt
+
+
+def test_critic_prompt_source_text_none_shows_placeholder() -> None:
+    """source_text=None → 显示"（无）"占位，不是 Python None 字面量。"""
+    prompt = _render_critic_prompt(title="x", canonical_md="body")
+    assert "（无）" in prompt
+    assert "None" not in prompt
+
+
 # ── scorer ─────────────────────────────────────────────────
 
 def test_scorer_parse_valid() -> None:
@@ -731,6 +753,44 @@ def test_runner_blocker_problem_short_circuits(tmp_path) -> None:
     assert result.discarded_count == 1
     # 只调了 critic，没调 scorer（因为 blocker 走 decide_revision_action 返 BLOCK）
     assert len(llm_mod._PROVIDER.calls) == 1  # type: ignore[attr-defined]
+
+
+def test_runner_fetches_source_text_for_critic(tmp_path) -> None:
+    """runner 按 content.topic_id 查 topic.url，重新抓原文传给 critic 做事实核对。
+
+    回归：真实数据冒烟测试中，critic 没有原文参照，把训练知识截止日期
+    之后的真实事实误判为编造，两轮共 10 篇真实文章 100% discard。
+    """
+    conn = _open_db(tmp_path)
+    content = _seed_full_content(
+        tmp_path, conn, content_id="c_aaaa6666",
+        md_text="# t\n\n正文引用了原文里的真实细节",
+    )
+    conn.execute(
+        "UPDATE topics SET url=? WHERE id=?",
+        ("https://example.com/real-article", content.topic_id),
+    )
+    conn.commit()
+
+    set_provider(ScriptedProvider([
+        json.dumps({"problems": [], "summary": "无问题"}),
+        json.dumps({"info": 9, "fun": 9, "view": 9,
+                    "problems": [], "verdict": "好"}),
+    ]))
+
+    with patch(
+        "pipeline.gate.runner.source_fetcher.fetch_text",
+        return_value="真实原文核对片段 XYZ789",
+    ) as mock_fetch:
+        run_gate(
+            conn, gate_cfg=GateConfig(),
+            anchors_dir=Path(__file__).parent.parent / "pipeline" / "gate" / "anchors",
+            now="2026-07-05T04:00:00+00:00",
+        )
+
+    mock_fetch.assert_called_once_with("https://example.com/real-article")
+    critic_prompt = llm_mod._PROVIDER.calls[0]["prompt"]  # type: ignore[attr-defined]
+    assert "真实原文核对片段 XYZ789" in critic_prompt
 
 
 def test_runner_requires_anchors(tmp_path) -> None:

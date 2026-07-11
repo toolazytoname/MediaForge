@@ -33,9 +33,14 @@ _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _CRITIC_PROMPT_PATH = _PROMPTS_DIR / "critic.md"
 
 
-def _render_critic_prompt(*, title: str, canonical_md: str) -> str:
+def _render_critic_prompt(
+    *, title: str, canonical_md: str, source_text: str | None = None,
+) -> str:
     tpl = _CRITIC_PROMPT_PATH.read_text(encoding="utf-8")
-    return tpl.format(title=title, canonical_md=canonical_md)
+    return tpl.format(
+        title=title, canonical_md=canonical_md,
+        source_text=source_text or "（无）",
+    )
 
 
 # ── 数据类 ─────────────────────────────────────────────────
@@ -114,6 +119,7 @@ def critique_one(
     *,
     title: str,
     canonical_md: str,
+    source_text: str | None = None,
     conn: sqlite3.Connection | None = None,
     ref_id: str | None = None,
 ) -> CritiqueResult:
@@ -122,6 +128,8 @@ def critique_one(
     Args:
         title: 文章标题（仅用于审稿上下文；不影响打分）
         canonical_md: 完整 markdown 正文
+        source_text: 创作时依据的原文（用于事实校对参照，非创作过程本身；
+            None/空 → 仅凭审稿人自身知识判断，见 critic.md 判断准则）
         conn: DB 连接（llm.complete 写 llm_calls 用）
         ref_id: content_id，用于日志关联
 
@@ -134,7 +142,9 @@ def critique_one(
     Raises:
         GateError: JSON 解析失败 / 字段缺失（结构性错误，编排层标记 failed）
     """
-    prompt = _render_critic_prompt(title=title, canonical_md=canonical_md)
+    prompt = _render_critic_prompt(
+        title=title, canonical_md=canonical_md, source_text=source_text,
+    )
     try:
         problems, summary = complete_json(
             prompt,

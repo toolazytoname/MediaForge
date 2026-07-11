@@ -23,6 +23,7 @@ from pathlib import Path
 
 from pipeline import db as db_mod
 from pipeline.config import GateConfig
+from pipeline.creators import source_fetcher
 from pipeline.creators.canonical import rewrite_one
 from pipeline.gate.anchors_loader import AnchorsBundle, load_anchors
 from pipeline.gate.critic import (
@@ -215,11 +216,19 @@ def _process_one(
     canonical_md = _read_canonical(content)
     content_dir = Path(content.canonical_path).parent
 
+    # 事实校对参照：重新抓一次原文（不落库、不进创作过程上下文，只给 critic
+    # 核对事实用——HARD_PARTS §3 隔离的是"创作过程"，不是"原文素材"；
+    # critic 若无此参照，只能凭自己训练知识判断，会把训练截止日期之后的
+    # 真实新事实误判为编造，见真实数据冒烟测试记录）
+    topic = db_mod.get_topic(conn, content.topic_id)
+    source_text = source_fetcher.fetch_text(topic.url if topic else None)
+
     # 1. 第一轮 critic
     try:
         critic1 = critique_one(
             title=content.title,
             canonical_md=canonical_md,
+            source_text=source_text,
             conn=conn,
             ref_id=content.id,
         )
@@ -300,6 +309,7 @@ def _process_one(
                 critic2 = critique_one(
                     title=content.title,
                     canonical_md=canonical_after_rewrite,
+                    source_text=source_text,
                     conn=conn,
                     ref_id=content.id,
                 )

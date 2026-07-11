@@ -17,14 +17,23 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pipeline.creators import manual as manual_creator
+from pipeline.webui import deps
 from pipeline.webui.app import create_app
 
 
 @pytest.fixture
-def client(tmp_path):
-    """每个 test 临时一份 app + 隔离 output 目录。"""
+def client(tmp_path, monkeypatch):
+    """每个 test 临时一份 app + 隔离 output 目录 + 隔离 DB。
+
+    修复：原先只隔离了 output 目录，_DB_PATH 仍是 deps 里的默认相对路径
+    "state.db"——每次跑这个文件都会经 TestClient 的真实 HTTP 请求把
+    "我的手写草稿"/"x"/"draft"/"new title" 这些测试数据写进仓库根目录
+    的生产 state.db（create_app() 启动时会对 deps._DB_PATH 建表/写入）。
+    必须在 create_app() 之前 monkeypatch deps._DB_PATH 到临时文件。
+    """
     import os
     os.environ["MEDIAFORGE_OUTPUT_ROOT"] = str(tmp_path / "output")
+    monkeypatch.setattr(deps, "_DB_PATH", str(tmp_path / "state.db"))
     app = create_app()
     return TestClient(app)
 
