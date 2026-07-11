@@ -9,6 +9,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
+import { formatDateTime } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -129,7 +130,7 @@ async function saveDraft() {
         body_markdown: bodyMarkdown.value,
         formats: formats.value,
       })
-      successMsg.value = `已保存 ${r.data.id} @ ${r.data.updated_at}`
+      successMsg.value = `已保存 ${r.data.id} @ ${formatDateTime(r.data.updated_at)}`
     }
   } catch (e: unknown) {
     if (axios.isAxiosError(e) && e.response) {

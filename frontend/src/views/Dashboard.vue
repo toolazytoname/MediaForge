@@ -3,6 +3,7 @@
 import { onMounted, computed } from 'vue'
 import { useDashboardStore } from '../stores'
 import { storeToRefs } from 'pinia'
+import { formatDateTime } from '../utils/format'
 
 const store = useDashboardStore()
 const { data, loading, error } = storeToRefs(store)
@@ -116,7 +117,13 @@ const budgetColor = computed(() => {
           ]"
           :pagination="false"
           size="small"
-        />
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.dataIndex === 'updated_at'">
+              {{ formatDateTime(record.updated_at) }}
+            </template>
+          </template>
+        </a-table>
       </a-card>
     </template>
     <a-empty v-else-if="!loading" description="加载中..." />

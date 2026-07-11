@@ -4,6 +4,7 @@
 // M10-11 阶段 D：approved 内容显示「手动排期」card
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { formatDateTime } from '../utils/format'
 import {
   useContentsStore,
   useDerivativeStore,
@@ -332,7 +333,7 @@ function goSettings() {
               <template #renderItem="{ item }">
                 <a-list-item>
                   <a-tag color="blue">{{ item.platform }}</a-tag>
-                  <span style="margin-left: 8px">{{ item.scheduled_at }}</span>
+                  <span style="margin-left: 8px">{{ formatDateTime(item.scheduled_at) }}</span>
                   <a-tag style="margin-left: 8px">{{ item.status }}</a-tag>
                 </a-list-item>
               </template>

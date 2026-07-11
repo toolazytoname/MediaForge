@@ -12,6 +12,7 @@ import {
   type PreviewResult,
 } from '../stores'
 import { storeToRefs } from 'pinia'
+import { formatDateTime } from '../utils/format'
 
 const store = usePublishStore()
 const previewStore = usePreviewStore()
@@ -112,7 +113,10 @@ function closeDrawer() {
       size="small"
     >
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'views'">
+        <template v-if="column.dataIndex === 'scheduled_at'">
+          {{ formatDateTime(record.scheduled_at) }}
+        </template>
+        <template v-else-if="column.key === 'views'">
           {{ record.latest_metric?.views ?? '—' }}
         </template>
         <template v-else-if="column.key === 'likes'">

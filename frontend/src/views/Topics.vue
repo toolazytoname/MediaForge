@@ -4,6 +4,7 @@
 import { onMounted, ref } from 'vue'
 import { useTopicsStore, useTopicActionStore } from '../stores'
 import { storeToRefs } from 'pinia'
+import { formatDateTime } from '../utils/format'
 
 const store = useTopicsStore()
 const actionStore = useTopicActionStore()
@@ -100,6 +101,9 @@ async function onAction(topicId: string, action: 'promote' | 'reject') {
       size="small"
     >
       <template #bodyCell="{ column, record }">
+        <template v-if="column.dataIndex === 'updated_at'">
+          {{ formatDateTime(record.updated_at) }}
+        </template>
         <template v-if="column.key === 'op'">
           <a-button
             size="small"

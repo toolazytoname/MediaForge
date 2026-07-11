@@ -7,6 +7,7 @@
 // - 「草稿箱」= approved 内容每行一个 [加入排期] 按钮
 // 写操作全部走已有 JSON 端点，不新造裸 SQL，不绕 safe_publish
 import { computed, defineComponent, h, onMounted, ref, type PropType } from 'vue'
+import { formatDateTime } from '../utils/format'
 import {
   usePublishStore,
   usePreviewStore,
@@ -347,6 +348,9 @@ function contentTitleById(id: string): string {
               <template v-if="column.key === 'content'">
                 <a :href="`/contents/${record.content_id}`">{{ contentTitleById(record.content_id) }}</a>
               </template>
+              <template v-else-if="column.dataIndex === 'scheduled_at'">
+                {{ formatDateTime(record.scheduled_at) }}
+              </template>
               <template v-else-if="column.key === 'views'">
                 {{ record.latest_metric?.views ?? '—' }}
               </template>
@@ -411,6 +415,9 @@ function contentTitleById(id: string): string {
             size="small"
           >
             <template #bodyCell="{ column, record }">
+              <template v-if="column.dataIndex === 'updated_at'">
+                {{ formatDateTime(record.updated_at) }}
+              </template>
               <template v-if="column.key === 'actions'">
                 <a-space>
                   <a-button

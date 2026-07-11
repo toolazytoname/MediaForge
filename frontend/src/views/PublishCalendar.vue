@@ -14,6 +14,7 @@ import {
   type PreviewResult,
 } from '../stores'
 import { storeToRefs } from 'pinia'
+import { formatTime } from '../utils/format'
 
 const store = usePublishStore()
 const actionStore = usePubActionStore()
@@ -188,7 +189,7 @@ function isFailed(item: any): boolean {
               <template #renderItem="{ item }">
                 <a-list-item>
                   <a-tag color="purple">{{ item.platform }}</a-tag>
-                  <span style="font-size: 12px">{{ item.scheduled_at.split('T')[1]?.slice(0,5) }}</span>
+                  <span style="font-size: 12px">{{ formatTime(item.scheduled_at) }}</span>
                   <a-tag :color="item.status === 'published' ? 'green' : 'orange'">{{ item.status }}</a-tag>
                   <div v-if="isQueued(item) || isFailed(item)" style="margin-top: 4px">
                     <a-button
