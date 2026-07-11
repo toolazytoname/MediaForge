@@ -164,7 +164,7 @@ def score_topic(
                 stage="score",
                 ref_id=topic.id,
                 model_tier="cheap",
-                max_tokens=512,
+                max_tokens=2048,
                 conn=conn,
             )
         except llm_mod.RetryableError:

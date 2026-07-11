@@ -61,7 +61,7 @@ def derive_video_script(
         stage=stage,
         ref_id=ref_id,
         model_tier=model_tier,
-        max_tokens=2048,
+        max_tokens=4096,
         parse=_parse_video_script,
     )
     return raw

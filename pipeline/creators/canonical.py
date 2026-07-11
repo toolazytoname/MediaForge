@@ -173,7 +173,7 @@ def create_one(
             stage="create_outline",
             ref_id=topic.id,
             model_tier="creative",
-            max_tokens=1024,
+            max_tokens=3072,
             conn=conn,
             parse=_parse_outline,
             max_retries=1,
@@ -195,7 +195,7 @@ def create_one(
             stage="create_essay",
             ref_id=topic.id,
             model_tier="creative",
-            max_tokens=6144,  # 3000 字中文 + 富余（每 token ≈ 1.5-2 中文字）
+            max_tokens=10240,  # 3000 字中文 + 思维链预算 + 富余（每 token ≈ 1.5-2 中文字）
             conn=conn,
         )
     except llm_mod.RetryableError as e:
@@ -315,7 +315,7 @@ def rewrite_one(
             stage="create_rewrite",
             ref_id=content.id,
             model_tier="creative",
-            max_tokens=6144,
+            max_tokens=10240,
             conn=conn,
         )
     except llm_mod.RetryableError as e:

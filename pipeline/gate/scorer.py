@@ -181,7 +181,7 @@ def score_one(
             stage="gate_score",
             ref_id=ref_id,
             model_tier="critical",  # 评分走 critical 档（与创作隔离，HARD_PARTS §3）
-            max_tokens=2048,
+            max_tokens=4096,
             conn=conn,
             parse=_parse_score,
             max_retries=1,

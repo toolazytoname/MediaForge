@@ -151,7 +151,7 @@ def critique_one(
             stage="gate_critic",
             ref_id=ref_id,
             model_tier="creative",
-            max_tokens=2048,
+            max_tokens=4096,
             conn=conn,
             parse=_parse_critique,
             max_retries=1,

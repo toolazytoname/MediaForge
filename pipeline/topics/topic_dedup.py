@@ -205,7 +205,7 @@ def dedup_topics(
                 stage="score_dedup",
                 parse=_parse_response,
                 model_tier="cheap",
-                max_tokens=2048,
+                max_tokens=4096,
                 max_retries=1,
             )
         else:
@@ -214,7 +214,7 @@ def dedup_topics(
                 stage="score_dedup",
                 parse=_parse_response,
                 model_tier="cheap",
-                max_tokens=2048,
+                max_tokens=4096,
                 max_retries=1,
             )
     except Exception as e:
