@@ -1145,3 +1145,29 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 
 ---
 
+## 待评估事项（真实用户走查发现，2026-07-11）
+
+⚠️ **DECISION NEEDED**：`pipeline/webui/calendar.py::bucket_week()` 按 `scheduled_at`
+的 **UTC 日历日**分桶（`sched_dt.astimezone(timezone.utc).date()`），docstring 自称
+"本地展示由调用方按需转换"——但这个说法不准确：分桶边界本身就是按 UTC 天算的，
+不是"算完转显示"能补救的，前端拿到的 `d.date` 就已经是 UTC 那一天。对 `Asia/Shanghai`
+(UTC+8) 用户，凌晨 00:00–08:00 排的贴会被分进"前一天"的日历格子里，用户直觉上
+认为那是"今天"。
+
+**当前实测影响**：抽查现有 3 条 `queued` publications，排期时间都在本地下午/晚上
+（10:53 / 12:06 / 19:05），不落在 00:00-08:00 危险窗口，所以**当前数据下不会看到
+可见错位**——这是本轮真人走查没有直接复现出该问题的原因，纯属现有排期时间点凑巧
+没踩中边界，不代表问题不存在。
+
+**未直接修的原因**：`bucket_week()` 是发布日历唯一的分桶实现，`pipeline/webui/api/publish.py`
+的 `/publish/calendar` 路由和 `tests/test_webui_m4_4.py` 的 6 个纯函数用例都绑定
+在"UTC 天"这个语义上；改成"按 `config.timezone` 本地天"分桶是行为变更，不是纯
+展示层修复（CLAUDE.md 工作约定第 2 条：契约有问题先记录，不擅自改）。
+
+**建议修法**（供下一轮拍板）：`bucket_week` 加一个 `tz: ZoneInfo` 参数（默认仍是
+UTC 保持向后兼容），分桶时 `sched_dt.astimezone(tz).date()` 而不是强制转 UTC 再取
+date；调用方（`publish.py` 路由）传 `cfg.timezone`（HARD_PARTS §8 已有 `timezone:
+Asia/Shanghai` 配置项，可直接复用，不用新增字段）。
+
+---
+
