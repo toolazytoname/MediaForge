@@ -105,14 +105,16 @@ async function onAction(topicId: string, action: 'promote' | 'reject') {
           {{ formatDateTime(record.updated_at) }}
         </template>
         <template v-if="column.key === 'op'">
-          <a-button
-            size="small"
-            :loading="actionStore.running"
-            :disabled="record.status !== 'scored'"
-            @click="onAction(record.id, 'promote')"
-          >
-            promote
-          </a-button>
+          <a-tooltip title="选中该选题，进入创作阶段">
+            <a-button
+              size="small"
+              :loading="actionStore.running"
+              :disabled="record.status !== 'scored'"
+              @click="onAction(record.id, 'promote')"
+            >
+              promote
+            </a-button>
+          </a-tooltip>
           <a-button
             size="small"
             danger

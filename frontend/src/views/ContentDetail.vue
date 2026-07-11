@@ -4,6 +4,7 @@
 // M10-11 阶段 D：approved 内容显示「手动排期」card
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { QuestionCircleOutlined } from '@ant-design/icons-vue'
 import { formatDateTime } from '../utils/format'
 import {
   useContentsStore,
@@ -307,7 +308,13 @@ function goSettings() {
             </a-space>
           </a-card>
 
-          <a-card title="派生文件 + 图卡" style="margin-bottom: 16px">
+          <a-card style="margin-bottom: 16px">
+            <template #title>
+              派生文件 + 图卡
+              <a-tooltip title="各平台（小红书/头条/X 等）的文案文件，由内容衍生生成">
+                <QuestionCircleOutlined style="margin-left: 4px; color: #999; font-size: 12px" />
+              </a-tooltip>
+            </template>
             <a-list size="small" :data-source="data.files" :pagination="{ pageSize: 8 }">
               <template #renderItem="{ item }">
                 <a-list-item>
@@ -321,7 +328,13 @@ function goSettings() {
             </a-list>
           </a-card>
 
-          <a-card v-if="data.images.cover || data.images.inline.length" title="图卡预览" style="margin-bottom: 16px">
+          <a-card v-if="data.images.cover || data.images.inline.length" style="margin-bottom: 16px">
+            <template #title>
+              图卡预览
+              <a-tooltip title="AI 生成的配图，用于图文平台的卡片排版">
+                <QuestionCircleOutlined style="margin-left: 4px; color: #999; font-size: 12px" />
+              </a-tooltip>
+            </template>
             <a-image v-if="data.images.cover" :src="data.images.cover" :width="200" />
             <div v-if="data.images.inline.length" style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap">
               <a-image v-for="(u, i) in data.images.inline" :key="i" :src="u" :width="100" />

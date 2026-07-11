@@ -49,8 +49,10 @@ function onBegin() {
     <a-spin :spinning="loading">
       <a-empty
         v-if="!loading && items.length === 0"
-        description="暂无 selected 状态的选题。先跑 score / create 阶段把高分内容推上来。"
-      />
+        description="还没有「已选中」状态的选题，请先去选题池里对某个选题点 promote。"
+      >
+        <a-button href="/topics">去选题池</a-button>
+      </a-empty>
       <a-form v-else layout="vertical">
         <a-form-item label="选题">
           <a-select
