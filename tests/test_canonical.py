@@ -151,6 +151,51 @@ def test_fetch_returns_none_on_empty_url() -> None:
     assert source_fetcher.fetch_text(None) is None
 
 
+def test_fetch_returns_none_on_binary_content_type() -> None:
+    """content-type 是二进制（PDF/图片/octet-stream）→ 返回 None，不当纯文本喂给 LLM。
+
+    回归：真实跑 M11 图文流程时，一条 topic.url 指向 PDF（OpenAI 论文），
+    fetch_text 把 PDF 字节流当"非 HTML → 原样返回"，导致 canonical 创作 prompt
+    收到形如 "%PDF-1.7 ... stream xڽ]s..." 的乱码素材，等同于没有素材却误判为有，
+    诱发 LLM 编造情节（HARD_PARTS §10.5：拿真实数据跑通才算完成，不是测试绿）。
+    """
+    with patch.object(source_fetcher.httpx, "get") as mock_get:
+        mock_resp = mock_get.return_value
+        mock_resp.text = "%PDF-1.7 %\xe2\xe3\xcf\xd3 garbage binary stream"
+        mock_resp.headers = {"content-type": "application/pdf"}
+        mock_resp.raise_for_status.return_value = None
+
+        result = source_fetcher.fetch_text("https://example.com/paper.pdf")
+
+    assert result is None
+
+
+def test_fetch_returns_none_on_image_content_type() -> None:
+    """content-type 是图片 → 返回 None。"""
+    with patch.object(source_fetcher.httpx, "get") as mock_get:
+        mock_resp = mock_get.return_value
+        mock_resp.text = "\x89PNG\r\n binary garbage"
+        mock_resp.headers = {"content-type": "image/png"}
+        mock_resp.raise_for_status.return_value = None
+
+        result = source_fetcher.fetch_text("https://example.com/x.png")
+
+    assert result is None
+
+
+def test_fetch_still_accepts_plain_text_content_type() -> None:
+    """content-type 是 text/plain（真正的纯文本，非 HTML）→ 仍应原样返回，不误伤。"""
+    with patch.object(source_fetcher.httpx, "get") as mock_get:
+        mock_resp = mock_get.return_value
+        mock_resp.text = "This is a plain text article body."
+        mock_resp.headers = {"content-type": "text/plain; charset=utf-8"}
+        mock_resp.raise_for_status.return_value = None
+
+        result = source_fetcher.fetch_text("https://example.com/x.txt")
+
+    assert result == "This is a plain text article body."
+
+
 # ── canonical.create_one ──────────────────────────
 
 def test_create_one_writes_files_and_transitions(tmp_path) -> None:
