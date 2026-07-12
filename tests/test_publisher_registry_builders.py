@@ -275,3 +275,53 @@ def test_build_adapters_skips_platform_with_no_accounts() -> None:
     result = build_adapters(cfg)
     # items 为空时不写入 result
     assert result == {}
+
+
+def test_build_wechat_mp_returns_publisher(tmp_path: Path) -> None:
+    """_build_wechat_mp 构造 WechatMpPublisher（从 credentials 读 app_id/app_secret）。"""
+    creds = tmp_path / "wechat_mp_main.json"
+    creds.write_text(json.dumps({"app_id": "wx1", "app_secret": "s1"}))
+    account = AccountConfig(id="main", credentials_path=creds)
+
+    from pipeline.publishers.wechat_mp import WechatMpPublisher
+
+    adapter = get_adapter("wechat_mp", account=account, config=None)
+    assert isinstance(adapter, WechatMpPublisher)
+    assert adapter.platform == "wechat_mp"
+
+
+def test_build_adapters_wechat_mp_uses_credentials_not_cookies(tmp_path: Path) -> None:
+    """回归测试：钉死 build_adapters() 的 credentials/cookies 判断 bug fix。
+
+    修复前：`creds = acc.credentials if platform_name == "x" else acc.cookies`
+    是按平台名字符串判断，wechat_mp 和 x 一样是 AccountAPI（有 .credentials
+    没有 .cookies），但平台名不是 "x" → AttributeError。
+    修复后：按账号类型（isinstance AccountAPI/AccountPlaywright）判断，
+    x 和 wechat_mp 都能正确取到 .credentials。
+    """
+    x_creds = tmp_path / "x.json"
+    x_creds.write_text(json.dumps({"bearer_token": "T"}))
+    wechat_creds = tmp_path / "wechat_mp.json"
+    wechat_creds.write_text(json.dumps({"app_id": "wx1", "app_secret": "s1"}))
+
+    cfg = _minimal_cfg(PlatformsConfig(
+        x=PlatformAPI(
+            kind="api", windows=[],
+            accounts=[AccountAPI(id="main", credentials=str(x_creds))],
+        ),
+        wechat_mp=PlatformAPI(
+            kind="api", windows=[],
+            accounts=[AccountAPI(id="main", credentials=str(wechat_creds))],
+        ),
+    ))
+
+    result = build_adapters(cfg)  # 修复前这里直接 AttributeError
+
+    assert set(result.keys()) == {"x", "wechat_mp"}
+    x_account_cfg, x_adapter = result["x"][0]
+    assert x_adapter.platform == "x"
+    assert x_account_cfg.credentials_path == x_creds
+
+    wm_account_cfg, wm_adapter = result["wechat_mp"][0]
+    assert wm_adapter.platform == "wechat_mp"
+    assert wm_account_cfg.credentials_path == wechat_creds

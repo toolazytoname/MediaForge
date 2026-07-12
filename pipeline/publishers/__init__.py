@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from pipeline.config import AccountAPI, AccountPlaywright
 from pipeline.publishers.base import (
     AccountConfig,
     PostBundle,
@@ -91,11 +92,19 @@ def _build_douyin(account: AccountConfig, config: Any) -> PublisherAdapter:
     )
 
 
+def _build_wechat_mp(account: AccountConfig, config: Any) -> PublisherAdapter:
+    """公众号 → WechatMpPublisher（官方草稿箱 API，M13）。"""
+    from pipeline.publishers.wechat_mp import WechatMpPublisher, load_wechat_credentials
+    app_id, app_secret = load_wechat_credentials(account.credentials_path)
+    return WechatMpPublisher(app_id=app_id, app_secret=app_secret)
+
+
 _BUILDERS: dict[str, Callable[[AccountConfig, Any], PublisherAdapter]] = {
     "x": _build_x,
     "toutiao": _build_toutiao,
     "xiaohongshu": _build_xiaohongshu,
     "douyin": _build_douyin,
+    "wechat_mp": _build_wechat_mp,
 }
 
 
@@ -132,17 +141,23 @@ def build_adapters(
 
     out: dict[str, list[tuple[AccountConfig, PublisherAdapter]]] = {}
     platforms = cfg.platforms.model_dump(exclude_none=False)
-    for platform_name in ("x", "toutiao", "xiaohongshu", "douyin"):
+    for platform_name in ("x", "toutiao", "xiaohongshu", "douyin", "wechat_mp"):
         plat_obj = getattr(cfg.platforms, platform_name, None)
         if plat_obj is None:
             continue
         accounts_raw = plat_obj.accounts or []
         items: list[tuple[AccountConfig, PublisherAdapter]] = []
         for acc in accounts_raw:
-            # M4-3 bug fix：x 平台用 AccountAPI（字段 credentials），
-            # Playwright 三平台用 AccountPlaywright（字段 cookies）。
-            # 原代码写死 acc.credentials，遇到 Playwright 类型会 AttributeError。
-            creds = acc.credentials if platform_name == "x" else acc.cookies
+            # bug fix：原代码按平台名字符串判断 credentials/cookies
+            # （`acc.credentials if platform_name == "x" else acc.cookies`），
+            # wechat_mp 和 x 一样是 AccountAPI 但平台名不是 "x"，会直接
+            # AttributeError（AccountAPI 没有 .cookies）。改按账号类型判断。
+            if isinstance(acc, AccountAPI):
+                creds = acc.credentials
+            elif isinstance(acc, AccountPlaywright):
+                creds = acc.cookies
+            else:
+                raise TypeError(f"unexpected account config type: {type(acc)!r}")
             account_cfg = AccountConfig(
                 id=acc.id,
                 credentials_path=Path(creds),
