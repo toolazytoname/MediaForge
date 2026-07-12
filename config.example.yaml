@@ -103,6 +103,17 @@ platforms:
     accounts:
       - id: main
         cookies: secrets/cookies/xiaohongshu_main.json
+  wechat_mp:
+    kind: api
+    windows: ["09:00-11:00", "20:00-22:00"]
+    accounts:
+      - id: main
+        credentials: secrets/wechat_mp_main.json   # {"app_id": "...", "app_secret": "..."}
+    # 前置条件（操作性，非代码能解决）：
+    #   1. 公众号后台 → 设置与开发 → 基本配置 → IP 白名单，需把出口 IP 加入，
+    #      否则 access_token 请求返回 errcode 40164。
+    #   2. 个人/未认证订阅号大概率没有 draft/add 权限（errcode 48001/40001）；
+    #      dry_run 全流程可测，真实调用要等账号完成认证。见 docs/HARD_PARTS.md。
 
 # ── Web 控制台 ────────────────────────────────────────────
 webui:

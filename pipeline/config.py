@@ -184,6 +184,7 @@ class PlatformsConfig(BaseModel):
     toutiao: Platform | None = None
     xiaohongshu: Platform | None = None
     douyin: Platform | None = None
+    wechat_mp: Platform | None = None
 
 
 # ── WebUI ─────────────────────────────────────────────────
