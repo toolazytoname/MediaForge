@@ -23,6 +23,8 @@ from pipeline.webui import deps
 from pipeline.webui.cookie_health_views import collect_cookie_health
 from pipeline.webui.login_bridge import (
     LoginInProgressError,
+    delete_login_credentials,
+    is_login_in_progress,
     new_login_run_id,
     start_login_background,
 )
@@ -153,6 +155,52 @@ def start_login(
     return {
         "run_id": run_id,
         "status": "queued",
+        "platform": platform,
+        "account": account,
+    }
+
+
+# ── U7-8: 删除已保存的登录凭据 ────────────────────────────────
+
+
+@router.delete("/accounts/{platform}/{account}/login")
+def delete_login(platform: str, account: str) -> dict[str, Any]:
+    """删除 `secrets/cookies/<platform>_<account>.json` 凭据文件。
+
+    只清除已保存的登录凭据，不改动 config.yaml（账号仍保留在配置里，
+    只是恢复到"未授权"状态，可以重新一键登录——U7-8 用户决策）。
+
+    Returns:
+        200 + `{deleted: bool, platform, account}`
+        deleted=False 表示文件本就不存在（幂等，不算错误）。
+
+    Errors:
+        400 platform_not_supported — platform 不在白名单
+        409 login_in_progress — 同账号有运行中的登录 run（避免跟正在
+            写入的 cookie 文件产生竞态）
+    """
+    if platform not in _SUPPORTED_WEB_LOGIN:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "platform_not_supported",
+            "message": (
+                f"platform {platform!r} not supported for web login; "
+                f"supported: {sorted(_SUPPORTED_WEB_LOGIN)}"
+            ),
+        }})
+
+    running_run_id = is_login_in_progress(platform, account)
+    if running_run_id is not None:
+        raise HTTPException(status_code=409, detail={"error": {
+            "code": "login_in_progress",
+            "message": (
+                f"login already running for {platform}/{account}; "
+                f"run_id={running_run_id}"
+            ),
+        }})
+
+    deleted = delete_login_credentials(platform, account)
+    return {
+        "deleted": deleted,
         "platform": platform,
         "account": account,
     }

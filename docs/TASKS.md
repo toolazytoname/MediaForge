@@ -630,6 +630,24 @@
 
 ✅ 完成于 2026-07-12，commit dae76b1，备注 Web UI 一键登录：runs.py 加 update_run_message；login_cmd.py 加 listener API 修复 logger 监听 bug（get_logger 实际命名为 f"{name}@{log_dir}" 且 propagate=False，logging.Handler 方案零事件）；login_bridge.py 闭包按 (platform,account) 过滤并发进度；accounts.py 新增互斥 POST 端点；前端 store 轮询 1.5s + 6min 超时 + toast；40 用例全绿含端到端 listener 验证；两轮独立校验修复 5 个阻塞问题；chromium+扫码手动验证留给用户在 Mac 上执行。
 
+### U7-8 Web UI 删除已保存登录凭据（HIGH，用户明确诉求「页面上删登录信息」）
+- [x] **目标**：账号中心每个账号行加删除按钮，点击清除 `secrets/cookies/<platform>_<account>.json` 凭据文件，账号恢复「未授权」状态（不改 `config.yaml`，账号声明本身保留，可重新一键登录）。同一会话还修了 U7-7 遗留的两个前端 build 回归（`PlatformCatalogModal.vue` 导入错误 + 缺失 `</style>` 闭合标签，导致 `npm run build` 自 dae76b1 起从未真正跑通，是用户反馈「一键登录点了没反应」的根因之一，另一根因是本机有个 U7-7 之前启动的旧 webui 进程占着 8787 端口）。
+- **怎么改**：
+  1. `pipeline/webui/login_bridge.py` 新增 `delete_login_credentials(platform, account) -> bool`（复用 `login_cmd.DEFAULT_COOKIES_DIR` 拼路径，文件不存在返回 `False` 而非报错——幂等）+ `is_login_in_progress(platform, account) -> str | None`（暴露 `_LOGIN_RUNS` 查询，供端点判断 409）
+  2. `pipeline/webui/api/accounts.py` 新增 `DELETE /accounts/{platform}/{account}/login`：platform 白名单校验（400）→ mutex 查询（409，避免跟正在写入的 cookie 文件竞态）→ 调 `delete_login_credentials` → 200 `{"deleted": bool, "platform", "account"}`
+  3. `frontend/src/stores/index.ts::useAccountsStore` 新增 `deleteAccountCredential(platform, account)` action：`api.delete(...)` + toast + `load()` 刷新
+  4. `frontend/src/views/Accounts.vue` 每个 `.account-row` 加 `<a-popconfirm>` + `<DeleteOutlined>` 删除按钮（`@click.stop` 防止冒泡触发卡片的 `openCatalog`），仅对 scan_qr 平台（toutiao/xiaohongshu/douyin）显示——x/wechat_mp 走 config_file，没有对应凭据文件
+- **验收标准**：
+  - `python -m pytest tests/webui/test_api_login.py -q` 全绿（20 例，含 7 个新增：文件存在删除成功、文件不存在幂等返回 false、不支持平台 400、登录进行中 409（且不误删文件）、`delete_login_credentials`/`is_login_in_progress` 单元测试）
+  - `npm run build`（`vue-tsc -b && vite build`）无 TS/Vue 编译错误
+  - 端到端 curl 验证：写入探针凭据文件 → DELETE 返回 `deleted:true` + 文件真实被删 → 再 DELETE 一次返回 `deleted:false`（幂等）→ 不支持平台返回 400
+- **红线**：
+  - **绝不碰 `config.yaml`**（用户明确要求：只清凭据文件，账号声明保留）
+  - 复用 `login_bridge._LOGIN_RUNS` 互斥状态判断，不新增第二套互斥逻辑（DRY）
+- **参考**：U7-7（复用其 mutex / 错误信封风格）
+
+✅ 完成于 2026-07-12，commit （见下次提交），备注 DELETE 端点 + delete_login_credentials（幂等，只删文件不改 config）+ 前端 popconfirm 删除按钮；顺手修复 U7-7 遗留的两处前端 build 回归（导入错误 + 缺 `</style>`），npm run build 自 dae76b1 起首次真正跑通；27 个 webui login 测试全绿；curl 端到端验证。
+
 ### U7-3 审核台补图卡缩略预览（MEDIUM，§7 明确要求但缺失）
 - [ ] **目标**：审核时直接在页面看到小红书图卡 PNG 缩略图，不用点开文件
 - **错在哪**：TECH_SPEC §7 要求审核台含「图卡缩略引用」、§图卡 PNG 直接 `<img>`。但 `pipeline/webui/templates/review.html` 全文只有一个指向 canonical.md 的文字链接（第 15 行），**没有任何 `<img>` 图卡预览**（已 grep 确认 review.html 无 png/img/slide 字样）

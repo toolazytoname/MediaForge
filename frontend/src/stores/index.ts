@@ -460,6 +460,19 @@ export const useAccountsStore = defineStore('accounts', () => {
     return runId
   }
 
+  // U7-8: 删除已保存的登录凭据（只清凭据文件，不改 config.yaml；
+  // 账号仍留在配置里，恢复到"未授权"状态，可以重新一键登录）
+  async function deleteAccountCredential(platform: string, account: string): Promise<void> {
+    try {
+      await api.delete(`/accounts/${platform}/${account}/login`)
+      message.success(`已清除登录凭据：${platform}/${account}`)
+      await load()
+    } catch (e) {
+      message.error(`清除失败：${unwrapError(e)}`)
+      throw e
+    }
+  }
+
   return {
     items,
     guidance,
@@ -469,6 +482,7 @@ export const useAccountsStore = defineStore('accounts', () => {
     runningLogins,
     load,
     loginAccount,
+    deleteAccountCredential,
   }
 })
 

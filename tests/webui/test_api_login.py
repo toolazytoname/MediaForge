@@ -461,3 +461,133 @@ def test_login_progress_captures_real_log_events(
         )
     finally:
         login_cmd.remove_progress_listener(capture_cb)
+
+
+# U7-8: DELETE /accounts/{platform}/{account}/login ───────
+
+
+def test_delete_removes_existing_credential_file(
+    client: TestClient,
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """已存在的凭据文件 -> 200 deleted=true + 文件被真实删除。"""
+    from pipeline.webui import login_bridge
+
+    monkeypatch.chdir(tmp_env)
+    cookies_dir = tmp_env / "secrets" / "cookies"
+    cookies_dir.mkdir(parents=True)
+    monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", cookies_dir)
+    cred_path = cookies_dir / "toutiao_main.json"
+    cred_path.write_text("{}", encoding="utf-8")
+
+    response = client.delete("/api/v1/accounts/toutiao/main/login")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body == {"deleted": True, "platform": "toutiao", "account": "main"}
+    assert not cred_path.exists()
+
+
+def test_delete_missing_credential_file_is_idempotent(
+    client: TestClient,
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """凭据文件本就不存在 -> 200 deleted=false（不是错误）。"""
+    from pipeline.webui import login_bridge
+
+    monkeypatch.chdir(tmp_env)
+    cookies_dir = tmp_env / "secrets" / "cookies"
+    cookies_dir.mkdir(parents=True)
+    monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", cookies_dir)
+
+    response = client.delete("/api/v1/accounts/toutiao/ghost/login")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body == {"deleted": False, "platform": "toutiao", "account": "ghost"}
+
+
+def test_delete_unsupported_platform_returns_400(
+    client: TestClient,
+    tmp_env: Path,
+) -> None:
+    """不在白名单的 platform（x / wechat_mp）-> 400 platform_not_supported。"""
+    response = client.delete("/api/v1/accounts/x/main/login")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"]["error"]["code"] == "platform_not_supported"
+
+
+def test_delete_blocked_while_login_in_progress(
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同账号有运行中的 login run -> 409 login_in_progress，且不删文件。"""
+    from fastapi import BackgroundTasks, HTTPException
+    from pipeline.webui import login_bridge
+    from pipeline.webui.api.accounts import delete_login, start_login
+
+    monkeypatch.chdir(tmp_env)
+    cookies_dir = tmp_env / "secrets" / "cookies"
+    cookies_dir.mkdir(parents=True)
+    monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", cookies_dir)
+    cred_path = cookies_dir / "toutiao_main.json"
+    cred_path.write_text("{}", encoding="utf-8")
+
+    bt = BackgroundTasks()
+    start_login("toutiao", "main", bt)
+
+    with pytest.raises(HTTPException) as exc_info:
+        delete_login("toutiao", "main")
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"]["code"] == "login_in_progress"
+    assert cred_path.exists()
+
+    login_bridge._LOGIN_RUNS.pop(("toutiao", "main"), None)
+
+
+# login_bridge.delete_login_credentials unit tests ─────────
+
+
+def test_delete_login_credentials_removes_file(
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline.webui import login_bridge
+
+    cookies_dir = tmp_env / "secrets" / "cookies"
+    cookies_dir.mkdir(parents=True)
+    monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", cookies_dir)
+    cred_path = cookies_dir / "douyin_alt.json"
+    cred_path.write_text("{}", encoding="utf-8")
+
+    result = login_bridge.delete_login_credentials("douyin", "alt")
+    assert result is True
+    assert not cred_path.exists()
+
+
+def test_delete_login_credentials_missing_file_returns_false(
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline.webui import login_bridge
+
+    cookies_dir = tmp_env / "secrets" / "cookies"
+    cookies_dir.mkdir(parents=True)
+    monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", cookies_dir)
+
+    result = login_bridge.delete_login_credentials("douyin", "nope")
+    assert result is False
+
+
+def test_is_login_in_progress_returns_run_id_or_none(
+    tmp_env: Path,
+) -> None:
+    from pipeline.webui import login_bridge
+
+    assert login_bridge.is_login_in_progress("toutiao", "main") is None
+    login_bridge._LOGIN_RUNS[("toutiao", "main")] = "login_abc123"
+    try:
+        assert login_bridge.is_login_in_progress("toutiao", "main") == "login_abc123"
+    finally:
+        login_bridge._LOGIN_RUNS.pop(("toutiao", "main"), None)

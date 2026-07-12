@@ -37,6 +37,7 @@ from fastapi import BackgroundTasks
 
 from pipeline.publishers.base import PublishError
 from pipeline.publishers.login_cmd import (
+    DEFAULT_COOKIES_DIR,
     add_progress_listener,
     remove_progress_listener,
     run_login,
@@ -233,9 +234,44 @@ def new_login_run_id() -> str:
     return f"login_{uuid.uuid4().hex[:12]}"
 
 
+# ── U7-8: 删除已保存的登录凭据 ───────────────────────────────
+
+
+def is_login_in_progress(platform: str, account: str) -> str | None:
+    """查询 (platform, account) 是否有运行中的 login run，有则返回其 run_id。
+
+    accounts.py 的 DELETE 端点用它判断 409（正在登录时不允许删凭据，
+    避免删除掉即将被写入的文件、或跟登录过程中的 cookie 写入产生竞态）。
+    """
+    return _LOGIN_RUNS.get((platform, account))
+
+
+def delete_login_credentials(platform: str, account: str) -> bool:
+    """删除 `secrets/cookies/<platform>_<account>.json` 凭据文件。
+
+    只删文件，不碰 config.yaml（用户 U7-8 决策：账号仍保留在配置里，
+    只是恢复到"未授权"状态，可以重新一键登录）。
+
+    Returns:
+        True 如果文件存在并被删除；False 如果文件本就不存在（幂等，
+        不视为错误——UI 上"删除"一个已经是未授权状态的账号应该正常返回）。
+    """
+    path = DEFAULT_COOKIES_DIR / f"{platform}_{account}.json"
+    if not path.exists():
+        return False
+    path.unlink()
+    _BRIDGE_LOG.info(
+        "login credentials deleted: platform=%s account=%s path=%s",
+        platform, account, path,
+    )
+    return True
+
+
 __all__ = [
     "execute_login_run",
     "start_login_background",
     "new_login_run_id",
     "LoginInProgressError",
+    "is_login_in_progress",
+    "delete_login_credentials",
 ]

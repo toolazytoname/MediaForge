@@ -8,7 +8,13 @@ import { message } from 'ant-design-vue'
 import PlatformBadge from './PlatformBadge.vue'
 import { SUPPORTED_PLATFORMS, PLANNED_PLATFORMS, platformMeta } from './platformMeta'
 import { storeToRefs } from 'pinia'
-import { useAccountsStore, unwrapError, type LoginRunState } from '../../stores'
+import {
+  useAccountsStore,
+  type LoginRunState,
+  type AccountHealthItem,
+  type LoginGuidance,
+} from '../../stores'
+import { unwrapError } from '../../api/client'
 
 interface Props {
   open: boolean
@@ -368,3 +374,4 @@ async function onOneClickLogin(): Promise<void> {
   font-size: 11px;
   color: #8c8c8c;
 }
+</style>

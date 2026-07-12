@@ -8,12 +8,32 @@ import { computed, onMounted, ref } from 'vue'
 import { useAccountsStore } from '../stores'
 import { storeToRefs } from 'pinia'
 import type { AccountHealthItem } from '../stores'
+import { DeleteOutlined } from '@ant-design/icons-vue'
 import PlatformBadge from './components/PlatformBadge.vue'
 import PlatformCatalogModal from './components/PlatformCatalogModal.vue'
 import { platformMeta } from './components/platformMeta'
 
 const store = useAccountsStore()
 const { items, guidance, loading, loaded } = storeToRefs(store)
+
+// U7-8: 只有走扫码登录(一键登录)的平台才有可删的凭据文件；
+// x / wechat_mp 走 config_file(手填 config.yaml),没有对应端点。
+const WEB_LOGIN_PLATFORMS = new Set(['toutiao', 'xiaohongshu', 'douyin'])
+const deletingKey = ref<string | null>(null)
+
+function canDeleteCredential(platform: string): boolean {
+  return WEB_LOGIN_PLATFORMS.has(platform)
+}
+
+async function onDeleteCredential(platform: string, account: string): Promise<void> {
+  const key = `${platform}/${account}`
+  deletingKey.value = key
+  try {
+    await store.deleteAccountCredential(platform, account)
+  } finally {
+    if (deletingKey.value === key) deletingKey.value = null
+  }
+}
 
 const catalogOpen = ref(false)
 const catalogPreselect = ref<string | null>(null)
@@ -164,9 +184,28 @@ onMounted(async () => {
             <div v-if="tile.totalCount > 0" class="tile-accounts">
               <div v-for="a in tile.accounts" :key="a.account" class="account-row">
                 <span class="account-name">{{ a.account }}</span>
-                <a-tag :color="a.healthy ? 'green' : 'red'" size="small">
-                  {{ a.healthy ? '✓' : '✗' }}
-                </a-tag>
+                <span class="account-row-actions">
+                  <a-tag :color="a.healthy ? 'green' : 'red'" size="small">
+                    {{ a.healthy ? '✓' : '✗' }}
+                  </a-tag>
+                  <a-popconfirm
+                    v-if="canDeleteCredential(tile.name)"
+                    title="确认清除该账号的登录凭据？"
+                    ok-text="清除"
+                    cancel-text="取消"
+                    @confirm="onDeleteCredential(tile.name, a.account)"
+                  >
+                    <a-button
+                      type="text"
+                      size="small"
+                      danger
+                      :loading="deletingKey === `${tile.name}/${a.account}`"
+                      @click.stop
+                    >
+                      <DeleteOutlined />
+                    </a-button>
+                  </a-popconfirm>
+                </span>
               </div>
             </div>
           </a-card>
@@ -212,9 +251,28 @@ onMounted(async () => {
             <div v-if="tile.totalCount > 0" class="tile-accounts">
               <div v-for="a in tile.accounts" :key="a.account" class="account-row">
                 <span class="account-name">{{ a.account }}</span>
-                <a-tag :color="a.healthy ? 'green' : 'red'" size="small">
-                  {{ a.healthy ? '✓' : '✗' }}
-                </a-tag>
+                <span class="account-row-actions">
+                  <a-tag :color="a.healthy ? 'green' : 'red'" size="small">
+                    {{ a.healthy ? '✓' : '✗' }}
+                  </a-tag>
+                  <a-popconfirm
+                    v-if="canDeleteCredential(tile.name)"
+                    title="确认清除该账号的登录凭据？"
+                    ok-text="清除"
+                    cancel-text="取消"
+                    @confirm="onDeleteCredential(tile.name, a.account)"
+                  >
+                    <a-button
+                      type="text"
+                      size="small"
+                      danger
+                      :loading="deletingKey === `${tile.name}/${a.account}`"
+                      @click.stop
+                    >
+                      <DeleteOutlined />
+                    </a-button>
+                  </a-popconfirm>
+                </span>
               </div>
             </div>
           </a-card>
@@ -308,6 +366,11 @@ onMounted(async () => {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: #262626;
   word-break: break-all;
+}
+.account-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .platform-tile :deep(.ant-card-head-title) {
