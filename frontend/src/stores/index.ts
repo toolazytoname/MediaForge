@@ -2,6 +2,7 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { message } from 'ant-design-vue'
 import { api, apiPost, unwrapError } from '../api/client'
 
 // ── Dashboard ──────────────────────────────────────────────
@@ -309,12 +310,27 @@ export interface LoginGuidance {
   auth_type?: 'scan_qr' | 'config_file'
 }
 
+// U7-7: 一键登录 run 状态（前端轮询持有）
+export interface LoginRunState {
+  platform: string
+  account: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  message: string
+  message_at?: string
+  error_code?: string
+  error_message?: string
+}
+
 export const useAccountsStore = defineStore('accounts', () => {
   const items = ref<AccountHealthItem[]>([])
   const guidance = ref<LoginGuidance[]>([])
   const loading = ref(false)
   const loaded = ref(false)
   const error = ref<string | null>(null)
+
+  // U7-7: 一键登录 run 状态表（key = run_id）
+  const runningLogins = ref<Map<string, LoginRunState>>(new Map())
+
   async function load() {
     loading.value = true
     error.value = null
@@ -332,7 +348,128 @@ export const useAccountsStore = defineStore('accounts', () => {
       loading.value = false
     }
   }
-  return { items, guidance, loading, loaded, error, load }
+
+  // U7-7: 触发一键登录 + 轮询进度
+  // - POST /accounts/{platform}/{account}/login 拿 run_id
+  // - 每 1.5s 轮询 GET /runs/{run_id} 拿最新 message
+  // - succeeded: toast success + 刷新账号健康 + 2s 后清理
+  // - failed: toast error + 5s 后清理
+  // - 6 分钟兜底超时（比后端 login 5 分钟 timeout 多 1 分钟 buffer，
+  //   让后端能写完 status=failed 后前端还能拿到 error_message）
+  async function loginAccount(platform: string, account: string): Promise<string> {
+    const POLL_MS = 1500
+    const TIMEOUT_MS = 6 * 60 * 1000
+
+    const res = await apiPost<{ run_id: string; status: string }>(
+      `/accounts/${platform}/${account}/login`,
+      {},
+    )
+    const runId = res.data.run_id
+    message.info(`登录已启动：${platform}/${account}`)
+
+    // 初始状态（响应式 Map 需要重新赋值触发更新）
+    runningLogins.value.set(runId, {
+      platform,
+      account,
+      status: 'queued',
+      message: '已提交，等待开始...',
+    })
+    runningLogins.value = new Map(runningLogins.value)
+
+    let pollHandle: ReturnType<typeof setInterval> | null = null
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+    let finished = false
+
+    const cleanup = (delayMs: number) => {
+      if (finished) return
+      finished = true
+      if (pollHandle !== null) {
+        clearInterval(pollHandle)
+        pollHandle = null
+      }
+      if (timeoutHandle !== null) {
+        clearTimeout(timeoutHandle)
+        timeoutHandle = null
+      }
+      setTimeout(() => {
+        runningLogins.value.delete(runId)
+        runningLogins.value = new Map(runningLogins.value)
+      }, delayMs)
+    }
+
+    pollHandle = setInterval(async () => {
+      try {
+        const rec = await api.get<{
+          status: string
+          message?: string
+          message_at?: string
+          error?: { code: string; message: string }
+          result?: { path: string }
+        }>(`/runs/${runId}`)
+        const cur = runningLogins.value.get(runId)
+        const next: LoginRunState = {
+          platform,
+          account,
+          status: rec.data.status as LoginRunState['status'],
+          message: rec.data.message ?? cur?.message ?? '',
+          message_at: rec.data.message_at,
+          error_code: rec.data.error?.code,
+          error_message: rec.data.error?.message,
+        }
+        runningLogins.value.set(runId, next)
+        runningLogins.value = new Map(runningLogins.value)
+
+        if (rec.data.status === 'succeeded') {
+          message.success(`登录完成：${platform}/${account}`)
+          cleanup(2000)
+          await load()  // 成功后刷新账号健康
+        } else if (rec.data.status === 'failed') {
+          const errMsg = rec.data.error?.message ?? '登录失败'
+          message.error(`登录失败：${platform}/${account}（${errMsg}）`)
+          cleanup(5000)
+        }
+      } catch (e) {
+        // 轮询失败不打断主流程（网络抖动）
+        console.warn('login poll failed', e)
+      }
+    }, POLL_MS)
+
+    timeoutHandle = setTimeout(() => {
+      if (finished) return
+      if (pollHandle !== null) {
+        clearInterval(pollHandle)
+        pollHandle = null
+        const cur = runningLogins.value.get(runId)
+        if (cur && (cur.status === 'queued' || cur.status === 'running')) {
+          runningLogins.value.set(runId, {
+            ...cur,
+            status: 'failed',
+            error_code: 'timeout',
+            error_message: `轮询超时（${POLL_MS}ms × ${Math.round(TIMEOUT_MS / POLL_MS)} 次）`,
+          })
+          runningLogins.value = new Map(runningLogins.value)
+          message.error(`登录超时：${platform}/${account}`)
+          setTimeout(() => {
+            runningLogins.value.delete(runId)
+            runningLogins.value = new Map(runningLogins.value)
+          }, 5000)
+        }
+      }
+    }, TIMEOUT_MS)
+
+    return runId
+  }
+
+  return {
+    items,
+    guidance,
+    loading,
+    loaded,
+    error,
+    runningLogins,
+    load,
+    loginAccount,
+  }
 })
 
 // ── Runs ───────────────────────────────────────────────────

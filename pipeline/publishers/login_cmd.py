@@ -29,6 +29,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
+from typing import Callable
 
 from pipeline.publishers.base import PublishError
 from pipeline.publishers import toutiao_selectors as tt_sel
@@ -37,6 +38,64 @@ from pipeline.utils.log import get_logger, log_event
 
 # 模块级 logger（被 log_event 消费；U7-7 通过 logging.Handler 订阅）
 _LOG = get_logger("pipeline.publishers.login")
+
+
+# ── U7-7：login 进度 listener API ─────────────────────────────
+# 为什么需要这个：R7-7 的 log_event 写到 `pipeline.publishers.login@<log_dir>`
+# logger（get_logger 在内部加 `@log_dir` 后缀 + propagate=False）。
+# 直接 logging.getLogger("pipeline.publishers.login") 拿不到对应 logger。
+# 解法：login_cmd 模块暴露 add_progress_listener(cb)；任何 log_event 内部
+# 同步调一次 cb（listener 注册在 login_cmd 进程级 dict，多 run 并发时由
+# caller 自己负责按 platform/account 过滤——见 login_bridge.execute_login_run）。
+ProgressListener = Callable[[str, str | None, str], None]
+# 签名：(platform, account, msg)
+# - platform: 调用方提供的平台标签（"toutiao" 等）；某些 helper 不带 platform
+#   时传空串
+# - account: ref_id（账号别名）；login_cmd 内部不强制非空
+# - msg: 与 log_event msg 同源（用户可见文本）
+_progress_listeners: list[ProgressListener] = []
+
+
+def add_progress_listener(cb: ProgressListener) -> None:
+    """注册进度 listener；U7-7 webui 用。
+
+    Listener 在 `_login_log_event`（log_event 的模块内 wrapper）触发时被调；
+    cb 抛异常被吞掉（不能让 sink 错误中断登录主流程）。
+    """
+    _progress_listeners.append(cb)
+
+
+def remove_progress_listener(cb: ProgressListener) -> None:
+    """移除 listener（找不到时静默 noop）。"""
+    try:
+        _progress_listeners.remove(cb)
+    except ValueError:
+        pass
+
+
+def _notify_progress(platform: str, account: str | None, msg: str) -> None:
+    """内部：fan-out 给所有 listeners；listener 异常被吞。"""
+    for cb in list(_progress_listeners):
+        try:
+            cb(platform, account, msg)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _login_log_event(
+    level: int,
+    msg: str,
+    *,
+    ref_id: str | None = None,
+    platform: str = "",
+) -> None:
+    """login_cmd 模块专用 wrapper：`log_event` + `_notify_progress`。
+
+    等价于 `log_event(_LOG, level, msg, stage="login", ref_id=ref_id)` 后
+    调 `_notify_progress(platform, ref_id, msg)`。
+    """
+    log_event(_LOG, level, msg, stage="login", ref_id=ref_id)
+    _notify_progress(platform, ref_id, msg)
 
 
 # 登录态 JSON 默认输出目录
@@ -131,15 +190,17 @@ def _playwright_login_run(
                     "check network / browser"
                 )
 
-            log_event(
-                _LOG, logging.INFO,
+            _login_log_event(
+                logging.INFO,
                 "请在浏览器里完成登录（扫码 / 短信 / 密码）",
-                stage="login", ref_id=account,
+                ref_id=account,
+                platform=profile.platform,
             )
-            log_event(
-                _LOG, logging.INFO,
+            _login_log_event(
+                logging.INFO,
                 f"等待登录完成（最多 {timeout_s}s）；完成后页面会自动离开登录页",
-                stage="login", ref_id=account,
+                ref_id=account,
+                platform=profile.platform,
             )
 
             # 等待 URL 离开登录路径
@@ -164,10 +225,11 @@ def _playwright_login_run(
                 encoding="utf-8",
             )
             _chmod_600(out_path)
-            log_event(
-                _LOG, logging.INFO,
+            _login_log_event(
+                logging.INFO,
                 f"saved: {out_path}",
-                stage="login", ref_id=account,
+                ref_id=account,
+                platform=profile.platform,
             )
             return out_path
         finally:
@@ -281,10 +343,11 @@ def login_xiaohongshu(
         encoding="utf-8",
     )
     _chmod_600(out_path)
-    log_event(
-        _LOG, logging.INFO,
+    _login_log_event(
+        logging.INFO,
         f"login OK; marker saved: {out_path}",
-        stage="login", ref_id=account,
+        ref_id=account,
+        platform="xiaohongshu",
     )
     return out_path
 
@@ -345,4 +408,6 @@ __all__ = [
     "login_toutiao",
     "login_xiaohongshu",
     "DEFAULT_COOKIES_DIR",
+    "add_progress_listener",
+    "remove_progress_listener",
 ]

@@ -1,11 +1,14 @@
 <script setup lang="ts">
 // 蚁小二式"添加账号"弹窗：已支持平台网格(点击展开登录引导) + 规划中平台占位分组。
 // 红线：只展示引导，不收集账号密码/密钥；唯一"操作"是复制 CLI 命令到剪贴板。
+// U7-7: scan_qr 平台新增「🚀 一键登录」按钮，调用 store.loginAccount
+//       实时显示进度（来自 R7-7 log_event 链路）；CLI 命令仍在 <details> 折叠区兜底
 import { computed, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import PlatformBadge from './PlatformBadge.vue'
 import { SUPPORTED_PLATFORMS, PLANNED_PLATFORMS, platformMeta } from './platformMeta'
-import type { AccountHealthItem, LoginGuidance } from '../../stores'
+import { storeToRefs } from 'pinia'
+import { useAccountsStore, unwrapError, type LoginRunState } from '../../stores'
 
 interface Props {
   open: boolean
@@ -20,11 +23,23 @@ const emit = defineEmits<{
 }>()
 
 const selected = ref<string | null>(null)
+const currentRunId = ref<string | null>(null)
+const oneClickError = ref<string | null>(null)
+
+const store = useAccountsStore()
+const { runningLogins } = storeToRefs(store)
 
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen) selected.value = props.preselect ?? null
+    if (isOpen) {
+      selected.value = props.preselect ?? null
+      currentRunId.value = null
+      oneClickError.value = null
+    } else {
+      // 关闭弹窗时清掉当前 run id（保留 runningLogins 状态以让 toast 正常出现）
+      currentRunId.value = null
+    }
   },
 )
 
@@ -50,6 +65,47 @@ const selectedGuidance = computed<LoginGuidance | null>(() =>
   selected.value ? guidanceByPlatform.value.get(selected.value) ?? null : null,
 )
 
+// 拿当前 run 的最新状态
+const currentLoginState = computed<LoginRunState | null>(() => {
+  if (currentRunId.value === null) return null
+  return runningLogins.value.get(currentRunId.value) ?? null
+})
+
+const isLoginInProgress = computed<boolean>(() => {
+  const s = currentLoginState.value
+  if (!s) return false
+  return s.status === 'queued' || s.status === 'running'
+})
+
+const loginProgressText = computed<string>(() => {
+  const s = currentLoginState.value
+  if (!s) return ''
+  if (s.status === 'queued') return s.message || '排队中...'
+  if (s.status === 'running') return s.message || '登录中...'
+  if (s.status === 'succeeded') return '✓ 登录完成'
+  if (s.status === 'failed') {
+    return s.error_message || s.message || '登录失败'
+  }
+  return ''
+})
+
+const loginStatusTag = computed<{ color: string; text: string }>(() => {
+  const s = currentLoginState.value
+  if (!s) return { color: 'default', text: '' }
+  switch (s.status) {
+    case 'queued':
+      return { color: 'blue', text: '排队中' }
+    case 'running':
+      return { color: 'processing', text: '进行中' }
+    case 'succeeded':
+      return { color: 'green', text: '成功' }
+    case 'failed':
+      return { color: 'red', text: '失败' }
+    default:
+      return { color: 'default', text: s.status }
+  }
+})
+
 function healthLabel(key: string): string {
   const h = healthByPlatform.value.get(key)
   if (!h || h.total === 0) return '未授权'
@@ -62,6 +118,8 @@ function close(value: boolean): void {
 
 function selectPlatform(key: string): void {
   selected.value = key
+  currentRunId.value = null
+  oneClickError.value = null
 }
 
 async function copyCommand(cmd: string): Promise<void> {
@@ -70,6 +128,20 @@ async function copyCommand(cmd: string): Promise<void> {
     message.success('已复制到剪贴板')
   } catch {
     message.warning('复制失败，请手动选中命令文本')
+  }
+}
+
+async function onOneClickLogin(): Promise<void> {
+  if (selected.value === null) return
+  oneClickError.value = null
+  try {
+    const runId = await store.loginAccount(selected.value, 'main')
+    currentRunId.value = runId
+    message.success(`登录已启动：${platformMeta(selected.value).label} / main`)
+  } catch (e) {
+    const errMsg = unwrapError(e)
+    oneClickError.value = errMsg
+    message.error(`启动登录失败: ${errMsg}`)
   }
 }
 </script>
@@ -106,12 +178,36 @@ async function copyCommand(cmd: string): Promise<void> {
         </a-tag>
       </div>
       <template v-if="selectedGuidance.auth_type === 'scan_qr'">
-        <p class="guidance-hint">在终端里运行以下命令，按提示扫码完成登录：</p>
-        <div class="cmd-row">
-          <code class="cmd-text">{{ selectedGuidance.command }}</code>
-          <a-button size="small" @click="copyCommand(selectedGuidance.command)">复制</a-button>
+        <p class="guidance-hint">点击下方按钮，桌面会弹出浏览器完成扫码登录；进度实时显示在此处。</p>
+        <div class="one-click-row">
+          <a-button
+            type="primary"
+            :loading="isLoginInProgress"
+            :disabled="isLoginInProgress"
+            @click="onOneClickLogin"
+          >
+            🚀 一键登录
+          </a-button>
+          <a-tag v-if="currentLoginState" :color="loginStatusTag.color">
+            {{ loginStatusTag.text }}
+          </a-tag>
+          <span v-if="loginProgressText" class="login-progress">{{ loginProgressText }}</span>
         </div>
-        <p class="guidance-notes">{{ selectedGuidance.notes }}</p>
+        <a-alert
+          v-if="oneClickError"
+          type="error"
+          show-icon
+          :message="`启动失败: ${oneClickError}`"
+          style="margin-bottom: 8px"
+        />
+        <details class="cli-fallback">
+          <summary>终端命令兜底（远程服务器 / 失败重试用）</summary>
+          <div class="cmd-row">
+            <code class="cmd-text">{{ selectedGuidance.command }}</code>
+            <a-button size="small" @click="copyCommand(selectedGuidance.command)">复制</a-button>
+          </div>
+          <p class="guidance-notes">{{ selectedGuidance.notes }}</p>
+        </details>
       </template>
       <template v-else>
         <p class="guidance-notes">{{ selectedGuidance.notes }}</p>
@@ -119,7 +215,7 @@ async function copyCommand(cmd: string): Promise<void> {
           <code class="cmd-text">{{ selectedGuidance.command }}</code>
         </div>
       </template>
-      <p class="guidance-footnote">授权在 CLI / 配置文件完成，本页仅展示引导；完成后回到本页刷新即可看到健康状态。</p>
+      <p class="guidance-footnote">授权完成后回到本页刷新即可看到健康状态（登录成功会自动刷新）。</p>
     </div>
 
     <h4 class="section-title section-title-planned">规划中（暂不支持）</h4>
@@ -212,6 +308,40 @@ async function copyCommand(cmd: string): Promise<void> {
   font-size: 12px;
   color: #595959;
 }
+.one-click-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid #e8e8e8;
+}
+.login-progress {
+  font-size: 12px;
+  color: #595959;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  flex: 1;
+  word-break: break-all;
+}
+.cli-fallback {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+}
+.cli-fallback summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #595959;
+  user-select: none;
+}
+.cli-fallback[open] summary {
+  margin-bottom: 8px;
+}
 .cmd-row {
   display: flex;
   align-items: center;
@@ -238,4 +368,3 @@ async function copyCommand(cmd: string): Promise<void> {
   font-size: 11px;
   color: #8c8c8c;
 }
-</style>

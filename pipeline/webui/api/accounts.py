@@ -2,17 +2,39 @@
 
 GET /api/v1/accounts — 账号 + cookie 健康状态
 GET /api/v1/accounts/login-guidance — 每平台登录指引（静态）
+
+U7-7:
+POST /api/v1/accounts/{platform}/{account}/login — Web UI 一键登录触发端点
+  - 校验 platform ∈ {toutiao,xiaohongshu,douyin}（白名单）
+  - 一键登录的 mutex / 后台任务 / progress 监听全部由
+    `pipeline.webui.login_bridge` 负责（accounts.py 不直接 import
+    run_login / PublishError / execute_login_run，避免循环 import 风险）
+  - 前端轮询 `GET /api/v1/runs/{run_id}` 拿实时进度（消息来自 R7-7
+    log_event 链路）
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from pipeline.webui import deps
 from pipeline.webui.cookie_health_views import collect_cookie_health
+from pipeline.webui.login_bridge import (
+    LoginInProgressError,
+    new_login_run_id,
+    start_login_background,
+)
 
 router = APIRouter(tags=["accounts"])
+
+_LOGGER = logging.getLogger("pipeline.webui.api.accounts")
+
+
+# Web UI 支持的一键登录平台白名单（与 _PLATFORM_LOGIN_DISPATCH 一致）
+# x / wechat_mp 走配置文件，不属于扫码登录流程
+_SUPPORTED_WEB_LOGIN = frozenset({"toutiao", "xiaohongshu", "douyin"})
 
 
 @router.get("/accounts")
@@ -75,4 +97,62 @@ def login_guidance() -> dict[str, Any]:
                 ),
             },
         ]
+    }
+
+
+# ── U7-7: Web UI 一键登录端点 ────────────────────────────────
+
+
+@router.post(
+    "/accounts/{platform}/{account}/login",
+    status_code=202,
+)
+def start_login(
+    platform: str,
+    account: str,
+    background: BackgroundTasks,
+) -> dict[str, Any]:
+    """Web UI 触发登录：BackgroundTasks 跑 run_login，前端轮询
+    `GET /api/v1/runs/{run_id}` 看实时进度（消息来自 R7-7 log_event 链路）。
+
+    Returns:
+        202 + `{run_id, status="queued", platform, account}`
+
+    Errors:
+        400 platform_not_supported — platform 不在白名单（x / wechat_mp 等）
+        409 login_in_progress — 同账号已有运行中的 run
+
+    Notes:
+        - 立即返回 202；不阻塞等待 login 完成。
+        - 进度消息通过 `login_cmd.add_progress_listener` 实时透传到 runs
+          registry（见 `pipeline.webui.login_bridge.execute_login_run`）。
+        - 互斥 / 后台任务编排全部在 `login_bridge.start_login_background`；
+          本路由只负责 platform 白名单校验 + 错误码映射。
+    """
+    if platform not in _SUPPORTED_WEB_LOGIN:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "platform_not_supported",
+            "message": (
+                f"platform {platform!r} not supported for web login; "
+                f"supported: {sorted(_SUPPORTED_WEB_LOGIN)}"
+            ),
+        }})
+
+    run_id = new_login_run_id()
+    try:
+        start_login_background(run_id, platform, account, background)
+    except LoginInProgressError as e:
+        raise HTTPException(status_code=409, detail={"error": {
+            "code": "login_in_progress",
+            "message": (
+                f"login already running for {platform}/{account}; "
+                f"run_id={e.existing_run_id}"
+            ),
+        }})
+
+    return {
+        "run_id": run_id,
+        "status": "queued",
+        "platform": platform,
+        "account": account,
     }

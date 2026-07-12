@@ -4,9 +4,12 @@ GET /api/v1/runs — 内存运行历史（P1 仅返回空；P2 runner_bridge 启
   真正记录 stage/exit_code/timing）
 GET /api/v1/runs/{run_id} — 单条详情（P1 返回 404）
 POST /api/v1/runs/{stage} — 触发后台执行（P2 才实现；P1 拒绝）
+
+U7-7：`update_run_message(run_id, message)` 写入进度消息，前端轮询拿到。
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -36,6 +39,30 @@ def register_run(run_id: str, **fields: Any) -> None:
 def get_run_record(run_id: str) -> dict[str, Any] | None:
     """查询内存 run registry；无则返 None（router 把它映射为 404）。"""
     return _RUNS.get(run_id)
+
+
+def update_run_message(run_id: str, message: str) -> None:
+    """更新 run 的最新进度消息（前端轮询拿到）。无 record 时静默跳过。
+
+    U7-7：login_bridge 通过 logging.Handler 子类捕获 pipeline.publishers.login
+    logger 的每条日志，调本函数把最新 message 写进 runs registry；前端
+    1.5s 轮询 `GET /runs/{run_id}` 拿最新 message 实现实时进度推送。
+
+    Args:
+        run_id: 来自 `register_run` 的 run 标识。
+        message: 用户可见的进度文本（已国际化/已 log_event 格式化）。
+
+    Notes:
+        - 不存在的 run_id **静默跳过**，避免 background task 被异常中断
+          （登录 run 可能被 cancel / registry 被清理）。
+        - `message_at` 是 ISO8601 UTC 时间戳，前端可用来判断进度是否卡死。
+        - 连续调用覆盖前值（只保留最新 message；需要历史请走日志文件）。
+    """
+    rec = _RUNS.get(run_id)
+    if rec is None:
+        return
+    rec["message"] = message
+    rec["message_at"] = datetime.now(timezone.utc).isoformat()
 
 
 @router.get("/runs")
