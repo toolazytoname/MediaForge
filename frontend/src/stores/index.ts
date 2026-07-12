@@ -306,6 +306,7 @@ export interface LoginGuidance {
   platform: string
   command: string
   notes: string
+  auth_type?: 'scan_qr' | 'config_file'
 }
 
 export const useAccountsStore = defineStore('accounts', () => {

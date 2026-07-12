@@ -3,14 +3,24 @@
 // - 一平台一卡片:平台名 / 账号总数 / 健康 / 失效数 / 最后校验时间
 // - 按平台分组(国内 / 国际)——分组纯 UI 决定,数据走 /accounts + /accounts/login-guidance 不变
 // - 灰色 = 无账号 (引导登录); 绿色 = 全部健康; 黄色 = 有失效
-// - 真实授权走 CLI `login`,UI 仅展示与引导
-import { computed, onMounted } from 'vue'
+// - 真实授权走 CLI `login`,UI 仅展示与引导；点击「添加账号」或某个平台 tile 打开引导弹窗
+import { computed, onMounted, ref } from 'vue'
 import { useAccountsStore } from '../stores'
 import { storeToRefs } from 'pinia'
-import type { AccountHealthItem, LoginGuidance } from '../stores'
+import type { AccountHealthItem } from '../stores'
+import PlatformBadge from './components/PlatformBadge.vue'
+import PlatformCatalogModal from './components/PlatformCatalogModal.vue'
 
 const store = useAccountsStore()
 const { items, guidance, loading, loaded } = storeToRefs(store)
+
+const catalogOpen = ref(false)
+const catalogPreselect = ref<string | null>(null)
+
+function openCatalog(platform: string | null = null): void {
+  catalogPreselect.value = platform
+  catalogOpen.value = true
+}
 
 interface PlatformTile {
   name: string
@@ -25,6 +35,7 @@ const ALL_KNOWN_PLATFORMS: readonly { name: string; group: 'domestic' | 'intl' }
   { name: 'toutiao', group: 'domestic' },
   { name: 'xiaohongshu', group: 'domestic' },
   { name: 'douyin', group: 'domestic' },
+  { name: 'wechat_mp', group: 'domestic' },
   { name: 'x', group: 'intl' },
 ]
 
@@ -79,16 +90,6 @@ const intlTiles = computed(() =>
   platformTiles.value.filter((t) => t.group === 'intl'),
 )
 
-const guidanceByName = computed<Map<string, LoginGuidance>>(() => {
-  const m = new Map<string, LoginGuidance>()
-  for (const g of guidance.value) m.set(g.platform, g)
-  return m
-})
-
-function guidanceFor(name: string): LoginGuidance | null {
-  return guidanceByName.value.get(name) ?? null
-}
-
 function tileStateClass(tile: PlatformTile): string {
   if (tile.totalCount === 0) return 'is-empty'
   if (tile.healthyCount === tile.totalCount) return 'is-healthy'
@@ -110,13 +111,16 @@ onMounted(async () => {
 
 <template>
   <div>
-    <h2>账号管理</h2>
+    <div class="page-header">
+      <h2>账号管理</h2>
+      <a-button type="primary" @click="openCatalog()">+ 添加账号</a-button>
+    </div>
     <a-alert
       type="info"
       show-icon
       style="margin-bottom: 16px"
       message="账号授权通过 CLI 完成（UI 不直接写登录）。"
-      description="首次添加：在 shell 跑 `python -m pipeline.run login <platform> <account_id>` 按指引扫码/粘贴 token；后续 cookie 健康由后台 cron 主动 check 并写入此网格。"
+      description="点「添加账号」或某个平台卡片，弹窗里能看到该平台的登录引导；扫码/配置完成后回本页刷新即可看到健康状态。"
     />
 
     <a-spin :spinning="loading && !allLoaded">
@@ -124,10 +128,15 @@ onMounted(async () => {
       <h3 style="margin: 8px 0 12px">国内平台</h3>
       <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
         <a-col v-for="tile in domesticTiles" :key="tile.name" :xs="24" :sm="12" :md="8" :lg="6">
-          <a-card :class="['platform-tile', tileStateClass(tile)]" size="small">
+          <a-card
+            :class="['platform-tile', tileStateClass(tile)]"
+            size="small"
+            hoverable
+            @click="openCatalog(tile.name)"
+          >
             <template #title>
               <div class="tile-title">
-                <span class="tile-platform-name">{{ tile.name }}</span>
+                <PlatformBadge :platform="tile.name" size="small" />
                 <a-tag v-if="tile.totalCount === 0" color="default">未授权</a-tag>
                 <a-tag v-else-if="tile.healthyCount === tile.totalCount" color="green">健康</a-tag>
                 <a-tag v-else-if="tile.healthyCount === 0" color="red">失效</a-tag>
@@ -155,10 +164,6 @@ onMounted(async () => {
                   {{ a.healthy ? '✓' : '✗' }}
                 </a-tag>
               </div>
-            </div>
-            <div v-if="guidanceFor(tile.name)" class="tile-guidance">
-              <code class="guidance-cmd">{{ guidanceFor(tile.name)?.command }}</code>
-              <p class="guidance-notes">{{ guidanceFor(tile.name)?.notes }}</p>
             </div>
           </a-card>
         </a-col>
@@ -168,10 +173,15 @@ onMounted(async () => {
       <h3 style="margin: 16px 0 12px">国际平台</h3>
       <a-row :gutter="[12, 12]">
         <a-col v-for="tile in intlTiles" :key="tile.name" :xs="24" :sm="12" :md="8" :lg="6">
-          <a-card :class="['platform-tile', tileStateClass(tile)]" size="small">
+          <a-card
+            :class="['platform-tile', tileStateClass(tile)]"
+            size="small"
+            hoverable
+            @click="openCatalog(tile.name)"
+          >
             <template #title>
               <div class="tile-title">
-                <span class="tile-platform-name">{{ tile.name }}</span>
+                <PlatformBadge :platform="tile.name" size="small" />
                 <a-tag v-if="tile.totalCount === 0" color="default">未授权</a-tag>
                 <a-tag v-else-if="tile.healthyCount === tile.totalCount" color="green">健康</a-tag>
                 <a-tag v-else-if="tile.healthyCount === 0" color="red">失效</a-tag>
@@ -199,10 +209,6 @@ onMounted(async () => {
                   {{ a.healthy ? '✓' : '✗' }}
                 </a-tag>
               </div>
-            </div>
-            <div v-if="guidanceFor(tile.name)" class="tile-guidance">
-              <code class="guidance-cmd">{{ guidanceFor(tile.name)?.command }}</code>
-              <p class="guidance-notes">{{ guidanceFor(tile.name)?.notes }}</p>
             </div>
           </a-card>
         </a-col>
@@ -214,22 +220,35 @@ onMounted(async () => {
         style="margin-top: 32px"
       />
     </a-spin>
+
+    <PlatformCatalogModal
+      v-model:open="catalogOpen"
+      :items="items"
+      :guidance="guidance"
+      :preselect="catalogPreselect"
+    />
   </div>
 </template>
 
 <style scoped>
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.page-header h2 {
+  margin: 0;
+}
 .platform-tile {
   height: 100%;
+  cursor: pointer;
 }
 .tile-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-}
-.tile-platform-name {
-  font-weight: 600;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .tile-stats {
   display: flex;
@@ -273,24 +292,6 @@ onMounted(async () => {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: #262626;
   word-break: break-all;
-}
-.tile-guidance {
-  border-top: 1px dashed #f0f0f0;
-  padding-top: 8px;
-  margin-top: 4px;
-}
-.guidance-cmd {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  color: #7c4dff;
-  word-break: break-all;
-  display: block;
-}
-.guidance-notes {
-  margin: 4px 0 0;
-  font-size: 11px;
-  color: #8c8c8c;
-  line-height: 1.4;
 }
 
 .platform-tile :deep(.ant-card-head-title) {

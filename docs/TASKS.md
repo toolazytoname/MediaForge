@@ -1082,11 +1082,12 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **红线**：写操作复用 M10 已迁移端点，不新造裸 SQL；真发仍走 M11-E/safe_publish，本任务只到"造 queued"
 
 ### M11-C｜账号中心网格化（对标蚁小二账号页）
-- [ ] **目标**：`/accounts` 从 cookie 健康表升级为蚁小二式**平台网格授权中心**
+- [x] **目标**：`/accounts` 从 cookie 健康表升级为蚁小二式**平台网格授权中心**
 - **步骤**：前端改为按平台分类网格（config 支持平台 + cookie 健康 + 登录引导）；复用 `GET /api/v1/accounts` + `login-guidance`
 - **验收**：平台网格渲染真实 cookie 健康 + 授权引导；无账号显示引导态；`npm run build` 绿
 - **声明改动文件**：`frontend/src/views/Accounts.vue`、`frontend/dist/**`
 - **红线**：只读；真实授权走 CLI `login` 命令，UI 只展示与引导
+  ✅ 完成于 2026-07-12，commit 待提交，备注：初版（commit dab7609）漏了 wechat_mp 平台 + 无"添加账号"主动交互，本次补齐——`login_guidance()` 加 wechat_mp 项 + 新增 `auth_type`（scan_qr/config_file）字段；前端新增 `PlatformBadge.vue`（品牌色文字徽标）+ `PlatformCatalogModal.vue`（蚁小二式"已支持网格 + 点击展开引导 + 规划中占位分组"弹窗）；`Accounts.vue` 顶部加「+ 添加账号」按钮，tile 点击也可预选平台打开同一弹窗，卡片不再常驻展开 guidance 文案。
 
 ### M11-D｜数据看板补维度（对标蚁小二数据页）
 - [ ] **目标**：数据页补齐蚁小二式 tab【仪表盘｜账号数据｜作品数据｜排行榜】+ 时间窗(近7/14/30日)

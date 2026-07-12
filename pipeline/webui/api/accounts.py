@@ -41,23 +41,38 @@ def login_guidance() -> dict[str, Any]:
         "items": [
             {
                 "platform": "toutiao",
+                "auth_type": "scan_qr",
                 "command": "python -m pipeline.run login toutiao main",
                 "notes": "扫码登录头条创作者后台；cookie 存 secrets/",
             },
             {
                 "platform": "xiaohongshu",
+                "auth_type": "scan_qr",
                 "command": "python -m pipeline.run login xiaohongshu main",
                 "notes": "扫码登录小红书；通过 XiaohongshuSkills 的 cdp_publish.py 完成",
             },
             {
                 "platform": "x",
+                "auth_type": "config_file",
                 "command": "(env: X_BEARER_TOKEN=...)",
                 "notes": "X 用 API v2 OAuth bearer token；非扫码路径",
             },
             {
                 "platform": "douyin",
+                "auth_type": "scan_qr",
                 "command": "python -m pipeline.run login douyin main",
                 "notes": "扫码登录抖音创作者后台；Playwright + storage_state",
+            },
+            {
+                "platform": "wechat_mp",
+                "auth_type": "config_file",
+                "command": "secrets/wechat_mp_<account>.json",
+                "notes": (
+                    "无扫码流程；在 config.yaml 配置 platforms.wechat_mp.accounts[]."
+                    "credentials 指向该文件（内容 {\"app_id\":..., \"app_secret\":...}），"
+                    "并在公众号后台设置与开发→基本配置→IP 白名单加入服务器出口 IP"
+                    "（否则 access_token 请求返回 errcode 40164）"
+                ),
             },
         ]
     }

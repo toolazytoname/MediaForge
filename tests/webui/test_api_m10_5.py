@@ -199,7 +199,16 @@ class TestAccounts:
         assert r.status_code == 200
         items = r.json()["items"]
         platforms = {it["platform"] for it in items}
-        assert {"toutiao", "xiaohongshu", "x", "douyin"} <= platforms
+        assert {"toutiao", "xiaohongshu", "x", "douyin", "wechat_mp"} <= platforms
+
+    def test_login_guidance_has_auth_type(self, client):
+        r = client.get("/api/v1/accounts/login-guidance")
+        by_platform = {it["platform"]: it for it in r.json()["items"]}
+        assert by_platform["toutiao"]["auth_type"] == "scan_qr"
+        assert by_platform["xiaohongshu"]["auth_type"] == "scan_qr"
+        assert by_platform["douyin"]["auth_type"] == "scan_qr"
+        assert by_platform["x"]["auth_type"] == "config_file"
+        assert by_platform["wechat_mp"]["auth_type"] == "config_file"
 
 
 # ── Runs ───────────────────────────────────────────────────
