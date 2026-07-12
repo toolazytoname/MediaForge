@@ -111,7 +111,8 @@
   - `ToutiaoPublisher`：自写 Playwright，图文长文（与 M0-0 决策一致——AiToEarn 整体方案放弃）
   - `XiaohongshuPublisher`：subprocess 封装 `white0dew/XiaohongshuSkills`（vendor pin commit），Plan B 是自写 Playwright
   - `DouyinPublisher`：自写 Playwright，**强制勾选 AI 生成标识**（PRD §3.4 不可省略）
-  - 后续：`WechatMpPublisher`（官方 API 草稿箱 + 人工点发布）、`YoutubePublisher`（Postiz API）
+  - `WechatMpPublisher`：官方 API 草稿箱（M13，移植自 TrendPublish），`access_token` 内存缓存 + 60s 提前刷新，两步发布（封面 `material/add_material` → 草稿 `draft/add`），草稿箱无公开 URL；真实发布依赖账号认证 + IP 白名单（HARD_PARTS §7）
+  - 后续：`YoutubePublisher`（Postiz API）
 - **三重安全锁**（缺一不发）：见 §6
 - 失败重试：失败 → `failed` + IM 告警，**绝不**自动无限重试（风控敏感）；需重试由 Web UI 或 `reset` 命令人工触发
 - **边界**：发布器不修改内容。格式不合规（超字数等）→ 报 `failed` 让上游修
@@ -218,11 +219,16 @@ output/
         cards/*.png                # 渲染后的 1080×1440 图卡
       x/
         thread.md                  # ≤10 条英文 thread
+      wechat_mp/
+        article.md                 # 公众号正文 markdown（未转 HTML）
+        meta.json                  # {title, digest}
+      cover.png                    # 封面（wechat_mp 等平台复用同一份约定路径）
     REVIEW.md                      # 当日审核清单（M2-5 cron 路径）
   weekly-report.md                 # 周一生成的周报（M6-2）
 
 secrets/
   cookies/<platform>_<account>.json  # Playwright storage_state，权限 600
+  wechat_mp_<account>.json         # {"app_id": "...", "app_secret": "..."}（M13）
   *.env                            # 平台凭据（gitignore）
 
 locks/
@@ -231,3 +237,6 @@ locks/
 backups/
   state-YYYY-MM-DD.db             # sqlite3 .backup 每日滚动 14 天
 ```
+
+> `wechat_mp/article.md` 是派生阶段产出的 markdown，**不落盘 HTML**——真正粘贴进公众号编辑器用的内联样式 HTML 由 `WechatMpPublisher.publish()` 在发布时现转（`pipeline/creators/wechat_html.py::markdown_to_wechat_html`），这样样式改动不需要重跑 LLM 派生。
+

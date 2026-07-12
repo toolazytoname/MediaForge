@@ -743,7 +743,7 @@
 
 - **数字人口播 lane**（AIGCPanel 引擎，走 VideoEngine 接口）：好物分享/带货方向；前提=M5-3 评估通过 + 账号过带货门槛 + 平台虚拟人报备完成
 - **OpenMontage 精品视频 lane**（远期观察，M0-0 决策降级：Pixelle-Video 已接管精品定位）：仅当 Pixelle-Video 质量不达预期时重评
-- 公众号 Publisher（官方 API 草稿箱 + 人工点发布，公众号自动群发风险高；M0-0 决策：不部署 TrendPublish，自研 lane 时移植其微信兼容 HTML 后处理器，见 evaluation-notes §1 移植清单）
+- ~~公众号 Publisher~~ → 已拆入 M13-1（实现）/ M13-2（真实发布验证，高危人工）
 - Postiz 部署接入 YouTube Shorts / TikTok
 - 表现数据反哺选题权重（metrics → topics 评分 prompt 动态调整）
 - 多账号矩阵（同平台第二账号 = 不同支柱人设）
@@ -1142,6 +1142,16 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - [ ] **目标**：图文全链路稳定后，同套编排复制到视频(MPT/Pixelle 引擎已接 M5)；对标蚁小二"浏览器发布助手"直连 AI 视频工具(可灵/即梦/海螺/Vidu)产物发布
 - **前置**：M11-F 图文验收达标
 - 备注：细粒度待图文闭环稳定后再拆
+
+### M13-1｜公众号（wechat_mp）Publisher —— 官方 API 草稿箱方案实现（低危，代码+测试）
+- [x] **目标**：移植 TrendPublish（`liyown/ai-trend-publish`，MIT）的微信公众号官方 API 草稿箱发布能力，接入 config/derivative/registry 三层管线；dry_run 全流程可测，真实调用依赖账号认证（见 M13-2）
+  ✅ 完成于 2026-07-12，commit （随后补），备注：`pipeline/config.py::PlatformsConfig.wechat_mp`（复用既有 `Platform`/`AccountAPI`，无新 pydantic 类型）；`pipeline/creators/wechat_html.py`（`html.parser.HTMLParser` 重写 TrendPublish 的 tag→内联样式映射，标准库 markdown 解析，新增依赖 `Markdown`）；`pipeline/creators/derivative_wechat_mp.py` + `prompts/wechat_mp.md`（`WechatMpOutput{title,digest,body_md}`，拒绝 `[IMAGE:` 占位符，v1 不做正文插图）；`derivative.py` 三处增量接线（`DerivativeResult.wechat_mp` 字段 + `derive_one()`/`run_derivative()` 分支），**默认 `platforms` 元组不含 `wechat_mp`**（需显式传入，成本护栏，已用回归测试钉死）；`pipeline/publishers/wechat_mp.py::WechatMpPublisher`（三注入点 http_get/http_post/http_upload；`_ensure_access_token` 内存缓存+60s 提前刷新；`validate()` 纯本地不触网；`publish()` 两步：封面 `material/add_material` → 草稿 `draft/add`；`_classify_wechat_error` 错误码分类，40164 附白名单提示，48001 附账号权限提示）；`publishers/__init__.py::_build_wechat_mp` 接入 `_BUILDERS`，**顺手修复既存 bug**：`build_adapters()` 原按平台名字符串（`platform_name == "x"`）判断 `credentials`/`cookies`，`wechat_mp` 会直接 `AttributeError`——改为按账号类型（`isinstance(acc, AccountAPI/AccountPlaywright)`）判断。测试新增 4 类文件（`test_wechat_html.py`/`test_derivative_wechat_mp.py`/`test_wechat_mp_publisher.py`/`test_publisher_registry_builders.py` 追加），共 80 条全绿；顺带修了 `derivative.py::derive_for_content()` 一个既存 dead-parameter bug（`run_derivative()` 的 `platforms` 参数从未被转发，导致任何平台子集调用都悄悄退化为默认全 3 平台）。**验证**：`pytest tests/ -q` 中 wechat_mp 相关测试全绿；`grep -rn "import anthropic" pipeline/ | grep -v llm.py` 为空。**已知既存但与本任务无关的 7 个失败**（未改动）：`test_creators_llm.py::test_anthropic_import_only_in_llm_module`（该测试自身 grep 匹配到运行时重新编译出的 `.pyc` 缓存文件，属测试自身缺陷，非源码违规）、`test_image_gen.py` 5 个失败（`MiniMaxImageProvider` 默认模型 `image-01-live` 与测试期望 `image-01` 不一致，环境/既存问题）、`test_publish_safety.py::TestCrossProcessLock` 1 个（真实双进程时序 flaky）——均在本次改动文件之外（`git status` 核实）。
+
+### M13-2｜公众号真实发布验证（**高危，人工执行，不进自治流**）
+- [ ] **目标**：用户自备 `secrets/wechat_mp_main.json`（`{"app_id":..., "app_secret":...}`）+ 公众号后台配置 IP 白名单后，跑一次真实 `dry_run=False` 发草稿，验证官方 API 链路打通
+- **前置**：M13-1 完成；用户账号完成 IP 白名单配置
+- **验收**：草稿创建成功（`draft/add` 返回 `media_id`）**或**因账号未认证返回 `40001`/`48001`（记 `⚠️ BLOCKED`：已知账号能力限制，非代码缺陷，用户当前持有个人/未认证订阅号）
+- **红线**：**高危任务，不进自治流**（CLAUDE.md 工作约定第 7 条 + 自治协议"高危任务例外"）；真实发布需 `publish.enabled=true` 且 `wechat_mp` 在 `publish.allowed_platforms` 白名单
 
 ---
 

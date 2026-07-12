@@ -121,7 +121,7 @@
 |------|----------|--------|--------------|
 | 国内发布（小红书） | XiaohongshuSkills（M4-3 已实装，subprocess 集成，pin commit 2026-05-21） | 自写 Playwright（patchright，参考 social-auto-upload 新版 uploader + AiToEarn electron 遗留代码） | mac 冒烟不通过，或连续 1 周失败率 > 30%，或项目停更 |
 | 国内发布（头条/抖音） | 自写 Playwright（M4-3 头条 / M5-2 抖音已实装；AiToEarn/xhs-toolkit M0-0 评估放弃） | AiToEarn 仅海外平台重评 | — |
-| 公众号图文 | 自研 lane + 官方 API 草稿箱（M0-0 决策：M2-2 已移植审稿协议/防幻觉条款；M0-0 不部署 TrendPublish；Backlog 待激活） | TrendPublish CLI dry-run 作对照产线 | 自研排版质量不达标 |
+| 公众号图文 | 自研 lane + 官方 API 草稿箱（**M13-1 已实装**：移植 TrendPublish `weixin-api-client.ts`/`weixin-publisher.ts`/`html-post-processor.ts`，dry-run 全量可测；真实发布依赖账号认证 + IP 白名单，见 M13-2） | TrendPublish CLI dry-run 作对照产线 | 自研排版质量不达标 |
 | 海外发布 | X 官方 API（M4-2 已实装） | Postiz 自托管（一次接入 YouTube/TikTok/IG 等） | 扩到 ≥ 3 个海外平台时直接上 Postiz |
 | 国内发布（图文，B 路线扩展） | **MultiPost 浏览器扩展（Apache-2.0，RESTful API 触发；M11-0 决策，M11-E 集成中）** | 现有自写 headless（A 路线）降级 ‖ 参考 Wechatsync CLI/MCP（GPL-3.0，仅进程外调用不 vendor）作博客长尾 | 扩展桥不通 / 浏览器需常开不可接受 → 退 A 路线 |
 | 国内发布（视频，B 路线扩展） | **MultiPost 视频扩展（半自动、真人会话、风控最低；M11-E）** | MPP（social-auto-upload 系，Playwright 无人值守，MIT）‖ 现有 headless | 需无人值守量产 → 上 MPP/headless（风控高，接受降级） |
@@ -133,6 +133,8 @@
 | 图像生成 | 不用（模板渲染兜底）；provider=none；可选 baoyu-image-gen subprocess（M2-4.5 子任务待激活，11 provider，见 evaluation-notes §5） | Gemini/OpenAI 图像 API | 模板卡片视觉疲劳、数据表明配图影响点击；或 baoyu-image-gen 升级破坏 CLI 签名（真集成时复核 HEAD） |
 
 > 巨人肩膀原则：每个垂直环节动工前先查本表和 opensource-survey.md——**默认假设已有人造过这个轮子**。发现新的成熟项目 → 更新调研文档并在对应任务下记录，宁可多花 2 小时评估也不自写 2 周。
+
+**公众号 IP 白名单 + 账号认证门槛（M13）**：这是运维事项，不是代码缺陷。官方 `access_token` 接口要求出口 IP 在公众号后台「设置与开发 → 基本配置 → IP 白名单」登记，否则返回 `errcode 40164`；`draft/add` 草稿箱接口需要账号完成认证（个人/未认证订阅号大概率返回 `40001`/`48001`）。`WechatMpPublisher` 对这两类错误码都附带了对应的中文提示（见 `pipeline/publishers/wechat_mp.py::_classify_wechat_error`），代码路径本身在 dry_run 下已全量可测，真实调用的失败是账号能力限制，验证见 `docs/TASKS.md` M13-2。
 
 ---
 
