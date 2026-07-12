@@ -249,8 +249,11 @@ def is_login_in_progress(platform: str, account: str) -> str | None:
 def delete_login_credentials(platform: str, account: str) -> bool:
     """删除 `secrets/cookies/<platform>_<account>.json` 凭据文件。
 
-    只删文件，不碰 config.yaml（用户 U7-8 决策：账号仍保留在配置里，
-    只是恢复到"未授权"状态，可以重新一键登录）。
+    只管文件，不碰 config.yaml——config.yaml 账号条目的移除由
+    `pipeline.webui.config_edit.remove_account_from_config` 负责，两者在
+    `accounts.py::delete_login` 里各自独立调用一次（U7-9：用户实际用过
+    U7-8 后发现账号行不消失、只是标红，明确要求"彻底移除账号"，见
+    TASKS.md）。
 
     Returns:
         True 如果文件存在并被删除；False 如果文件本就不存在（幂等，

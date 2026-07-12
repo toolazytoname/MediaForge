@@ -546,6 +546,117 @@ def test_delete_blocked_while_login_in_progress(
     login_bridge._LOGIN_RUNS.pop(("toutiao", "main"), None)
 
 
+# U7-9: DELETE 也要把账号从 config.yaml 里删掉 ──────────────
+
+
+def test_delete_removes_account_from_config_yaml(
+    client: TestClient,
+    tmp_env: Path,
+) -> None:
+    """账号在 config.yaml 里配置过 -> DELETE 后从 accounts[] 消失，兄弟账号保留。"""
+    cfg_path = tmp_env / "config.yaml"
+    cfg_path.write_text(
+        "timezone: Asia/Shanghai\n"
+        "pillars:\n  - id: ai_daily\n    name: AI\n    description: d\n    scoring_hint: s\n"
+        "sources: []\n"
+        "llm: {tiers: {cheap: m, creative: m, critical: m}}\n"
+        "budget: {monthly_usd: 80.0}\n"
+        "platforms:\n"
+        "  toutiao:\n"
+        "    kind: playwright\n"
+        "    windows: [\"12:00-14:00\"]\n"
+        "    accounts:\n"
+        "      - id: main\n"
+        "        cookies: secrets/cookies/toutiao_main.json\n"
+        "      - id: second\n"
+        "        cookies: secrets/cookies/toutiao_second.json\n",
+        encoding="utf-8",
+    )
+
+    response = client.delete("/api/v1/accounts/toutiao/main/login")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body == {"deleted": True, "platform": "toutiao", "account": "main"}
+
+    text = cfg_path.read_text(encoding="utf-8")
+    assert "toutiao_main.json" not in text
+    assert "toutiao_second.json" in text  # 兄弟账号原样保留
+
+
+def test_delete_account_only_in_config_no_credential_file_still_deleted_true(
+    client: TestClient,
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """凭据文件不存在，但账号在 config.yaml 里 -> config 条目被删也算真删（deleted=True）。"""
+    from pipeline.webui import login_bridge
+
+    cookies_dir = tmp_env / "secrets" / "cookies"
+    cookies_dir.mkdir(parents=True)
+    monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", cookies_dir)
+
+    cfg_path = tmp_env / "config.yaml"
+    cfg_path.write_text(
+        "timezone: Asia/Shanghai\n"
+        "pillars:\n  - id: ai_daily\n    name: AI\n    description: d\n    scoring_hint: s\n"
+        "sources: []\n"
+        "llm: {tiers: {cheap: m, creative: m, critical: m}}\n"
+        "budget: {monthly_usd: 80.0}\n"
+        "platforms:\n"
+        "  xiaohongshu:\n"
+        "    kind: playwright\n"
+        "    windows: [\"12:00-14:00\"]\n"
+        "    accounts:\n"
+        "      - id: main\n"
+        "        cookies: secrets/cookies/xiaohongshu_main.json\n",
+        encoding="utf-8",
+    )
+
+    response = client.delete("/api/v1/accounts/xiaohongshu/main/login")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body == {"deleted": True, "platform": "xiaohongshu", "account": "main"}
+    assert "id: main" not in cfg_path.read_text(encoding="utf-8")
+
+
+def test_delete_account_disappears_from_list_accounts_end_to_end(
+    client: TestClient,
+    tmp_env: Path,
+) -> None:
+    """端到端：DELETE 后 GET /accounts 不再返回该账号（不是只是标红）。"""
+    cfg_path = tmp_env / "config.yaml"
+    cfg_path.write_text(
+        "timezone: Asia/Shanghai\n"
+        "pillars:\n  - id: ai_daily\n    name: AI\n    description: d\n    scoring_hint: s\n"
+        "sources: []\n"
+        "llm: {tiers: {cheap: m, creative: m, critical: m}}\n"
+        "budget: {monthly_usd: 80.0}\n"
+        "platforms:\n"
+        "  toutiao:\n"
+        "    kind: playwright\n"
+        "    windows: [\"12:00-14:00\"]\n"
+        "    accounts:\n"
+        "      - id: main\n"
+        "        cookies: secrets/cookies/toutiao_main.json\n",
+        encoding="utf-8",
+    )
+
+    before = client.get("/api/v1/accounts").json()
+    assert any(
+        it["platform"] == "toutiao" and it["account"] == "main"
+        for it in before["items"]
+    )
+
+    response = client.delete("/api/v1/accounts/toutiao/main/login")
+    assert response.status_code == 200, response.text
+
+    after = client.get("/api/v1/accounts").json()
+    assert not any(
+        it["platform"] == "toutiao" and it["account"] == "main"
+        for it in after["items"]
+    )
+
+
 # login_bridge.delete_login_credentials unit tests ─────────
 
 

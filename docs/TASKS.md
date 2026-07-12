@@ -648,6 +648,26 @@
 
 ✅ 完成于 2026-07-12，commit f541be9，备注 DELETE 端点 + delete_login_credentials（幂等，只删文件不改 config）+ 前端 popconfirm 删除按钮；顺手修复 U7-7 遗留的两处前端 build 回归（导入错误 + 缺 `</style>`），npm run build 自 dae76b1 起首次真正跑通；27 个 webui login 测试全绿；curl 端到端验证。
 
+### U7-9 小红书一键登录 CLI 参数顺序修复 + 删除账号改为彻底移除（HIGH，用户反馈「删除账户还是删不掉，登陆小红书也是失败，没有弹出浏览器」）
+- [x] **目标**：修复两个用户实测发现的 bug。
+  1. **小红书登录不弹浏览器**：`login_cmd.py::login_xiaohongshu` 把 `--account`/`--headless` 拼在子命令 `login` 之后，但 `cdp_publish.py` 的这两个选项是顶层 parser 选项、必须在子命令之前——argparse 直接报 `unrecognized arguments` 拒绝执行，Chrome 从未启动。同时 `subprocess.run` 没传 `capture_output`，导致 `proc.stdout`/`proc.stderr` 恒为 `None`，错误处理里 `(proc.stderr or proc.stdout)[-400:]` 抛 `TypeError: 'NoneType' object is not subscriptable`，把真正的 argparse 报错吞掉——这正是用户在页面上看到的报错文案。
+  2. **删除账户删不掉**：U7-8 的决策（只清凭据文件、不碰 `config.yaml`）在用户实际用过后被明确推翻——账号行不消失，只是标红，不符合直觉。改为 `delete_login` 端点同时调 `delete_login_credentials`（删文件）+ 新增的 `config_edit.remove_account_from_config`（删 `config.yaml` 里 `platforms.<platform>.accounts[]` 对应条目），`deleted` = 两者任一发生。
+- **怎么改**：
+  1. `pipeline/publishers/login_cmd.py::login_xiaohongshu`：调整 `cmd` 拼接顺序（`--headless`/`--account` 在 `login` 之前）+ `subprocess.run(..., capture_output=True, text=True)`
+  2. 新增 `pipeline/webui/config_edit.py::remove_account_from_config(platform, account, *, config_path=None) -> bool`：用 `ruamel.yaml`（round-trip，保留注释/格式，普通 `yaml.safe_load`+`dump` 会破坏手工维护的 `config.yaml`）定点删除 `accounts[]` 里 `id == account` 的条目；platform 未配置/account 不存在/文件不存在都是幂等 no-op 返回 `False`
+  3. `pipeline/webui/api/accounts.py::delete_login` 改为同时调用两个删除函数
+  4. `requirements.txt` 新增 `ruamel.yaml>=0.18`
+  5. 顺手发现并修复：本机有个会话开始前就在跑的旧 `python -m pipeline.run webui` 进程（Python 不热重载），改了代码不重启进程就不会生效——这也是用户"改了还是报同样的错"的直接原因，非代码问题
+- **验收标准**：
+  - `python -m pytest tests/test_login_cmd.py -q` 全绿（新增真实子进程测试证明 `NoneType` 崩溃已修复，不是靠 mock 掩盖）
+  - `python -m pytest tests/webui/test_config_edit.py -q` 全绿（6 例：删除目标账号、兄弟账号/其它 platform/注释保留、platform 缺失幂等、account 缺失幂等、文件缺失幂等）
+  - `python -m pytest tests/webui/test_api_login.py -q` 全绿（新增 3 例：DELETE 后 config.yaml 账号条目消失且兄弟账号保留、仅 config 有记录时删除也算 `deleted:true`、端到端验证 `GET /accounts` 删除后不再返回该账号）
+  - `python -m pytest tests/ -q` 无新增回归（对比修改前后失败用例集合一致，均为已知无关 flaky/环境相关失败）
+- **红线**：`config_edit.py` 只做定点删除 `accounts[]` 条目，不删 platform 本身（哪怕 accounts 变空），不做进一步清理
+- **参考**：U7-8（决策被本任务推翻）
+
+✅ 完成于 2026-07-12，commit 322e6a1（小红书登录参数顺序 + None 崩溃修复），备注见上；删除账号彻底移除的 commit 见本条目登记后紧随的 `feat: U7-9` commit。
+
 ### U7-3 审核台补图卡缩略预览（MEDIUM，§7 明确要求但缺失）
 - [ ] **目标**：审核时直接在页面看到小红书图卡 PNG 缩略图，不用点开文件
 - **错在哪**：TECH_SPEC §7 要求审核台含「图卡缩略引用」、§图卡 PNG 直接 `<img>`。但 `pipeline/webui/templates/review.html` 全文只有一个指向 canonical.md 的文字链接（第 15 行），**没有任何 `<img>` 图卡预览**（已 grep 确认 review.html 无 png/img/slide 字样）

@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from pipeline.webui import deps
+from pipeline.webui.config_edit import remove_account_from_config
 from pipeline.webui.cookie_health_views import collect_cookie_health
 from pipeline.webui.login_bridge import (
     LoginInProgressError,
@@ -160,19 +161,25 @@ def start_login(
     }
 
 
-# ── U7-8: 删除已保存的登录凭据 ────────────────────────────────
+# ── U7-8/U7-9: 删除账号（凭据文件 + config.yaml 账号条目） ──────
 
 
 @router.delete("/accounts/{platform}/{account}/login")
 def delete_login(platform: str, account: str) -> dict[str, Any]:
-    """删除 `secrets/cookies/<platform>_<account>.json` 凭据文件。
+    """彻底移除一个账号：删凭据文件 + 从 config.yaml 里删账号条目。
 
-    只清除已保存的登录凭据，不改动 config.yaml（账号仍保留在配置里，
-    只是恢复到"未授权"状态，可以重新一键登录——U7-8 用户决策）。
+    U7-8 最初只删凭据文件，账号仍留在 config.yaml、UI 上账号行不消失、
+    只是健康状态变红——用户实际用过之后明确要求"彻底移除账号"（U7-9
+    用户决策，见 TASKS.md）：删除后账号应该从列表整个消失，才符合直觉。
+    账号从 config.yaml 消失后，`collect_cookie_health` 遍历
+    config-declared 账号时自然不再返回它，前端 `load()` 刷新即可让
+    该行从列表消失，不需要额外的前端过滤逻辑。
 
     Returns:
         200 + `{deleted: bool, platform, account}`
-        deleted=False 表示文件本就不存在（幂等，不算错误）。
+        deleted 反映"凭据文件被删除 或 config.yaml 账号条目被删除"——
+        两者只要有一个发生就算真的做了事；两者都没发生（幂等重复删除）
+        才是 False。
 
     Errors:
         400 platform_not_supported — platform 不在白名单
@@ -198,9 +205,10 @@ def delete_login(platform: str, account: str) -> dict[str, Any]:
             ),
         }})
 
-    deleted = delete_login_credentials(platform, account)
+    credentials_deleted = delete_login_credentials(platform, account)
+    config_removed = remove_account_from_config(platform, account)
     return {
-        "deleted": deleted,
+        "deleted": credentials_deleted or config_removed,
         "platform": platform,
         "account": account,
     }
