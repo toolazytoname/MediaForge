@@ -4,7 +4,7 @@
 import { computed, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import PlatformBadge from './PlatformBadge.vue'
-import { SUPPORTED_PLATFORMS, PLANNED_PLATFORMS } from './platformMeta'
+import { SUPPORTED_PLATFORMS, PLANNED_PLATFORMS, platformMeta } from './platformMeta'
 import type { AccountHealthItem, LoginGuidance } from '../../stores'
 
 interface Props {
@@ -92,6 +92,7 @@ async function copyCommand(cmd: string): Promise<void> {
         @click="selectPlatform(p.key)"
       >
         <PlatformBadge :platform="p.key" />
+        <span class="tile-name">{{ platformMeta(p.key).label }}</span>
         <span class="tile-health">{{ healthLabel(p.key) }}</span>
       </div>
     </div>
@@ -99,6 +100,7 @@ async function copyCommand(cmd: string): Promise<void> {
     <div v-if="selectedGuidance" class="guidance-panel">
       <div class="guidance-header">
         <PlatformBadge :platform="selectedGuidance.platform" size="small" />
+        <span class="guidance-platform-name">{{ platformMeta(selectedGuidance.platform).label }}</span>
         <a-tag :color="selectedGuidance.auth_type === 'scan_qr' ? 'purple' : 'blue'">
           {{ selectedGuidance.auth_type === 'scan_qr' ? '扫码登录' : '配置凭据' }}
         </a-tag>
@@ -129,6 +131,7 @@ async function copyCommand(cmd: string): Promise<void> {
         @click="message.info('暂未支持，如需要请在 docs/TASKS.md 提需求')"
       >
         <PlatformBadge :platform="p.key" />
+        <span class="tile-name">{{ platformMeta(p.key).label }}</span>
         <a-tag color="default" size="small">规划中</a-tag>
       </div>
     </div>
@@ -177,6 +180,11 @@ async function copyCommand(cmd: string): Promise<void> {
   border-color: #f0f0f0;
   box-shadow: none;
 }
+.tile-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: #262626;
+}
 .tile-health {
   font-size: 11px;
   color: #8c8c8c;
@@ -193,6 +201,11 @@ async function copyCommand(cmd: string): Promise<void> {
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
+}
+.guidance-platform-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f1f1f;
 }
 .guidance-hint {
   margin: 0 0 8px;

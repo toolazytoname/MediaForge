@@ -10,6 +10,7 @@ import { storeToRefs } from 'pinia'
 import type { AccountHealthItem } from '../stores'
 import PlatformBadge from './components/PlatformBadge.vue'
 import PlatformCatalogModal from './components/PlatformCatalogModal.vue'
+import { platformMeta } from './components/platformMeta'
 
 const store = useAccountsStore()
 const { items, guidance, loading, loaded } = storeToRefs(store)
@@ -136,7 +137,10 @@ onMounted(async () => {
           >
             <template #title>
               <div class="tile-title">
-                <PlatformBadge :platform="tile.name" size="small" />
+                <span class="tile-title-left">
+                  <PlatformBadge :platform="tile.name" size="small" />
+                  <span class="tile-name">{{ platformMeta(tile.name).label }}</span>
+                </span>
                 <a-tag v-if="tile.totalCount === 0" color="default">未授权</a-tag>
                 <a-tag v-else-if="tile.healthyCount === tile.totalCount" color="green">健康</a-tag>
                 <a-tag v-else-if="tile.healthyCount === 0" color="red">失效</a-tag>
@@ -181,7 +185,10 @@ onMounted(async () => {
           >
             <template #title>
               <div class="tile-title">
-                <PlatformBadge :platform="tile.name" size="small" />
+                <span class="tile-title-left">
+                  <PlatformBadge :platform="tile.name" size="small" />
+                  <span class="tile-name">{{ platformMeta(tile.name).label }}</span>
+                </span>
                 <a-tag v-if="tile.totalCount === 0" color="default">未授权</a-tag>
                 <a-tag v-else-if="tile.healthyCount === tile.totalCount" color="green">健康</a-tag>
                 <a-tag v-else-if="tile.healthyCount === 0" color="red">失效</a-tag>
@@ -249,6 +256,15 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+.tile-title-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tile-name {
+  font-weight: 500;
+  color: #1f1f1f;
 }
 .tile-stats {
   display: flex;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 平台简称色块徽标（无外部 logo 依赖，纯文字 + 品牌近似色）。
+// 平台徽标：有品牌 logo（simple-icons）画圆形色底 + 白色图标；没有(头条/视频号)回退文字色块。
 import { computed } from 'vue'
 import { platformMeta } from './platformMeta'
 
@@ -20,7 +20,10 @@ const meta = computed(() => platformMeta(props.platform))
     :style="{ background: meta.color }"
     :title="meta.label"
   >
-    {{ meta.label }}
+    <svg v-if="meta.iconPath" viewBox="0 0 24 24" class="platform-icon" fill="#fff">
+      <path :d="meta.iconPath" />
+    </svg>
+    <span v-else class="platform-text">{{ meta.label }}</span>
   </span>
 </template>
 
@@ -29,20 +32,38 @@ const meta = computed(() => platformMeta(props.platform))
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 44px;
+  min-width: 28px;
+  width: 28px;
   height: 28px;
-  padding: 0 8px;
-  border-radius: 6px;
+  border-radius: 50%;
   color: #fff;
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .platform-badge.is-small {
-  min-width: 32px;
+  min-width: 22px;
+  width: 22px;
   height: 22px;
-  font-size: 11px;
+}
+.platform-badge:has(.platform-text) {
+  min-width: 44px;
+  width: auto;
+  border-radius: 6px;
+  padding: 0 8px;
+}
+.platform-badge.is-small:has(.platform-text) {
+  min-width: 32px;
+  padding: 0 6px;
   border-radius: 5px;
+}
+.platform-icon {
+  width: 60%;
+  height: 60%;
+}
+.platform-text {
+  font-size: inherit;
 }
 </style>
