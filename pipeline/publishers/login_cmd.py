@@ -302,16 +302,17 @@ def login_xiaohongshu(
             f"set XHS_SKILLS_PATH env."
         )
 
-    cmd = [
-        "python", str(cli_script), "login",
-        "--account", account,
-    ]
+    # --account / --headless 是 cdp_publish.py 顶层 parser 的选项，必须写在
+    # 子命令 login 之前；写在之后会被 argparse 当成 login 子命令的多余参数拒绝
+    # （login 子命令自身不接受任何位置/可选参数）。
+    cmd = ["python", str(cli_script)]
     if headless:
         cmd.append("--headless")
+    cmd += ["--account", account, "login"]
 
     import subprocess as _sp
     try:
-        proc = _sp.run(cmd, timeout=timeout_s)
+        proc = _sp.run(cmd, timeout=timeout_s, capture_output=True, text=True)
     except _sp.TimeoutExpired as e:
         raise PublishError(
             f"xhs login timeout after {timeout_s}s; user did not scan QR"

@@ -193,6 +193,8 @@ def test_login_xiaohongshu_passes_account_and_headless(
     def fake_run(cmd, **kw):
         received["cmd"] = cmd
         received["timeout"] = kw.get("timeout")
+        received["capture_output"] = kw.get("capture_output")
+        received["text"] = kw.get("text")
         class _R:
             returncode = 0
             stdout = ""
@@ -210,6 +212,13 @@ def test_login_xiaohongshu_passes_account_and_headless(
     assert "alt" in cmd
     assert "--headless" in cmd
     assert received["timeout"] == 42
+    assert received["capture_output"] is True
+    assert received["text"] is True
+    # --account / --headless 是顶层 parser 选项，必须排在子命令 login 之前
+    # （cdp_publish.py 的 login 子命令不接受任何参数，写反了会被 argparse 拒绝）
+    login_idx = cmd.index("login")
+    assert cmd.index("--account") < login_idx
+    assert cmd.index("--headless") < login_idx
 
 
 def test_login_xiaohongshu_missing_cli_raises(
@@ -244,6 +253,28 @@ def test_login_xiaohongshu_cli_nonzero_exit_raises(
     import subprocess as _sp
     monkeypatch.setattr(_sp, "run", fake_run)
     with pytest.raises(PublishError, match="CLI failed"):
+        login_xiaohongshu("main", skills_path=skills)
+
+
+def test_login_xiaohongshu_cli_nonzero_exit_real_subprocess_no_crash(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """真实子进程（不 mock subprocess.run）非零退出时，之前 stdout/stderr 为
+    None（没传 capture_output）会导致 `(proc.stderr or proc.stdout)[-400:]`
+    抛 TypeError，把真正的 argparse/CLI 报错吞掉。这里跑一个真的会写 stderr
+    并 exit 非零的脚本，确认现在能正确捕获输出并抛出 PublishError（不崩溃）。
+    """
+    monkeypatch.chdir(tmp_path)
+    skills = tmp_path / "xhs-skills"
+    (skills / "scripts").mkdir(parents=True)
+    (skills / "scripts" / "cdp_publish.py").write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stderr.write('boom: unrecognized arguments\\n')\n"
+        "sys.exit(2)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(PublishError, match="boom: unrecognized arguments"):
         login_xiaohongshu("main", skills_path=skills)
 
 
