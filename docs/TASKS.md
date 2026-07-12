@@ -646,7 +646,7 @@
   - 复用 `login_bridge._LOGIN_RUNS` 互斥状态判断，不新增第二套互斥逻辑（DRY）
 - **参考**：U7-7（复用其 mutex / 错误信封风格）
 
-✅ 完成于 2026-07-12，commit （见下次提交），备注 DELETE 端点 + delete_login_credentials（幂等，只删文件不改 config）+ 前端 popconfirm 删除按钮；顺手修复 U7-7 遗留的两处前端 build 回归（导入错误 + 缺 `</style>`），npm run build 自 dae76b1 起首次真正跑通；27 个 webui login 测试全绿；curl 端到端验证。
+✅ 完成于 2026-07-12，commit f541be9，备注 DELETE 端点 + delete_login_credentials（幂等，只删文件不改 config）+ 前端 popconfirm 删除按钮；顺手修复 U7-7 遗留的两处前端 build 回归（导入错误 + 缺 `</style>`），npm run build 自 dae76b1 起首次真正跑通；27 个 webui login 测试全绿；curl 端到端验证。
 
 ### U7-3 审核台补图卡缩略预览（MEDIUM，§7 明确要求但缺失）
 - [ ] **目标**：审核时直接在页面看到小红书图卡 PNG 缩略图，不用点开文件
