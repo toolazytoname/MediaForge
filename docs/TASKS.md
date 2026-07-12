@@ -574,6 +574,60 @@
   - 不改 `publications` 表 schema、不改 `PublisherAdapter` 签名、不改状态转移表
 - **参考**：HARD_PARTS §1（必读）；TECH_SPEC §5.2、§7；M4-1 `safe_publish.py`；CLAUDE.md 工作约定第 7 条
 
+### R7-7 登录骨架抽取 + 结构化日志（MEDIUM，U7-7 前置）
+- [x] **目标**：把 `pipeline/publishers/login_cmd.py` 中 `login_toutiao` / `login_douyin` 100% 同构的 Playwright 骨架（launch → new_context → 遍历 URL fallback → wait_for_url 离开登录路径 → storage_state 落盘 + chmod 600 → finally browser.close）抽成私有 `_playwright_login_run(profile, account, *, timeout_s)`，引入 `LoginProfile` dataclass（`platform / selectors_module / exit_keywords`）消除复制粘贴。**同步**把所有 `print(...)` 换成 `pipeline.utils.log.log_event(stage="login", ref_id=account)`，让登录进度可被结构化消费（U7-7 的 Web UI 靠这条链路推送给前端）。
+- **怎么改**：
+  1. `login_cmd.py` 顶层加 `LoginProfile` frozen dataclass + `from dataclasses import dataclass` + `from pipeline.utils.log import get_logger, log_event` + `import logging`
+  2. 新增私有 `_playwright_login_run(profile, account, *, timeout_s) -> Path`，把现有 `login_toutiao` 函数体的 90% 搬过来（保持 lazy import playwright / `with sync_playwright()` / finally close 等结构），用 `profile.platform` / `profile.selectors_module.PROFILE_URL_FALLBACK` / `profile.exit_keywords` 替换原硬编码
+  3. 把函数内 5 处 `print(f"[login/<platform>/<account>] ...")` 换成 `log_event(_LOG, logging.INFO, "...", stage="login", ref_id=account)`（用模块级 `_LOG = get_logger("pipeline.publishers.login")`）
+  4. `login_toutiao` / `login_douyin` 改成 thin wrapper：构造 `LoginProfile(...)` 调 `_playwright_login_run`
+  5. `login_xiaohongshu` 的 1 处 `print(...)` 也换成 log_event（保持模块日志统一；**不**并入 helper，subprocess 路径骨架不同）
+  6. `__all__` 不变（外部 import 不受影响）
+- **验收标准**：
+  - `python -m pytest tests/test_login_cmd.py -q` 全绿（原 dispatch / 存盘 / chmod 600 / 超时抛 PublishError / xhs subprocess / douyin 用例全数保留）
+  - `tests/test_login_cmd.py` 新增 1 个用例：断言 `log_event` 至少被调用 3 次（starting / 等待用户 / saved），用 `monkeypatch.setattr` 或 `caplog` 验证 stage/ref_id 正确
+  - 手动：`python -m pipeline.run login toutiao main` 仍能跑通（Mac 弹 chromium → 扫码 → 关闭 → `secrets/cookies/toutiao_main.json` chmod 600）
+  - `run_login("unknown_platform", ...)` 行为不变（仍抛 PublishError + supported 列表）
+- **红线**：
+  - `login_xiaohongshu` **不**并入 `_playwright_login_run`（subprocess 路径骨架不同，强行抽象会引入分支地狱）
+  - 不改 `run_login` 签名 / `_PLATFORM_LOGIN_DISPATCH` 内容 / `__all__`
+  - 不改 `pipeline/models.py` / SQLite schema / `PublisherAdapter` 签名 / `TECH_SPEC.md`
+- **依赖**：U7-7 必须等本任务完成才能开始（前端进度靠 log_event 链路推进）
+- **参考**：U7-2 后台任务范式、`pipeline/utils/log.py::log_event`、`tests/test_login_cmd.py` 现存 Playwright MagicMock 配方
+
+✅ 完成于 2026-07-12，commit 91b36a7，备注 抽 LoginProfile + log_event 链路；xhs 不并入 helper 守红线；run_login/__all__/dispatch 零变化；tests/test_login_cmd.py 21 用例全绿 + 全量无回归；chromium+扫码手动验证留给用户在 Mac 上执行。
+
+### U7-7 Web UI 一键登录账号 + 后台编排（HIGH，用户明确诉求「告别 terminal」）
+- [ ] **目标**：在 `PlatformCatalogModal.vue` 的 scan_qr 平台卡片加「🚀 一键登录」按钮 → 调 `POST /api/v1/accounts/{platform}/{account}/login` → 后端用 FastAPI `BackgroundTasks` 跑 `run_login()` → 前端轮询 `GET /api/v1/runs/{run_id}` 看实时进度（消息来自 R7-7 的 log_event 链路）→ 完成后 toast「登录完成」+ 自动刷新账号健康状态。**用户全程不离开浏览器**。
+- **怎么改**：
+  1. **runs registry 扩字段**：`pipeline/webui/api/runs.py` 加 `update_run_message(run_id, message)` 函数（写 `_RUNS[run_id]["message"]` + `"message_at"`），**不破坏**既有 `register_run` / `GET /runs/{run_id}` 行为（dict 自由扩展向前兼容）
+  2. **登录 bridge**（新文件 `pipeline/webui/login_bridge.py`）：`execute_login_run(run_id, platform, account, progress_cb)` 调 `run_login()`，把每次 log_event 通过 `logging.Handler` 子类透传给 `progress_cb` → `update_run_message`；成功 / PublishError / 其他异常分别写 runs registry 不同 status
+  3. **API 端点**（`pipeline/webui/api/accounts.py` 新增）：
+     - `POST /api/v1/accounts/{platform}/{account}/login` → 校验 platform ∈ {toutiao,xiaohongshu,douyin} + 同账号互斥（`_LOGIN_RUNS: dict[(platform,account), run_id]`，运行中返回 409）→ 生成 run_id → `register_run` + `background.add_task(_run_login_then_cleanup, ...)` → 202 `{"run_id":..., "status":"queued"}`
+     - 错误信封用 `HTTPException(detail={"error":{"code","message"}})`（与 runs.py / publish.py 一致；与本文件既有 GET 端点的「裸 dict + 软失败」风格**有意不一致**，写操作必须标准错误信封，前端 `unwrapError` 能解）
+  4. **前端 Pinia store**：`frontend/src/stores/index.ts::useAccountsStore` 加 `loginAccount(platform, account)` action + `runningLogins: Map<run_id, {platform, account, status, message}>` state；setInterval 轮询 `GET /runs/{run_id}`（1.5s 一次），succeeded/failed 时 clearInterval + 5min 兜底；succeeded 时调 `load()` 刷新账号健康
+  5. **前端 Modal**：`PlatformCatalogModal.vue` scan_qr 分支加「🚀 一键登录」按钮（loading/disabled 绑 store 状态）+ 进度文字 `<span class="login-progress">`；保留原 CLI 命令在 `<details>` 折叠区作为兜底（远程服务器场景 + 失败重试仍需）
+- **验收标准**：
+  - `python -m pytest tests/webui/test_api_login.py tests/webui/test_runs_message.py -q` 全绿
+    - `test_api_login.py`：首次 POST 返回 202 + run_id；第二次同账号 POST 返回 409 + run_id；BackgroundTask 跑完后 `GET /runs/{run_id}` status=succeeded；`run_login` 抛 PublishError → status=failed + error.message
+    - `test_runs_message.py`：旧 `GET /runs/{run_id}` 在没 message 字段时仍正常返回（向后兼容）
+  - 手动验证（Mac）：`python -m pipeline.run webui` → 浏览器开 `http://127.0.0.1:8787/accounts` → 添加账号 → 选头条 → 一键登录 → 桌面弹 chromium → 扫码 → 前端 toast「登录完成」+ 账号列表自动刷新健康
+  - 失败路径：超时（5 分钟不扫码）→ toast「登录失败: login timeout after 300s」
+  - 兜底：details 折叠区点开看到原 CLI 命令，复制仍可用
+- **红线**：
+  - **必须复用 `run_login`**（R7-7 已交付稳定接口），**不重写**登录业务逻辑
+  - 进度消息必须来自 R7-7 的 log_event 链路（**不重新 print**），用 `logging.Handler` 子类桥接到 `progress_cb`
+  - 同账号互斥：`_LOGIN_RUNS` dict 检查 + finally cleanup（避免 cleanup 异常吃掉 cleanup）
+  - 失败后 UI 必须能恢复（按钮回到 idle 态，不卡死）
+  - 不改 `pipeline/models.py` / SQLite schema / `PublisherAdapter` 签名 / `TECH_SPEC.md`
+- **依赖**：**R7-7 必须先完成**（前端进度靠 log_event 链路推进，R7-7 之前 print 无法被结构化消费）
+- **不做**（留作后续任务）：
+  - Linux 服务器 headless 登录 / QR 截图上传 / noVNC 远程查看（需决策 headless + QR 截图 vs xvfb-run）
+  - X / wechat_mp 接入（走配置文件，不属于扫码流程）
+  - 登录后 cookie 健康自动重试
+  - 登录流程并发上限
+- **参考**：U7-2 后台任务范式（runs.py + publish.py::execute_preview）、U7-6 错误信封风格、HARD_PARTS §9 凭据安全
+
 ### U7-3 审核台补图卡缩略预览（MEDIUM，§7 明确要求但缺失）
 - [ ] **目标**：审核时直接在页面看到小红书图卡 PNG 缩略图，不用点开文件
 - **错在哪**：TECH_SPEC §7 要求审核台含「图卡缩略引用」、§图卡 PNG 直接 `<img>`。但 `pipeline/webui/templates/review.html` 全文只有一个指向 canonical.md 的文字链接（第 15 行），**没有任何 `<img>` 图卡预览**（已 grep 确认 review.html 无 png/img/slide 字样）
