@@ -598,7 +598,7 @@
 ✅ 完成于 2026-07-12，commit 91b36a7，备注 抽 LoginProfile + log_event 链路；xhs 不并入 helper 守红线；run_login/__all__/dispatch 零变化；tests/test_login_cmd.py 21 用例全绿 + 全量无回归；chromium+扫码手动验证留给用户在 Mac 上执行。
 
 ### U7-7 Web UI 一键登录账号 + 后台编排（HIGH，用户明确诉求「告别 terminal」）
-- [ ] **目标**：在 `PlatformCatalogModal.vue` 的 scan_qr 平台卡片加「🚀 一键登录」按钮 → 调 `POST /api/v1/accounts/{platform}/{account}/login` → 后端用 FastAPI `BackgroundTasks` 跑 `run_login()` → 前端轮询 `GET /api/v1/runs/{run_id}` 看实时进度（消息来自 R7-7 的 log_event 链路）→ 完成后 toast「登录完成」+ 自动刷新账号健康状态。**用户全程不离开浏览器**。
+- [x] **目标**：在 `PlatformCatalogModal.vue` 的 scan_qr 平台卡片加「🚀 一键登录」按钮 → 调 `POST /api/v1/accounts/{platform}/{account}/login` → 后端用 FastAPI `BackgroundTasks` 跑 `run_login()` → 前端轮询 `GET /api/v1/runs/{run_id}` 看实时进度（消息来自 R7-7 的 log_event 链路）→ 完成后 toast「登录完成」+ 自动刷新账号健康状态。**用户全程不离开浏览器**。
 - **怎么改**：
   1. **runs registry 扩字段**：`pipeline/webui/api/runs.py` 加 `update_run_message(run_id, message)` 函数（写 `_RUNS[run_id]["message"]` + `"message_at"`），**不破坏**既有 `register_run` / `GET /runs/{run_id}` 行为（dict 自由扩展向前兼容）
   2. **登录 bridge**（新文件 `pipeline/webui/login_bridge.py`）：`execute_login_run(run_id, platform, account, progress_cb)` 调 `run_login()`，把每次 log_event 通过 `logging.Handler` 子类透传给 `progress_cb` → `update_run_message`；成功 / PublishError / 其他异常分别写 runs registry 不同 status
@@ -627,6 +627,8 @@
   - 登录后 cookie 健康自动重试
   - 登录流程并发上限
 - **参考**：U7-2 后台任务范式（runs.py + publish.py::execute_preview）、U7-6 错误信封风格、HARD_PARTS §9 凭据安全
+
+✅ 完成于 2026-07-12，commit dae76b1，备注 Web UI 一键登录：runs.py 加 update_run_message；login_cmd.py 加 listener API 修复 logger 监听 bug（get_logger 实际命名为 f"{name}@{log_dir}" 且 propagate=False，logging.Handler 方案零事件）；login_bridge.py 闭包按 (platform,account) 过滤并发进度；accounts.py 新增互斥 POST 端点；前端 store 轮询 1.5s + 6min 超时 + toast；40 用例全绿含端到端 listener 验证；两轮独立校验修复 5 个阻塞问题；chromium+扫码手动验证留给用户在 Mac 上执行。
 
 ### U7-3 审核台补图卡缩略预览（MEDIUM，§7 明确要求但缺失）
 - [ ] **目标**：审核时直接在页面看到小红书图卡 PNG 缩略图，不用点开文件
