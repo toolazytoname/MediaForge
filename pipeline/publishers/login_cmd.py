@@ -7,28 +7,57 @@ Playwright `storage_state` JSON 到 `secrets/cookies/<platform>_<account>.json`
 各平台登录策略：
 - 头条 (Playwright)：开有头 chromium → mp.toutiao.com auth 页 → 等待登录态建立
   （URL 离开 /auth/）→ save storage_state
-- 小红书 (XiaohongshuSkills 桥)：提示用户用 XiaohongshuSkills 自带的方式
-  完成登录（该项目有自己的登录态管理），保存路径由我方记录
-  ——M4-3 阶段不强耦合其内部登录机制，由用户在 mac 上按项目 README 操作
+- 小红书 (XiaohongshuSkills 桥)：subprocess 调 `cdp_publish.py login`
+  ——本仓库只启动 CLI，cookie 由其自有 Chrome user-data-dir 管理
+- 抖音 (Playwright)：与头条同骨架（仅 selectors + exit_keywords 不同）
+  → R7-7 重构后二者共用 `_playwright_login_run` 私有 helper
 
 退出语义：
-- 成功 → exit 0 + 打印 storage_state 路径
+- 成功 → exit 0 + log_event "saved: ..."
 - 用户中断（Ctrl-C） → exit 130
-- 平台 / Playwright 故障 → exit 1
+- 平台 / Playwright 故障 → PublishError → exit 1
+
+R7-7：所有 print 替换为 `log_event(stage="login", ref_id=account)`，让 U7-7
+前端可通过 logging.Handler 订阅进度。
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
+from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 from pipeline.publishers.base import PublishError
 from pipeline.publishers import toutiao_selectors as tt_sel
+from pipeline.utils.log import get_logger, log_event
+
+
+# 模块级 logger（被 log_event 消费；U7-7 通过 logging.Handler 订阅）
+_LOG = get_logger("pipeline.publishers.login")
 
 
 # 登录态 JSON 默认输出目录
 DEFAULT_COOKIES_DIR = Path("secrets/cookies")
+
+
+@dataclass(frozen=True)
+class LoginProfile:
+    """Per-platform Playwright 登录骨架配置（R7-7 抽取，消除复制粘贴）。
+
+    仅头条 / 抖音使用——小红书走 subprocess 路径，骨架不同，不并入。
+
+    Attributes:
+        platform: 平台标签（用于日志路径 / 错误消息）。
+        selectors_module: 平台 selectors 模块，含 `PROFILE_URL_FALLBACK` 常量。
+        exit_keywords: URL 不应再包含的子串（任一存在即视为仍在登录态）；
+            wait_for_url 会等待 URL 离开所有这些子串。
+    """
+    platform: str
+    selectors_module: ModuleType
+    exit_keywords: tuple[str, ...]
 
 
 def _ensure_cookies_path(platform: str, account: str) -> Path:
@@ -46,21 +75,21 @@ def _chmod_600(path: Path) -> None:
         pass
 
 
-# ── 头条 ─────────────────────────────────────────────────────
+# ── Playwright 登录骨架（头条 / 抖音共用） ──────────────────
 
 
-def login_toutiao(account: str, *, timeout_s: int = 300) -> Path:
-    """开有头 chromium → 头条创作者中心登录 → 保存 storage_state。
+def _playwright_login_run(
+    profile: LoginProfile,
+    account: str,
+    *,
+    timeout_s: int = 300,
+) -> Path:
+    """Playwright 登录骨架：launch → new_context → 遍历 URL fallback → 等待 URL
+    离开登录路径 → storage_state 落盘 + chmod 600 → finally browser.close。
 
-    Args:
-        account: 账号别名（main 等）
-        timeout_s: 等用户完成登录的最大秒数（默认 5 分钟）
-
-    Returns:
-        storage_state 文件路径
-
-    Raises:
-        PublishError: Playwright 未安装 / chromium 启动失败
+    90% 代码从原 `login_toutiao` 搬来；唯一差异由 `LoginProfile` 注入。
+    所有进度通过 `log_event(stage="login", ref_id=account)` 发出，便于
+    U7-7 Web UI 通过 logging.Handler 订阅。
     """
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -70,7 +99,7 @@ def login_toutiao(account: str, *, timeout_s: int = 300) -> Path:
             "run `pip install playwright && playwright install chromium`"
         ) from e
 
-    out_path = _ensure_cookies_path("toutiao", account)
+    out_path = _ensure_cookies_path(profile.platform, account)
 
     with sync_playwright() as p:
         try:
@@ -89,7 +118,7 @@ def login_toutiao(account: str, *, timeout_s: int = 300) -> Path:
             page = context.new_page()
 
             # 进登录入口
-            for url in tt_sel.PROFILE_URL_FALLBACK:
+            for url in profile.selectors_module.PROFILE_URL_FALLBACK:
                 try:
                     resp = page.goto(url, timeout=15000)
                     if resp is not None:
@@ -98,21 +127,27 @@ def login_toutiao(account: str, *, timeout_s: int = 300) -> Path:
                     continue
             else:
                 raise PublishError(
-                    "could not reach toutiao login entry; "
+                    f"could not reach {profile.platform} login entry; "
                     "check network / browser"
                 )
 
-            print(f"[login/toutiao/{account}] 请在浏览器里完成登录（扫码 / 短信 / 密码）。")
-            print(f"[login/toutiao/{account}] 等待登录完成（最多 {timeout_s}s）...")
-            print("[login/toutiao/{account}] 完成后页面会自动离开登录页。")
+            log_event(
+                _LOG, logging.INFO,
+                "请在浏览器里完成登录（扫码 / 短信 / 密码）",
+                stage="login", ref_id=account,
+            )
+            log_event(
+                _LOG, logging.INFO,
+                f"等待登录完成（最多 {timeout_s}s）；完成后页面会自动离开登录页",
+                stage="login", ref_id=account,
+            )
 
-            # 等待 URL 离开登录路径（任一 auth/login/passport 子串消失）
-            # 不强制特定 URL：登录后头条可能跳到任一创作者中心页
+            # 等待 URL 离开登录路径
             try:
                 page.wait_for_url(
                     lambda url: not any(
                         kw in url.lower()
-                        for kw in ("login", "auth", "passport")
+                        for kw in profile.exit_keywords
                     ),
                     timeout=timeout_s * 1000,
                 )
@@ -129,10 +164,38 @@ def login_toutiao(account: str, *, timeout_s: int = 300) -> Path:
                 encoding="utf-8",
             )
             _chmod_600(out_path)
-            print(f"[login/toutiao/{account}] saved: {out_path}")
+            log_event(
+                _LOG, logging.INFO,
+                f"saved: {out_path}",
+                stage="login", ref_id=account,
+            )
             return out_path
         finally:
             browser.close()
+
+
+# ── 头条 ─────────────────────────────────────────────────────
+
+
+def login_toutiao(account: str, *, timeout_s: int = 300) -> Path:
+    """头条登录 thin wrapper：构造 LoginProfile 调 `_playwright_login_run`。
+
+    Args:
+        account: 账号别名（main 等）
+        timeout_s: 等用户完成登录的最大秒数（默认 5 分钟）
+
+    Returns:
+        storage_state 文件路径
+
+    Raises:
+        PublishError: Playwright 未安装 / chromium 启动失败 / 等待超时
+    """
+    profile = LoginProfile(
+        platform="toutiao",
+        selectors_module=tt_sel,
+        exit_keywords=("login", "auth", "passport"),
+    )
+    return _playwright_login_run(profile, account, timeout_s=timeout_s)
 
 
 # ── 小红书（subprocess 调 XiaohongshuSkills 自带 login） ───
@@ -218,7 +281,11 @@ def login_xiaohongshu(
         encoding="utf-8",
     )
     _chmod_600(out_path)
-    print(f"[login/xiaohongshu/{account}] login OK; marker saved: {out_path}")
+    log_event(
+        _LOG, logging.INFO,
+        f"login OK; marker saved: {out_path}",
+        stage="login", ref_id=account,
+    )
     return out_path
 
 
@@ -231,7 +298,7 @@ def _now_iso() -> str:
 
 
 def login_douyin(account: str, *, timeout_s: int = 300) -> Path:
-    """抖音登录：开有头 chromium → 创作者中心 → 扫码登录。
+    """抖音登录 thin wrapper：构造 LoginProfile 调 `_playwright_login_run`。
 
     抖音登录流程：
     1. 访问 creator.douyin.com → 跳登录页
@@ -239,81 +306,16 @@ def login_douyin(account: str, *, timeout_s: int = 300) -> Path:
     3. 登录后页面跳回 creator.douyin.com
     4. 保存 storage_state JSON
 
-    与头条登录逻辑相似（都是 Playwright storage_state 模式），单独函数
-    是因为 cookie 路径 / 等待 URL 不一样。
+    与头条共用骨架，仅 selectors 与 exit_keywords 不同（douyin 优先检查
+    "passport"）。
     """
-    try:
-        from playwright.sync_api import (
-            sync_playwright, TimeoutError as PWTimeout,
-        )
-    except ImportError as e:
-        raise PublishError(
-            f"playwright not installed: {e}; "
-            "run `pip install playwright && playwright install chromium`"
-        ) from e
-
     from pipeline.publishers import douyin_selectors as dy_sel
-
-    out_path = _ensure_cookies_path("douyin", account)
-
-    with sync_playwright() as p:
-        try:
-            browser = p.chromium.launch(headless=False)
-        except Exception as e:
-            raise PublishError(f"chromium launch failed: {e!r}") from e
-        try:
-            ctx = browser.new_context(
-                viewport={"width": 1440, "height": 900},
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/126.0.0.0 Safari/537.36"
-                ),
-            )
-            page = ctx.new_page()
-
-            # 进登录入口
-            for url in dy_sel.PROFILE_URL_FALLBACK:
-                try:
-                    resp = page.goto(url, timeout=15000)
-                    if resp is not None:
-                        break
-                except Exception:
-                    continue
-            else:
-                raise PublishError(
-                    "could not reach douyin login entry; "
-                    "check network / browser"
-                )
-
-            print(f"[login/douyin/{account}] 请在浏览器里用抖音 App 扫码登录。")
-            print(f"[login/douyin/{account}] 等待登录完成（最多 {timeout_s}s）...")
-
-            # 等待 URL 离开登录路径
-            try:
-                page.wait_for_url(
-                    lambda url: not any(
-                        kw in url.lower()
-                        for kw in ("passport", "login", "auth")
-                    ),
-                    timeout=timeout_s * 1000,
-                )
-            except PWTimeout as e:
-                raise PublishError(
-                    f"login timeout after {timeout_s}s; user did not scan QR"
-                ) from e
-
-            # 保存 storage_state
-            state = ctx.storage_state()
-            out_path.write_text(
-                json.dumps(state, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            _chmod_600(out_path)
-            print(f"[login/douyin/{account}] saved: {out_path}")
-            return out_path
-        finally:
-            browser.close()
+    profile = LoginProfile(
+        platform="douyin",
+        selectors_module=dy_sel,
+        exit_keywords=("passport", "login", "auth"),
+    )
+    return _playwright_login_run(profile, account, timeout_s=timeout_s)
 
 
 # ── 顶层分发 ────────────────────────────────────────────────

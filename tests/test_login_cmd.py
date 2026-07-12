@@ -464,3 +464,57 @@ def test_run_login_dispatches_to_douyin(tmp_path: Path, monkeypatch) -> None:
     assert called["fn"] == "douyin"
     assert called["account"] == "main"
     assert out == tmp_path / "douyin_main.json"
+
+
+# ── R7-7：结构化日志（login_toutiao 必须调用 log_event ≥3 次） ──
+
+
+def test_login_toutiao_emits_structured_log_events(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """R7-7：login_toutiao 至少发出 3 条 log_event（starting / 等待用户 / saved）。
+
+    验证用 monkeypatch 替换 `pipeline.publishers.login_cmd.log_event`，断言：
+    - 调用次数 ≥ 3
+    - 所有调用 stage="login" + ref_id=account
+    - msg 含 "saved" 关键词（最后一条）
+    """
+    monkeypatch.chdir(tmp_path)
+
+    fake_state = {
+        "cookies": [{"name": "sessionid", "value": "real", "domain": ".toutiao.com"}],
+        "origins": [],
+    }
+    fake_context = MagicMock()
+    fake_context.storage_state.return_value = fake_state
+    fake_context.new_page.return_value = MagicMock()
+    fake_browser = MagicMock()
+    fake_browser.new_context.return_value = fake_context
+    fake_page = fake_context.new_page.return_value
+    fake_page.wait_for_url.return_value = None
+    fake_page.goto.return_value = MagicMock(status=200)
+
+    fake_p = MagicMock()
+    fake_p.chromium.launch.return_value = fake_browser
+    fake_p.__enter__ = lambda s: fake_p
+    fake_p.__exit__ = lambda s, *a: None
+
+    calls: list[dict] = []
+    def fake_log_event(logger, level, msg, *, stage="-", ref_id=None):
+        calls.append({"level": level, "msg": msg, "stage": stage, "ref_id": ref_id})
+
+    monkeypatch.setattr(
+        "pipeline.publishers.login_cmd.log_event", fake_log_event,
+    )
+
+    with patch("playwright.sync_api.sync_playwright", return_value=fake_p):
+        login_toutiao("main", timeout_s=5)
+
+    assert len(calls) >= 3, f"expected >=3 log_event calls, got {len(calls)}: {calls}"
+    for c in calls:
+        assert c["stage"] == "login", f"bad stage: {c}"
+        assert c["ref_id"] == "main", f"bad ref_id: {c}"
+    # 最后一条必须是 saved
+    assert "saved" in calls[-1]["msg"].lower(), (
+        f"expected last log_event msg to mention 'saved', got: {calls[-1]['msg']!r}"
+    )
