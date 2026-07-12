@@ -21,7 +21,9 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pipeline.creators import derivative_wechat_mp
 from pipeline.creators import llm as llm_mod
+from pipeline.creators.derivative_wechat_mp import WechatMpOutput
 from pipeline.creators.llm import complete_json
 from pipeline.models import Content
 from pipeline.utils.errors import BudgetExceeded, CreateError
@@ -90,6 +92,7 @@ class DerivativeResult:
     toutiao: ToutiaoOutput | None = None
     xiaohongshu: XiaohongshuOutput | None = None
     x: XOutput | None = None
+    wechat_mp: WechatMpOutput | None = None
     failed_platforms: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -415,6 +418,7 @@ def derive_one(
     toutiao = None
     xiaohongshu = None
     x = None
+    wechat_mp = None
 
     # 注意：只捕 CreateError；BudgetExceeded 让其自然上抛（审计 Bug 2）
     if "toutiao" in platforms:
@@ -453,11 +457,24 @@ def derive_one(
                        stage="derive", ref_id=content.id)
             failed.append("x")
 
+    if "wechat_mp" in platforms:
+        try:
+            wechat_mp = derivative_wechat_mp.derive_wechat_mp(
+                title=title, canonical_md=canonical_md,
+                conn=conn, ref_id=content.id,
+            )
+            derivative_wechat_mp.write_wechat_mp(output_dir, wechat_mp)
+        except CreateError as e:
+            log_event(_LOGGER, logging.WARNING, f"wechat_mp derivative failed: {e}",
+                       stage="derive", ref_id=content.id)
+            failed.append("wechat_mp")
+
     return DerivativeResult(
         content_id=content.id,
         toutiao=toutiao,
         xiaohongshu=xiaohongshu,
         x=x,
+        wechat_mp=wechat_mp,
         failed_platforms=tuple(failed),
     )
 
@@ -468,6 +485,7 @@ def derive_for_content(
     output_root: Path,
     now: str,
     conn: sqlite3.Connection | None = None,
+    platforms: tuple[str, ...] = ("toutiao", "xiaohongshu", "x"),
 ) -> DerivativeResult:
     """便捷包装：从 content.canonical_path 推出 output_dir。"""
     output_dir = Path(content.canonical_path).parent
@@ -476,6 +494,7 @@ def derive_for_content(
         output_dir=output_dir,
         now=now,
         conn=conn,
+        platforms=platforms,
     )
 
 
@@ -544,6 +563,7 @@ def run_derivative(
             output_root=output_root,
             now=now,
             conn=conn,
+            platforms=platforms,
         )
         # 把派生成功的平台写回 contents.formats
         succeeded: list[str] = []
@@ -553,6 +573,8 @@ def run_derivative(
             succeeded.append("xiaohongshu")
         if result.x is not None:
             succeeded.append("x")
+        if result.wechat_mp is not None:
+            succeeded.append("wechat_mp")
         if succeeded:
             _update_formats_field(conn, content.id, tuple(succeeded), now)
         results.append(result)
