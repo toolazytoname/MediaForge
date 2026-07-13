@@ -684,7 +684,7 @@
 
 ⚠️ **本任务修复过程中发现的自引入回归（同一会话内，已修复）**：排查该问题时，`tests/webui/test_api_login.py` 里 U7-9 新增的两个测试（`test_delete_removes_account_from_config_yaml`、`test_delete_account_disappears_from_list_accounts_end_to_end`）调用真实 DELETE 端点却**没有** `monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", ...)`（`DEFAULT_COOKIES_DIR = Path("secrets/cookies")` 是相对 cwd 路径，同目录其余 delete 测试都正确做了隔离，唯独这两个漏了）——导致跑 `pytest tests/ -q` 时会删掉真实的 `secrets/cookies/toutiao_main.json`（用户当时刚登录成功、还没来得及被本任务的补救脚本读取备份的那份真实 cookie 文件，已确认丢失，无备份）。已给两个测试补上同样的隔离 patch，并用「canary 文件」验证法（在真实路径放置标记文件、跑测试、检查是否被删）确认修复后 `pytest tests/ -q` 全程不再触碰 `secrets/cookies/` 下的真实文件；顺手 grep 全仓库确认没有其它测试有相同的相对路径隔离漏洞。**用户需要重新走一次头条一键登录**（好消息：借助本任务的主修复，这次登录成功后会正确出现在账号中心，不会再显示 0）。
 
-✅ 完成于 2026-07-13，commit （随后补），备注见上（含自引入回归修复）。
+✅ 完成于 2026-07-13，commit c652d35，备注见上（含自引入回归修复）。
 
 ### U7-3 审核台补图卡缩略预览（MEDIUM，§7 明确要求但缺失）
 - [ ] **目标**：审核时直接在页面看到小红书图卡 PNG 缩略图，不用点开文件
