@@ -70,4 +70,67 @@ def remove_account_from_config(
     return True
 
 
-__all__ = ["remove_account_from_config"]
+# credential 字段名按 platform kind 决定：playwright 存 cookies 文件路径，
+# api 存 credentials 文件路径（与 pipeline/config.py 的 AccountPlaywright /
+# AccountAPI 判别式一致，TECH_SPEC §6 契约）。
+_CREDENTIAL_FIELD_BY_KIND = {"playwright": "cookies", "api": "credentials"}
+
+
+def add_account_to_config(
+    platform: str,
+    account: str,
+    *,
+    config_path: str | Path | None = None,
+) -> bool:
+    """一键登录成功后，把账号登记进 `platforms.<platform>.accounts[]`。
+
+    背景：一键登录只把 cookie/凭据存进 `secrets/cookies/`，从不touch
+    `config.yaml`——但账号中心的账号数/健康度全部读 config.yaml 声明的
+    账号列表（`collect_cookie_health`），导致登录明明成功、UI 却一直显示
+    0 个账号（用户实测反馈：「明明已经登录成功了，但是还是0」）。
+
+    Args:
+        platform: 平台 key（如 "toutiao"）。
+        account: 账号 id（如 "main"）。
+        config_path: 覆盖 config.yaml 路径；默认 `deps._CONFIG_PATH`。
+
+    Returns:
+        True 表示确实新增了一条；False 表示幂等 no-op —— 配置文件不存在、
+        platform 未配置（无法凭空猜 windows，不能瞎创建 platform 块），
+        或该账号已经在列表里。
+    """
+    path = Path(config_path if config_path is not None else deps._CONFIG_PATH)
+    if not path.exists():
+        return False
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.load(f)
+
+    platforms = (data or {}).get("platforms") or {}
+    platform_cfg = platforms.get(platform)
+    if not platform_cfg:
+        return False
+
+    field = _CREDENTIAL_FIELD_BY_KIND.get(platform_cfg.get("kind"))
+    if field is None:
+        return False
+
+    accounts = platform_cfg.get("accounts")
+    if accounts is None:
+        return False
+
+    if any(acc.get("id") == account for acc in accounts):
+        return False
+
+    accounts.append({
+        "id": account,
+        field: f"secrets/cookies/{platform}_{account}.json",
+    })
+    with path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+    return True
+
+
+__all__ = ["remove_account_from_config", "add_account_to_config"]

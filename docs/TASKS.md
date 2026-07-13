@@ -668,6 +668,24 @@
 
 ✅ 完成于 2026-07-12，commit 322e6a1（小红书登录参数顺序 + None 崩溃修复）+ commit ce8c65e（删除账号彻底移除：config_edit.py + accounts.py 接线 + 测试），备注见上。
 
+### U7-10 一键登录成功后账号未登记进 config.yaml，账号中心永远显示 0（HIGH，用户实测反馈「明明已经登录成功了，但是还是0」）
+- [x] **目标**：修复用户实测发现的 bug——头条一键登录浏览器弹出、自动登录成功（读的是已有 cookie），但账号中心页面「账号数 0 健康 0/0 最后校验 从未」，登录结果完全不反映在 UI 上。
+- **错在哪**：`login_bridge.py::execute_login_run` 一直以来只把 cookie/凭据文件写进 `secrets/cookies/`，从不 touch `config.yaml`；而账号中心的账号数/健康度（`collect_cookie_health`）只读 `config.yaml` 里 `platforms.<platform>.accounts[]` 声明过的账号——两者从设计上就没接起来，登录再成功也不会出现在 UI，除非账号本来就手工写在 config.yaml 里。
+- **怎么改**：
+  1. 新增 `pipeline/webui/config_edit.py::add_account_to_config(platform, account, *, config_path=None) -> bool`：`remove_account_from_config` 的镜像操作，用 `ruamel.yaml` round-trip 在 `accounts[]` 追加一条 `{id: account, <cookies|credentials>: secrets/cookies/<platform>_<account>.json}`；credential 字段名按 `platform.kind`（`playwright`→`cookies`，`api`→`credentials`，与 `pipeline/config.py` 判别式一致）；platform 未配置/文件不存在/账号已存在均幂等 `False`（不会替用户瞎造一个 platform 块——没有 windows 信息编不出合法配置）
+  2. `login_bridge.py::execute_login_run` 在 `run_login` 成功后调一次 `add_account_to_config(platform, account)`
+  3. **一次性补救**：用户此前两次已成功登录（toutiao、xiaohongshu）发生在本修复之前，凭据文件已在但从未登记进 config.yaml；手工跑 `add_account_to_config` 把这两条补登记回真实 `config.yaml`，让账号中心立刻反映已有登录状态
+- **验收标准**：
+  - `python -m pytest tests/webui/test_config_edit.py -q` 全绿（新增 5 例：追加到空列表、兄弟账号/注释保留、已存在幂等、platform 未配置幂等、config 文件缺失幂等）
+  - `python -m pytest tests/webui/test_api_login.py -q` 全绿（新增端到端例：POST 登录成功 → config.yaml 多一条 → `GET /accounts` 能看到）
+  - `python -m pytest tests/ -q` 无新增回归
+- **红线**：不给 `pipeline/config.py` 加字段/改 Adapter 契约；不会为未在 config.yaml 出现过的 platform 凭空生成配置块
+- **参考**：U7-9（`remove_account_from_config` 的姊妹函数）
+
+⚠️ **本任务修复过程中发现的自引入回归（同一会话内，已修复）**：排查该问题时，`tests/webui/test_api_login.py` 里 U7-9 新增的两个测试（`test_delete_removes_account_from_config_yaml`、`test_delete_account_disappears_from_list_accounts_end_to_end`）调用真实 DELETE 端点却**没有** `monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", ...)`（`DEFAULT_COOKIES_DIR = Path("secrets/cookies")` 是相对 cwd 路径，同目录其余 delete 测试都正确做了隔离，唯独这两个漏了）——导致跑 `pytest tests/ -q` 时会删掉真实的 `secrets/cookies/toutiao_main.json`（用户当时刚登录成功、还没来得及被本任务的补救脚本读取备份的那份真实 cookie 文件，已确认丢失，无备份）。已给两个测试补上同样的隔离 patch，并用「canary 文件」验证法（在真实路径放置标记文件、跑测试、检查是否被删）确认修复后 `pytest tests/ -q` 全程不再触碰 `secrets/cookies/` 下的真实文件；顺手 grep 全仓库确认没有其它测试有相同的相对路径隔离漏洞。**用户需要重新走一次头条一键登录**（好消息：借助本任务的主修复，这次登录成功后会正确出现在账号中心，不会再显示 0）。
+
+✅ 完成于 2026-07-13，commit （随后补），备注见上（含自引入回归修复）。
+
 ### U7-3 审核台补图卡缩略预览（MEDIUM，§7 明确要求但缺失）
 - [ ] **目标**：审核时直接在页面看到小红书图卡 PNG 缩略图，不用点开文件
 - **错在哪**：TECH_SPEC §7 要求审核台含「图卡缩略引用」、§图卡 PNG 直接 `<img>`。但 `pipeline/webui/templates/review.html` 全文只有一个指向 canonical.md 的文字链接（第 15 行），**没有任何 `<img>` 图卡预览**（已 grep 确认 review.html 无 png/img/slide 字样）

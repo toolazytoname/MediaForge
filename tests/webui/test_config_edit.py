@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pipeline.webui.config_edit import remove_account_from_config
+from pipeline.webui.config_edit import (
+    add_account_to_config,
+    remove_account_from_config,
+)
 
 _CONFIG_YAML = """\
 timezone: Asia/Shanghai
@@ -96,3 +99,79 @@ def test_missing_config_file_returns_false(tmp_path: Path) -> None:
     path = tmp_path / "no-such-config.yaml"
     removed = remove_account_from_config("toutiao", "main", config_path=path)
     assert removed is False
+
+
+# ── add_account_to_config（一键登录成功后自动登记账号） ─────
+
+
+_CONFIG_YAML_EMPTY_ACCOUNTS = """\
+timezone: Asia/Shanghai
+pillars: []
+llm:
+  tiers:
+    cheap: x
+    creative: y
+    critical: z
+
+# ── Platforms ─────────────────────────────────────────────
+platforms:
+  toutiao:
+    kind: playwright
+    windows: ["07:00-09:00"]
+    accounts: []
+  xiaohongshu:
+    kind: playwright
+    windows: ["12:00-14:00"]
+    accounts:
+      - id: other
+        cookies: secrets/cookies/xiaohongshu_other.json
+"""
+
+
+def _write_empty_accounts_config(tmp_path: Path) -> Path:
+    p = tmp_path / "config.yaml"
+    p.write_text(_CONFIG_YAML_EMPTY_ACCOUNTS, encoding="utf-8")
+    return p
+
+
+def test_add_account_appends_to_empty_accounts_list(tmp_path: Path) -> None:
+    path = _write_empty_accounts_config(tmp_path)
+    added = add_account_to_config("toutiao", "main", config_path=path)
+    assert added is True
+
+    text = path.read_text(encoding="utf-8")
+    assert "id: main" in text
+    assert "secrets/cookies/toutiao_main.json" in text
+
+
+def test_add_account_preserves_sibling_accounts_and_comments(tmp_path: Path) -> None:
+    path = _write_empty_accounts_config(tmp_path)
+    add_account_to_config("xiaohongshu", "main", config_path=path)
+
+    text = path.read_text(encoding="utf-8")
+    assert "id: other" in text  # 兄弟账号原样保留
+    assert "xiaohongshu_other.json" in text
+    assert "# ── Platforms" in text  # 注释原样保留
+
+
+def test_add_account_already_present_is_idempotent_no_op(tmp_path: Path) -> None:
+    path = _write_empty_accounts_config(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    added = add_account_to_config("xiaohongshu", "other", config_path=path)
+    assert added is False
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_add_account_missing_platform_returns_false_no_op(tmp_path: Path) -> None:
+    """douyin 在 config.yaml 里还没配置块 -> 不知道 windows，不能瞎造，no-op。"""
+    path = _write_empty_accounts_config(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    added = add_account_to_config("douyin", "main", config_path=path)
+    assert added is False
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_add_account_missing_config_file_returns_false(tmp_path: Path) -> None:
+    path = tmp_path / "no-such-config.yaml"
+    added = add_account_to_config("toutiao", "main", config_path=path)
+    assert added is False

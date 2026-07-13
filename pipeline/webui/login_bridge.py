@@ -42,6 +42,7 @@ from pipeline.publishers.login_cmd import (
     remove_progress_listener,
     run_login,
 )
+from pipeline.webui.config_edit import add_account_to_config
 
 
 # 模块级 logger（bridge 自身日志）
@@ -129,6 +130,11 @@ def execute_login_run(run_id: str, platform: str, account: str) -> None:
 
     try:
         path = run_login(platform, account)
+        # 一键登录只存 cookie/凭据文件，从不 touch config.yaml——但账号数/
+        # 健康度全读 config.yaml 声明的账号列表，登录成功后必须把账号登记
+        # 回去，否则 UI 永远显示 0 个账号（用户实测反馈，见 U7-10）。
+        # 幂等：已登记过 / platform 未在 config.yaml 配置块 都是安全 no-op。
+        add_account_to_config(platform, account)
         register_run(
             run_id,
             status="succeeded",

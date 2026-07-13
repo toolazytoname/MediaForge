@@ -134,6 +134,52 @@ def test_background_run_completes_with_succeeded_status(
     assert run["account"] == "main"
 
 
+# U7-10: 登录成功后账号要登记回 config.yaml，否则账号中心永远显示 0 个账号
+# （用户实测反馈：「明明已经登录成功了，但是还是0」）──────────────
+
+
+def test_successful_login_registers_account_in_config_and_account_list(
+    client: TestClient,
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """登录成功 -> config.yaml 的 accounts[] 多一条 -> GET /accounts 能看到它。"""
+    cfg_path = tmp_env / "config.yaml"
+    cfg_path.write_text(
+        "timezone: Asia/Shanghai\n"
+        "pillars:\n  - id: ai_daily\n    name: AI\n    description: d\n    scoring_hint: s\n"
+        "sources: []\n"
+        "llm: {tiers: {cheap: m, creative: m, critical: m}}\n"
+        "budget: {monthly_usd: 80.0}\n"
+        "platforms:\n"
+        "  toutiao:\n"
+        "    kind: playwright\n"
+        "    windows: [\"07:00-09:00\"]\n"
+        "    accounts: []\n",
+        encoding="utf-8",
+    )
+
+    before = client.get("/api/v1/accounts").json()
+    assert before["items"] == []
+
+    fake_path = tmp_env / "toutiao_main.json"
+    fake_path.write_text("{}", encoding="utf-8")
+    _patch_run_login(monkeypatch, return_value=fake_path)
+
+    response = client.post("/api/v1/accounts/toutiao/main/login", json={})
+    run_id = response.json()["run_id"]
+    client.get(f"/api/v1/runs/{run_id}")  # 触发 BackgroundTask 执行完
+
+    text = cfg_path.read_text(encoding="utf-8")
+    assert "id: main" in text
+
+    after = client.get("/api/v1/accounts").json()
+    assert any(
+        it["platform"] == "toutiao" and it["account"] == "main"
+        for it in after["items"]
+    )
+
+
 # mutex ──────────────────────────────────────────────────
 
 
@@ -552,8 +598,15 @@ def test_delete_blocked_while_login_in_progress(
 def test_delete_removes_account_from_config_yaml(
     client: TestClient,
     tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """账号在 config.yaml 里配置过 -> DELETE 后从 accounts[] 消失，兄弟账号保留。"""
+    from pipeline.webui import login_bridge
+
+    cookies_dir = tmp_env / "secrets" / "cookies"
+    cookies_dir.mkdir(parents=True)
+    monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", cookies_dir)
+
     cfg_path = tmp_env / "config.yaml"
     cfg_path.write_text(
         "timezone: Asia/Shanghai\n"
@@ -622,8 +675,15 @@ def test_delete_account_only_in_config_no_credential_file_still_deleted_true(
 def test_delete_account_disappears_from_list_accounts_end_to_end(
     client: TestClient,
     tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """端到端：DELETE 后 GET /accounts 不再返回该账号（不是只是标红）。"""
+    from pipeline.webui import login_bridge
+
+    cookies_dir = tmp_env / "secrets" / "cookies"
+    cookies_dir.mkdir(parents=True)
+    monkeypatch.setattr(login_bridge, "DEFAULT_COOKIES_DIR", cookies_dir)
+
     cfg_path = tmp_env / "config.yaml"
     cfg_path.write_text(
         "timezone: Asia/Shanghai\n"
