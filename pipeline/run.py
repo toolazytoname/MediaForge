@@ -1091,6 +1091,13 @@ COMMANDS = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    from pipeline.env_keys import load_env_secrets
+
+    # Settings 页保存的 key 落在 secrets/env.json，这里在任何子命令跑
+    # setup_provider_from_env() 之前统一合并进 os.environ（已存在的真实
+    # 进程 env 优先，不覆盖）。
+    load_env_secrets()
+
     parser = build_parser()
     args = parser.parse_args(argv)
     return COMMANDS[args.command](args)

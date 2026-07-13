@@ -105,7 +105,7 @@ function fileUrl(p: string): string {
         </template>
         <template #description>
           <div v-if="errorInfo.code === 'image_provider_unavailable'">
-            AI 出图需配置 image provider key（MiniMax / Agnes-AI 等），详见
+            AI 出图需配置 image provider key（MINIMAX_IMAGE_API_KEY 或 MINIMAX_API_KEY 环境变量），详见
             <a-button size="small" type="link" @click="goSettings">前往设置 →</a-button>
           </div>
         </template>

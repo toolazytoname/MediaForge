@@ -248,7 +248,7 @@ function goSettings() {
                     前往设置 →
                   </a-button>
                   <div v-if="imgErrorAlert.code === 'image_provider_unavailable'" style="color: #888; font-size: 12px; margin-top: 4px">
-                    AI 出图需配置 image provider key（MiniMax / Agnes-AI），详见 /settings
+                    AI 出图需配置 image provider key（MINIMAX_IMAGE_API_KEY 或 MINIMAX_API_KEY 环境变量），详见 /settings
                   </div>
                 </template>
               </a-alert>

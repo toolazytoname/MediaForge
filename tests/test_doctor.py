@@ -439,6 +439,56 @@ class TestPublishEnabledCheck:
         assert "关" in p_check.hint or "false" in p_check.hint.lower()
 
 
+# ── 6.5 image_key（可选功能，永远 ok=True，只提示）───────────
+
+
+class TestImageKeyCheck:
+    def test_no_image_key_env_warns_but_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """env 无 image key → image_key 仍 ok=True，hint 带 ⚠️ 提示不可用。"""
+        from pipeline.doctor import run_doctor
+
+        for k in ("MINIMAX_IMAGE_API_KEY", "MINIMAX_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+
+        cfg = tmp_path / "config.yaml"
+        _write_minimal_config(cfg)
+
+        results = run_doctor(
+            config_path=str(cfg),
+            db_path=str(tmp_path / "state.db"),
+            secrets_dir=str(tmp_path / "secrets"),
+        )
+        img_check = next(r for r in results if r.name == "image_key")
+        # 可选功能：未设置也不 fail，不拖垮 doctor 整体 exit code
+        assert img_check.ok is True
+        assert "⚠️" in img_check.hint
+        assert "MINIMAX_IMAGE_API_KEY" in img_check.hint
+
+    def test_image_key_env_passes_with_hint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """env 有 MINIMAX_IMAGE_API_KEY → image_key ✅，hint 不含 ⚠️。"""
+        from pipeline.doctor import run_doctor
+
+        monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+        monkeypatch.setenv("MINIMAX_IMAGE_API_KEY", "test-img-key-12345")
+
+        cfg = tmp_path / "config.yaml"
+        _write_minimal_config(cfg)
+
+        results = run_doctor(
+            config_path=str(cfg),
+            db_path=str(tmp_path / "state.db"),
+            secrets_dir=str(tmp_path / "secrets"),
+        )
+        img_check = next(r for r in results if r.name == "image_key")
+        assert img_check.ok is True
+        assert "⚠️" not in img_check.hint
+        assert "test-img-key-12345" not in img_check.hint
+
+
 # ── 7. 完整环境全 ✅ ──────────────────────────────────────
 
 

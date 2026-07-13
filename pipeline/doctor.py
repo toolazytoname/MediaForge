@@ -5,7 +5,7 @@
 - **绝不打印密钥值**（HARD_PARTS §9 凭据安全）
 - **绝不调 LLM**（避免网络抖动误报）
 
-检查项（顺序固定，6 项）：
+检查项（顺序固定，7 项）：
   1. config       — config.yaml 存在 + load_config 通过
   2. state.db     — state.db 文件存在
   3. secrets      — secrets/ 目录存在（空目录也算过）
@@ -13,6 +13,9 @@
                    / OPENAI_API_KEY 至少一个（与 setup_provider_from_env 优先级一致）
   5. budget       — config.budget.monthly_usd > 0
   6. publish.enabled — 当前值（true 提示「⚠️ 真发」，不 fail 只 warn）
+  7. image_key    — MINIMAX_IMAGE_API_KEY / MINIMAX_API_KEY 是否设置（与
+                   image_gen.MiniMaxImageProvider.from_env 优先级一致）；AI 出图是
+                   可选功能，未设置不 fail，只在 hint 里提示（不影响 exit code）
 """
 from __future__ import annotations
 
@@ -24,12 +27,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from pipeline.config import load_config
-
-
-# 关键 env var 名集中常量（与 llm.py::setup_provider_from_env 同源）
-_LLM_ENV_VARS = (
-    "AGNES_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
-)
+from pipeline.env_keys import IMAGE_ENV_VARS as _IMAGE_ENV_VARS
+from pipeline.env_keys import LLM_ENV_VARS as _LLM_ENV_VARS
 
 
 @dataclass(frozen=True)
@@ -180,6 +179,29 @@ def _check_publish_enabled(cfg: Any | None) -> CheckResult:
     )
 
 
+def _check_image_key() -> CheckResult:
+    """env 是否设置 image_gen 专用 key（不打印值）。
+
+    AI 出图是可选功能（HARD_PARTS/app.py::main() 明确不应因缺 key 拖垮整个服务），
+    所以本项永远 ok=True，只通过 hint 提示是否已配置——不影响 doctor 整体 exit code。
+    """
+    set_vars = [v for v in _IMAGE_ENV_VARS if os.environ.get(v)]
+    if not set_vars:
+        return CheckResult(
+            name="image_key",
+            ok=True,
+            hint=(
+                "⚠️ 未设置 image provider key；AI 出图功能不可用（可选功能，不影响其余"
+                "流程）。如需使用请 export MINIMAX_IMAGE_API_KEY=<key>（或 MINIMAX_API_KEY）"
+            ),
+        )
+    return CheckResult(
+        name="image_key",
+        ok=True,
+        hint=f"已设置 {', '.join(set_vars)}（值未显示）",
+    )
+
+
 def run_doctor(
     config_path: str = "./config.yaml",
     db_path: str = "state.db",
@@ -188,7 +210,7 @@ def run_doctor(
     """体检主入口（纯函数，便于测试）。
 
     Returns:
-        按 spec 固定顺序的 6 项 CheckResult。
+        按 spec 固定顺序的 7 项 CheckResult。
         调用方根据是否 ok 决定 exit code。
     """
     # 先跑 config 检查（其它项可能依赖 cfg）
@@ -209,4 +231,5 @@ def run_doctor(
         _check_llm_key(),
         _check_budget(cfg),
         _check_publish_enabled(cfg),
+        _check_image_key(),
     ]

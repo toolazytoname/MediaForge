@@ -254,3 +254,95 @@ class TestSettings:
         assert isinstance(body["config"], dict)
         # doctor 列表
         assert isinstance(body["doctor"], list)
+
+
+# ── Settings keys（Settings 页可用性改造：全局服务 key 配置） ──
+
+
+@pytest.fixture
+def keys_env(client, tmp_path, monkeypatch):
+    """隔离 /settings/keys 端点的落盘路径 + 相关 env var，不污染真实环境。"""
+    from pipeline.webui.api import settings as settings_mod
+    from pipeline.env_keys import LLM_ENV_VARS, IMAGE_ENV_VARS
+
+    monkeypatch.setattr(settings_mod, "_ENV_SECRETS_PATH", str(tmp_path / "env.json"))
+    for name in set(LLM_ENV_VARS) | set(IMAGE_ENV_VARS):
+        monkeypatch.delenv(name, raising=False)
+    return tmp_path
+
+
+class TestSettingsKeysGet:
+    def test_lists_groups_all_unset(self, client, keys_env):
+        r = client.get("/api/v1/settings/keys")
+        assert r.status_code == 200
+        body = r.json()
+        groups = {g["group"]: g for g in body["groups"]}
+        assert set(groups) == {"llm", "image"}
+        assert all(not k["set"] and k["masked"] is None for k in groups["llm"]["keys"])
+
+    def test_reflects_process_env(self, client, keys_env, monkeypatch):
+        monkeypatch.setenv("MINIMAX_API_KEY", "sk-1234567890")
+        r = client.get("/api/v1/settings/keys")
+        body = r.json()
+        llm_keys = {k["name"]: k for g in body["groups"] for k in g["keys"] if g["group"] == "llm"}
+        assert llm_keys["MINIMAX_API_KEY"]["set"] is True
+        assert llm_keys["MINIMAX_API_KEY"]["masked"] == "*********7890"
+        # 绝不回传明文
+        assert "sk-1234567890" not in r.text
+
+
+class TestSettingsKeysSave:
+    def test_unknown_key_name_rejected(self, client, keys_env):
+        r = client.post("/api/v1/settings/keys", json={"name": "NOT_A_KEY", "value": "x"})
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"]["code"] == "unknown_key_name"
+
+    def test_empty_value_rejected(self, client, keys_env):
+        r = client.post("/api/v1/settings/keys", json={"name": "MINIMAX_API_KEY", "value": "  "})
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"]["code"] == "empty_value"
+
+    def test_save_persists_and_updates_environ(self, client, keys_env):
+        r = client.post(
+            "/api/v1/settings/keys",
+            json={"name": "MINIMAX_API_KEY", "value": "sk-1234567890"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body == {
+            "name": "MINIMAX_API_KEY", "set": True,
+            "masked": "*********7890", "reload_error": None,
+        }
+        assert os.environ["MINIMAX_API_KEY"] == "sk-1234567890"
+
+        import json as _json
+        data = _json.loads((keys_env / "env.json").read_text(encoding="utf-8"))
+        assert data == {"MINIMAX_API_KEY": "sk-1234567890"}
+
+    def test_save_response_never_contains_plaintext(self, client, keys_env):
+        r = client.post(
+            "/api/v1/settings/keys",
+            json={"name": "OPENAI_API_KEY", "value": "sk-supersecretvalue"},
+        )
+        assert "sk-supersecretvalue" not in r.text
+
+
+class TestSettingsKeysDelete:
+    def test_unknown_key_name_rejected(self, client, keys_env):
+        r = client.delete("/api/v1/settings/keys/NOT_A_KEY")
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"]["code"] == "unknown_key_name"
+
+    def test_clears_key_and_environ(self, client, keys_env):
+        client.post(
+            "/api/v1/settings/keys",
+            json={"name": "MINIMAX_API_KEY", "value": "sk-1234567890"},
+        )
+        r = client.delete("/api/v1/settings/keys/MINIMAX_API_KEY")
+        assert r.status_code == 200
+        assert r.json()["set"] is False
+        assert "MINIMAX_API_KEY" not in os.environ
+
+        import json as _json
+        data = _json.loads((keys_env / "env.json").read_text(encoding="utf-8"))
+        assert data == {}

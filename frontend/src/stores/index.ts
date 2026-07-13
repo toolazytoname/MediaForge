@@ -3,7 +3,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { api, apiPost, unwrapError } from '../api/client'
+import { api, apiPost, unwrapError, GENERATION_TIMEOUT_MS } from '../api/client'
 
 // ── Dashboard ──────────────────────────────────────────────
 
@@ -522,9 +522,22 @@ export interface DoctorItem {
   hint: string
 }
 
+export interface SettingsKeyItem {
+  name: string
+  set: boolean
+  masked: string | null
+}
+
+export interface SettingsKeyGroup {
+  group: string
+  label: string
+  keys: SettingsKeyItem[]
+}
+
 export const useSettingsStore = defineStore('settings', () => {
   const config = ref<Record<string, any> | null>(null)
   const doctor = ref<DoctorItem[]>([])
+  const keyGroups = ref<SettingsKeyGroup[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
   async function load() {
@@ -540,7 +553,37 @@ export const useSettingsStore = defineStore('settings', () => {
       loading.value = false
     }
   }
-  return { config, doctor, loading, error, load }
+  async function loadKeys() {
+    try {
+      const r = await api.get<{ groups: SettingsKeyGroup[] }>('/settings/keys')
+      keyGroups.value = r.data.groups
+    } catch (e) {
+      message.error(`加载 key 状态失败：${unwrapError(e)}`)
+    }
+  }
+  async function saveKey(name: string, value: string): Promise<boolean> {
+    try {
+      await api.post('/settings/keys', { name, value })
+      message.success(`已保存 ${name}`)
+      await Promise.all([loadKeys(), load()])
+      return true
+    } catch (e) {
+      message.error(`保存失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  async function clearKey(name: string): Promise<boolean> {
+    try {
+      await api.delete(`/settings/keys/${name}`)
+      message.success(`已清除 ${name}`)
+      await Promise.all([loadKeys(), load()])
+      return true
+    } catch (e) {
+      message.error(`清除失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  return { config, doctor, keyGroups, loading, error, load, loadKeys, saveKey, clearKey }
 })
 
 // ── Creation (M10 P2 阶段 A) ────────────────────────────
@@ -595,6 +638,8 @@ export const useDerivativeStore = defineStore('derivative', () => {
     try {
       const r = await api.post<{ derivative: DerivativeResult }>(
         `/contents/${contentId}/derivative`,
+        undefined,
+        { timeout: GENERATION_TIMEOUT_MS },
       )
       return r.data.derivative
     } catch (e) {
@@ -766,6 +811,8 @@ export const useImageGenStore = defineStore('imagegen', () => {
     try {
       const r = await api.post<ImageGenResult>(
         `/contents/${contentId}/generate-images`,
+        undefined,
+        { timeout: GENERATION_TIMEOUT_MS },
       )
       return r.data
     } catch (e) {

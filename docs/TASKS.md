@@ -1294,3 +1294,98 @@ Asia/Shanghai` 配置项，可直接复用，不用新增字段）。
 
 ---
 
+## 待评估事项（真实用户走查发现，2026-07-13）✅ 已修复
+
+用户在内容详情页（`c_c66a5388`）点「图文衍生」卡片两个按钮连续踩到两个真实 bug，
+并质疑"这个流程有没有真测过"——核实后确认：`tests/webui/test_api_derivative_images.py`
+把 LLM 与图像生成调用全 mock 掉（"不真调 LLM"），导致下述超时类问题在自动化测试
+里天生不可见，用户的怀疑成立。三处根因均已定位并修复：
+
+- **Bug A（真 bug，配置错误）**：`frontend/src/api/client.ts` 的 axios 实例对所有
+  请求统一 `timeout: 30_000`，但"衍生小红书"/"真实 AI 出图"命中的后端接口是同步
+  长耗时调用——LLM 调用（`pipeline/creators/llm.py`）单次 `timeout_s=60`，×3 次重试
+  退避 1/2/4s，最坏 ≈187s；图像生成（`pipeline/creators/image_gen.py::MiniMaxImageProvider`）
+  单次 120s ×3 重试，最坏 ≈367s/张，`generate-images` 还要顺序出 cover+N 张。前端
+  30s 超时必然先于后端触发，误报 `timeout of 30000ms exceeded`。**修复**：新增
+  `GENERATION_TIMEOUT_MS = 10*60*1000`，仅在 `useDerivativeStore.run` /
+  `useImageGenStore.run` 两处 axios 调用传 `{ timeout: GENERATION_TIMEOUT_MS }`
+  覆盖，全局 30s 默认对其余快接口保持不变。
+- **Bug B（覆盖缺口）**：`pipeline/doctor.py` 原 6 项检查只覆盖文本 LLM key
+  （`AGNES_API_KEY`/`MINIMAX_API_KEY`/`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`），从未
+  检查 `image_gen.py::MiniMaxImageProvider.from_env` 实际读取的
+  `MINIMAX_IMAGE_API_KEY`/`MINIMAX_API_KEY`，导致 `/settings` 页面（直接转发
+  `doctor.run_doctor()`）全绿却对"AI 出图会失败"毫无预警。**修复**：新增第 7 项
+  `_check_image_key()`，仿 `_check_publish_enabled` 模式——**永远 `ok=True`**（AI
+  出图是可选功能，`webui/app.py::main()` 明确不应因缺 key 拖垮整个服务），只在
+  hint 里提示"⚠️ 未设置...（可选功能，不影响其余流程）"，不影响 doctor 整体 exit code。
+- **Bug C（文案错误）**：`ContentDetail.vue` 与 `Step4ImageGen.vue` 的报错提示均写
+  "配置 image provider key（MiniMax / Agnes-AI）"——但 Agnes-AI 只接入了文本 LLM
+  （M9-1），`image_gen.setup_provider_from_env()` 只会构造 `MiniMaxImageProvider`，
+  Agnes 对出图从来不是有效选项。用户照提示设 `AGNES_API_KEY` 只会徒劳。**修复**：
+  两处文案改为准确指出 `MINIMAX_IMAGE_API_KEY` 或 `MINIMAX_API_KEY` 环境变量。
+
+**验证**：`pytest tests/test_doctor.py -q` 29 通过（新增 2 例）；全量
+`pytest tests/ -q` 1456 通过 / 12 跳过，7 个失败与本次改动无关（`docs/TASKS.md`
+M13-1 已记录的既有已知失败：1 个 pyc 缓存误报 + 5 个 `test_image_gen.py` 默认模型名
+不一致 + 1 个 flaky 并发锁计时测试）；`npm run build` 通过；本地重启 webui 后 curl
+`/api/v1/settings` 确认 `image_key` 检查项已生效，grep 构建产物确认文案已修正。
+
+**未做**（受限于本仓库无前端自动化测试框架，无 vitest/`*.spec.ts`）：Bug A 的
+10 分钟超时未做端到端真实长耗时调用验证，仅走了代码走查 + 类型检查 + 手动点击
+验证的既有验收基线（与 M10-13 一致）。
+
+---
+
+## 待评估事项（用户临场提需求，2026-07-13）✅ 已完成：Settings 页新增 API Key 配置能力
+
+用户原话："完善一下设置页吧，现在这个完全没法用...看一下成熟的产品，像 yixiaoer
+之类的是怎么设置这些 key 的"。核实后确认：`Settings.vue` 此前只有「doctor 体检
+报告 + 脱敏 config JSON 只读展示」，没有任何输入框/保存按钮——用户即使看到 doctor
+提示"缺 key"，也**无法在 UI 里把 key 真的填进去**，只能去 shell 手动 `export`，
+这正是上面 2026-07-13 那次超时/出图 bug 的体验根因之一。
+
+排查发现项目里凭据落地方式异构成三类：①全局服务 key（LLM/image-gen，此前**零
+持久化**，只读活进程 env）②扫码平台（头条/小红书/抖音，已有完整一键登录 UI，
+U7-7~U7-10）③API 凭据平台（X/wechat_mp，`secrets/x_<account>.json` 等文件，只有
+静态文字指引，无表单）。本次**只做①**（两个真实 bug 的直接病因），②已解决不碰，
+③明确列为后续任务（见下）避免范围蔓延。
+
+**改动**：
+- 新增 `pipeline/env_keys.py`：`LLM_ENV_VARS`/`IMAGE_ENV_VARS` 名单 +
+  `load_env_secrets()`/`write_env_secret()`/`delete_env_secret()`/`mask()`，落盘
+  到新文件 `secrets/env.json`（纯 JSON，已被整目录 `.gitignore` 覆盖）。
+  `load_env_secrets()` 用 `os.environ.setdefault`——**真实进程 env 优先，不覆盖**，
+  避免这层新机制在生产环境意外覆盖运维已设置的值。
+- `pipeline/doctor.py` 的 `_LLM_ENV_VARS`/`_IMAGE_ENV_VARS` 改为从
+  `pipeline.env_keys` import，消除三处重复定义（DRY）。
+- `pipeline/webui/app.py::main()` 和 `pipeline/run.py::main()` 启动早期调用
+  `load_env_secrets()`，覆盖 CLI 全部子命令 + webui。
+- `pipeline/webui/api/settings.py` 新增 `GET/POST/DELETE /settings/keys`：
+  白名单校验（非法 key 名 400 `unknown_key_name`）、空值校验（400 `empty_value`）、
+  保存/清除后**立即热重载** `llm`/`image_gen` 两个 provider（`image_gen` 无
+  Mock 兜底，try/except 包住不拖垮整个端点），响应体绝不含明文（`mask()`）。
+- 前端：`useSettingsStore` 新增 `keyGroups`/`loadKeys()`/`saveKey()`/`clearKey()`；
+  `Settings.vue` 在 Doctor 卡片上方新增「API Key 配置」卡片，按 group 渲染
+  `a-input-password` + 保存/清除按钮，不回填已保存的明文。
+- 测试：`tests/test_env_keys.py`（新文件，11 例）+
+  `tests/webui/test_api_m10_5.py::TestSettingsKeysGet/Save/Delete`（新增 9 例，
+  含"响应体绝不含明文"断言）。
+
+**验证**：`pytest tests/test_env_keys.py tests/webui/test_api_m10_5.py
+tests/test_doctor.py -q` 68 通过；全量 `pytest tests/ -q` 1475 通过 / 12 跳过，
+7 个失败与本次改动无关（`git stash` 核实同样的 7 个测试在改动前的 main 分支上
+本就失败——M13-1 已记录的既有已知问题：1 个 pyc 缓存误报 + 5 个
+`test_image_gen.py` 默认模型名不一致 + 1 个 flaky 并发锁计时测试）；
+`npx vue-tsc -b` + `npm run build` 通过；手动 smoke：启动 webui → 保存假
+`MINIMAX_IMAGE_API_KEY` → 不重启进程、`GET /settings` 的 `image_key` 行立即从
+红变绿 → `DELETE` 清除后立即变回红，`secrets/env.json` 落盘正确（往返 + 幂等）。
+
+**明确未做（后续任务）**：
+- ⬜ X（`secrets/x_<account>.json`）/ wechat_mp（`secrets/wechat_mp_<account>.json`）
+  的凭据改为可在 Settings UI 里创建/编辑。受限于 `config_edit.py::add_account_to_config`
+  当前"platform 块必须已在 config.yaml 声明"的限制，改造面比本次大，需要单独设计。
+- ⬜ config.yaml 里非密钥类字段（budget/pillars/gate 阈值等）的可视化编辑——CLAUDE.md
+  M8 明确锁定"只读展示，不做 UI 改"，本次不推翻这个历史决策。
+
+---
+

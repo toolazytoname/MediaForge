@@ -267,6 +267,7 @@ def main() -> int:
 
     from pipeline.creators import image_gen
     from pipeline.creators import llm as llm_mod
+    from pipeline.env_keys import load_env_secrets
 
     try:
         cfg = deps.load_config(deps._CONFIG_PATH)
@@ -274,6 +275,9 @@ def main() -> int:
         port = cfg.webui.port
     except Exception:
         host, port = "127.0.0.1", 8787
+    # Settings 页保存的 key 落在 secrets/env.json，这里合并进 os.environ
+    # （已存在的真实进程 env 优先，不覆盖），再走原有 provider 初始化。
+    load_env_secrets()
     # 按 env 选真实 provider（否则全程 MockProvider，衍生/出图必然失败）。
     # llm 有 MockProvider 兜底不会抛；image_gen 没有兜底，key 缺失会直接
     # ValueError——图片出图是可选功能，不应该因为没配 key 就拖垮整个服务。
