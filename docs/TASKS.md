@@ -1202,11 +1202,13 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   ✅ 完成于 2026-07-12，commit 待提交，备注：初版（commit dab7609）漏了 wechat_mp 平台 + 无"添加账号"主动交互，本次补齐——`login_guidance()` 加 wechat_mp 项 + 新增 `auth_type`（scan_qr/config_file）字段；前端新增 `PlatformBadge.vue`（品牌色文字徽标）+ `PlatformCatalogModal.vue`（蚁小二式"已支持网格 + 点击展开引导 + 规划中占位分组"弹窗）；`Accounts.vue` 顶部加「+ 添加账号」按钮，tile 点击也可预选平台打开同一弹窗，卡片不再常驻展开 guidance 文案。
 
 ### M11-D｜数据看板补维度（对标蚁小二数据页）
-- [ ] **目标**：数据页补齐蚁小二式 tab【仪表盘｜账号数据｜作品数据｜排行榜】+ 时间窗(近7/14/30日)
+- [x] **目标**：数据页补齐蚁小二式 tab【仪表盘｜账号数据｜作品数据｜排行榜】+ 时间窗(近7/14/30日)
 - **步骤**：前端加 tab + 时间窗；后端复用 `db_reads`，缺的维度加**只读 SELECT**(增量)
 - **验收**：各 tab 渲染真实数据(空库空态)；新增只读查询各有单测；`pytest -q` 不回归
 - **声明改动文件**：`frontend/src/views/Analytics.vue`、（如需）`pipeline/db_reads.py`+`pipeline/webui/api/analytics.py`+`tests/*`、`frontend/dist/**`
 - **红线**：只读；不改 schema
+
+  ✅ 完成于 2026-07-11，commit 392ad52（+ 704ed8a 走查修复），备注：**补登**——代码/测试/前端在此前会话已实现并提交，仅 TASKS.md 记录漏更新。Analytics.vue 改 4 tab（仪表盘/账号数据/作品数据/排行榜）+ 顶部时间窗 radio（全部/近7/14/30日）+ 排行榜 metric 切换；后端新增 `db_reads.account_metric_totals`/`content_metric_totals`（复用 `platform_metric_totals` 同模式：LEFT JOIN 最新 metric + WHERE status=published，接 `days` 可选窗口）+ 3 个 GET 端点（`/analytics/accounts`、`/analytics/contents`、`/analytics/leaderboard`）；704ed8a 补了周报结构化展示（脱 JSON.stringify 裸显示）+ LLM 成本浮点裁剪两处走查发现的体验问题。`tests/test_db_reads.py` + `tests/webui/test_api_m10_5.py` 49 用例全绿（本次重新验证）。契约零变更：全部只读 SELECT，schema/models/Adapter 不动。
 
 ### M11-G｜图文双模式创作：手动 + 自动，统一汇入 contents（内容生产，中低危）
 - [x] **目标**：图文创作支持**两个入口、一个出口**——「AI 自动生成」(现有 canonical.create_one) 与「人工手写/编辑」都产出**同一张 `contents` 表的 draft**，之后共用门禁→审核→发布后半条流水线。**不独立成子系统/仓库**（用户已问过是否要独立，结论=否，理由见 `yixiaoer-teardown-and-plan.md` §1/§5）
