@@ -1276,7 +1276,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
   `uploadContentImage`（正文内嵌图片上传）。补齐两段：①生成侧用确定性代码（不依赖 LLM 二次
   配合）把已生成插图拼接进 `wechat_mp/article.md`；②发布侧真实发布时把正文里本地插图上传成
   微信 CDN url 再替换进去（`draft/add` 的 HTML 正文要求图片必须是微信 CDN 地址，不能是本地路径）。
-  ✅ 完成于 2026-07-14，commit （随后补），备注：`pipeline/creators/derivative_wechat_mp.py`
+  ✅ 完成于 2026-07-14，commit af6a0a3，备注：`pipeline/creators/derivative_wechat_mp.py`
   新增 `splice_inline_images()`（按 `##` 标题首段位置插入，图片数与标题数不等时的三种兜底策略）
   + `insert_generated_images()`（从 canonical_md 提取 `![caption](images/inline-N.png)`，换算
   `../images/inline-N.png` 相对路径后原子写回，幂等：已拼接过直接跳过）；`pipeline/run.py::
