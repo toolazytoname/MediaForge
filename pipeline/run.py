@@ -308,6 +308,7 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
 
     from pipeline.config import load_config
     from pipeline.creators import image_gen
+    from pipeline.creators.derivative_wechat_mp import insert_generated_images
     from pipeline.creators.image_gen import generate_image
     from pipeline.models import ContentStatus
     from pipeline.utils.errors import BudgetExceeded
@@ -424,6 +425,13 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
                             inline_paths.append(f"{content_dir.name}/images/inline-{n}.png")
                         print(f"  ↻ {c.id}: discovered {len(used)} existing inline images from md",
                               file=sys.stderr)
+
+                # 3.5 若该内容已派生过 wechat_mp，把刚生成的真实插图拼接进
+                #     wechat_mp/article.md（LLM 派生阶段不承接图片，见
+                #     derivative_wechat_mp.py 模块说明）
+                if insert_generated_images(content_dir, canonical_md):
+                    print(f"  ↻ {c.id}: spliced inline images into wechat_mp/article.md",
+                          file=sys.stderr)
 
                 # 4. 写回 contents（封面 + inline 路径）
                 with conn:

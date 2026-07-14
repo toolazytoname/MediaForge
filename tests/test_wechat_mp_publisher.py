@@ -52,6 +52,26 @@ def _seed_valid_bundle(content_dir: Path) -> None:
     (content_dir / "cover.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 100)
 
 
+def _seed_bundle_with_inline_image(content_dir: Path, *, write_image_file: bool = True) -> None:
+    """写一份含正文内嵌真实插图（拼接产物，见 derivative_wechat_mp.insert_generated_images）
+    的 wechat_mp 产物 + 封面。"""
+    wechat_dir = content_dir / "wechat_mp"
+    wechat_dir.mkdir(parents=True, exist_ok=True)
+    (wechat_dir / "meta.json").write_text(
+        json.dumps({"title": "标题", "digest": "摘要"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (wechat_dir / "article.md").write_text(
+        "# 标题\n\n## 第一部分\n\n正文……\n\n![一张示意图](../images/inline-1.png)\n\n后续正文……",
+        encoding="utf-8",
+    )
+    (content_dir / "cover.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 100)
+    if write_image_file:
+        images_dir = content_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        (images_dir / "inline-1.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"y" * 50)
+
+
 # ── TestCredentialLoad ────────────────────────────────────
 
 class TestCredentialLoad:
@@ -236,6 +256,19 @@ class TestValidate:
         issues = a.validate(_bundle(content_dir))
         assert any("too large" in i for i in issues)
 
+    def test_validate_missing_inline_image_file(self, tmp_path: Path) -> None:
+        content_dir = tmp_path / "content"
+        _seed_bundle_with_inline_image(content_dir, write_image_file=False)
+        a = self._make_adapter()
+        issues = a.validate(_bundle(content_dir))
+        assert any("inline-1.png" in i for i in issues)
+
+    def test_validate_happy_path_with_inline_image_present(self, tmp_path: Path) -> None:
+        content_dir = tmp_path / "content"
+        _seed_bundle_with_inline_image(content_dir, write_image_file=True)
+        a = self._make_adapter()
+        assert a.validate(_bundle(content_dir)) == []
+
 
 # ── TestPublishDraft ───────────────────────────────────────
 
@@ -308,6 +341,87 @@ class TestPublishDraft:
         adapter.publish(_bundle(content_dir), _account(), dry_run=False)
         get_calls = [c for c in calls if c["kind"] == "get"]
         assert len(get_calls) == 1  # 第二次发布复用缓存 token
+
+
+# ── TestPublishInlineImages（正文内嵌真实插图 → 微信 CDN）───
+
+class TestPublishInlineImages:
+    def _make_adapter(self, *, content_image_url: str = "https://mmbiz.qpic.cn/fake/1"):
+        from pipeline.publishers.wechat_mp import WechatMpPublisher
+        calls: list[dict] = []
+
+        def fake_get(url, *, params, timeout=30.0):
+            calls.append({"kind": "get", "url": url, "params": params})
+            return {"access_token": "tok1", "expires_in": 7200}
+
+        def fake_upload(url, *, params, file_path, timeout=60.0):
+            calls.append({"kind": "upload", "url": url, "params": params, "file_path": file_path})
+            if url.endswith("/media/uploadimg"):
+                return {"url": content_image_url}
+            return {"media_id": "cover_media_1"}
+
+        def fake_post(url, *, params, json_body, timeout=30.0):
+            calls.append({"kind": "post", "url": url, "params": params, "json_body": json_body})
+            return {"media_id": "draft_media_1"}
+
+        adapter = WechatMpPublisher(
+            app_id="wx1", app_secret="s1",
+            http_get=fake_get, http_post=fake_post, http_upload=fake_upload,
+        )
+        return adapter, calls
+
+    def test_real_publish_uploads_inline_image_and_rewrites_url(self, tmp_path: Path) -> None:
+        content_dir = tmp_path / "content"
+        _seed_bundle_with_inline_image(content_dir)
+        adapter, calls = self._make_adapter(content_image_url="https://mmbiz.qpic.cn/abc123")
+
+        adapter.publish(_bundle(content_dir), _account(), dry_run=False)
+
+        upload_calls = [c for c in calls if c["kind"] == "upload"]
+        content_image_calls = [c for c in upload_calls if c["url"].endswith("/media/uploadimg")]
+        assert len(content_image_calls) == 1
+        assert content_image_calls[0]["file_path"] == content_dir / "images" / "inline-1.png"
+
+        draft_call = next(c for c in calls if c["kind"] == "post")
+        html = draft_call["json_body"]["articles"][0]["content"]
+        assert "https://mmbiz.qpic.cn/abc123" in html
+        assert "../images/inline-1.png" not in html
+
+    def test_dry_run_does_not_upload_inline_images(self, tmp_path: Path) -> None:
+        content_dir = tmp_path / "content"
+        _seed_bundle_with_inline_image(content_dir)
+        adapter, calls = self._make_adapter()
+        adapter.publish(_bundle(content_dir), _account(), dry_run=True)
+        assert calls == []
+
+    def test_publish_raises_when_inline_image_file_missing(self, tmp_path: Path) -> None:
+        content_dir = tmp_path / "content"
+        _seed_bundle_with_inline_image(content_dir, write_image_file=False)
+        adapter, calls = self._make_adapter()
+        with pytest.raises(PublishError, match="inline image"):
+            adapter.publish(_bundle(content_dir), _account(), dry_run=False)
+        assert not any(c["kind"] == "post" for c in calls)
+
+    def test_content_image_upload_missing_url_raises(self, tmp_path: Path) -> None:
+        content_dir = tmp_path / "content"
+        _seed_bundle_with_inline_image(content_dir)
+        adapter, _ = self._make_adapter()
+
+        def bad_upload(url, *, params, file_path, timeout=60.0):
+            return {"errmsg": "weird"}
+
+        adapter._upload = bad_upload
+        with pytest.raises(PublishError, match="url"):
+            adapter.publish(_bundle(content_dir), _account(), dry_run=False)
+
+    def test_article_without_inline_images_unaffected(self, tmp_path: Path) -> None:
+        """回归：无插图正文的既有行为不变（不多触发任何 upload/post 调用）。"""
+        content_dir = tmp_path / "content"
+        _seed_valid_bundle(content_dir)
+        adapter, calls = self._make_adapter()
+        adapter.publish(_bundle(content_dir), _account(), dry_run=False)
+        kinds = [c["kind"] for c in calls]
+        assert kinds == ["get", "upload", "post"]
 
 
 # ── TestErrorClassification ───────────────────────────────

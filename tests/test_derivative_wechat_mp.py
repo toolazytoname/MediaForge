@@ -21,6 +21,8 @@ from pipeline.creators.derivative_wechat_mp import (
     WechatMpOutput,
     _parse_wechat_mp,
     derive_wechat_mp,
+    insert_generated_images,
+    splice_inline_images,
     write_wechat_mp,
 )
 from pipeline.creators import llm as llm_mod
@@ -338,3 +340,115 @@ def test_run_derivative_wechat_mp_updates_formats(tmp_path) -> None:
     ).fetchone()
     formats = json.loads(row["formats"])
     assert "wechat_mp" in formats
+
+
+# ── splice_inline_images：确定性拼接（不依赖 LLM）────────────
+
+def test_splice_inline_images_one_per_heading() -> None:
+    body_md = "# T\n\n## 第一部分\n\n正文1……\n\n## 第二部分\n\n正文2……"
+    images = [("配图一", "../images/inline-1.png"), ("配图二", "../images/inline-2.png")]
+
+    out = splice_inline_images(body_md, images)
+
+    assert "## 第一部分\n\n正文1……\n\n![配图一](../images/inline-1.png)\n\n## 第二部分" in out
+    assert "## 第二部分\n\n正文2……\n\n![配图二](../images/inline-2.png)" in out
+
+
+def test_splice_inline_images_fewer_images_than_headings() -> None:
+    body_md = "# T\n\n## 第一部分\n\n正文1……\n\n## 第二部分\n\n正文2……"
+    images = [("配图一", "../images/inline-1.png")]
+
+    out = splice_inline_images(body_md, images)
+
+    assert "![配图一](../images/inline-1.png)" in out
+    assert out.count("![") == 1
+    # 第二部分没有对应图片，原样保留
+    assert out.rstrip().endswith("正文2……")
+
+
+def test_splice_inline_images_more_images_than_headings() -> None:
+    body_md = "# T\n\n## 第一部分\n\n正文1……\n\n## 第二部分\n\n正文2……"
+    images = [
+        ("配图一", "../images/inline-1.png"),
+        ("配图二", "../images/inline-2.png"),
+        ("配图三", "../images/inline-3.png"),
+    ]
+
+    out = splice_inline_images(body_md, images)
+
+    assert "![配图一](../images/inline-1.png)" in out
+    assert "![配图二](../images/inline-2.png)" in out
+    # 多出的第三张图追加在正文末尾
+    assert out.rstrip().endswith("![配图三](../images/inline-3.png)")
+
+
+def test_splice_inline_images_no_headings_appends_at_end() -> None:
+    body_md = "# T\n\n没有二级标题的正文……"
+    images = [("配图一", "../images/inline-1.png"), ("配图二", "../images/inline-2.png")]
+
+    out = splice_inline_images(body_md, images)
+
+    assert out.startswith("# T\n\n没有二级标题的正文……")
+    assert out.rstrip().endswith("![配图二](../images/inline-2.png)")
+    assert "![配图一](../images/inline-1.png)" in out
+
+
+def test_splice_inline_images_empty_images_returns_unchanged() -> None:
+    body_md = "# T\n\n## 第一部分\n\n正文1……"
+    assert splice_inline_images(body_md, []) == body_md
+
+
+# ── insert_generated_images：从 canonical_md 提取真图、拼进 wechat_mp/article.md ──
+
+def _canonical_with_inline_images() -> str:
+    return (
+        "# T\n\n## 第一部分\n\n正文……[IMAGE was here]\n\n"
+        "![一张关于 AI 的示意图](images/inline-1.png)\n\n"
+        "## 第二部分\n\n正文……\n\n"
+        "![第二张示意图](images/inline-2.png)\n"
+    )
+
+
+def test_insert_generated_images_no_article_returns_false(tmp_path) -> None:
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    assert insert_generated_images(content_dir, _canonical_with_inline_images()) is False
+
+
+def test_insert_generated_images_splices_and_rewrites_relative_paths(tmp_path) -> None:
+    content_dir = tmp_path / "content"
+    body_md = "# 标题\n\n## 第一部分\n\n正文1……\n\n## 第二部分\n\n正文2……"
+    write_wechat_mp(content_dir, WechatMpOutput(title="标题", digest="摘要", body_md=body_md))
+
+    changed = insert_generated_images(content_dir, _canonical_with_inline_images())
+    assert changed is True
+
+    article = (content_dir / "wechat_mp" / "article.md").read_text(encoding="utf-8")
+    assert "![一张关于 AI 的示意图](../images/inline-1.png)" in article
+    assert "![第二张示意图](../images/inline-2.png)" in article
+
+
+def test_insert_generated_images_no_inline_refs_returns_false(tmp_path) -> None:
+    content_dir = tmp_path / "content"
+    body_md = "# 标题\n\n## 第一部分\n\n正文1……"
+    write_wechat_mp(content_dir, WechatMpOutput(title="标题", digest="摘要", body_md=body_md))
+
+    changed = insert_generated_images(content_dir, "# canonical 里没有任何真实插图引用")
+    assert changed is False
+    article = (content_dir / "wechat_mp" / "article.md").read_text(encoding="utf-8")
+    assert article == body_md
+
+
+def test_insert_generated_images_idempotent(tmp_path) -> None:
+    content_dir = tmp_path / "content"
+    body_md = "# 标题\n\n## 第一部分\n\n正文1……\n\n## 第二部分\n\n正文2……"
+    write_wechat_mp(content_dir, WechatMpOutput(title="标题", digest="摘要", body_md=body_md))
+
+    first = insert_generated_images(content_dir, _canonical_with_inline_images())
+    assert first is True
+    article_after_first = (content_dir / "wechat_mp" / "article.md").read_text(encoding="utf-8")
+
+    second = insert_generated_images(content_dir, _canonical_with_inline_images())
+    assert second is False
+    article_after_second = (content_dir / "wechat_mp" / "article.md").read_text(encoding="utf-8")
+    assert article_after_second == article_after_first

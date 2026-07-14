@@ -2,11 +2,14 @@
 
 canonical.md → wechat_mp/article.md（正文 markdown）+ meta.json（title/digest）。
 
-不含正文插图占位符解析（v1 无承接机制，禁止 LLM 输出 `[IMAGE:`，见
-ARCHITECTURE §8）；封面复用 content.cover_path，不在本模块生成或转存。
-正文最终转微信内联样式 HTML 由 publisher 在 publish() 时现转
-（pipeline.creators.wechat_html.markdown_to_wechat_html），保持派生产物
-markdown-first，与 toutiao/xiaohongshu/x 三个平台一致。
+LLM 派生阶段禁止输出 `[IMAGE:` 占位符（见 ARCHITECTURE §8）——LLM 派生
+wechat_mp 版本时发生在 status=gated，真实插图此时还未生成（要等 status=approved
+的 generate-images 阶段），指望 LLM 这一步保留图片不可靠。真正的插图承接改由
+`insert_generated_images()` 在 generate-images 阶段之后，用确定性代码把已生成的
+`images/inline-N.png` 拼接进 wechat_mp/article.md（见 pipeline.run.cmd_generate_images）。
+
+封面复用 content.cover_path，不在本模块生成或转存。正文最终转微信内联样式 HTML
+由 publisher 在 publish() 时现转（pipeline.creators.wechat_html.markdown_to_wechat_html）。
 """
 from __future__ import annotations
 
@@ -141,3 +144,80 @@ def write_wechat_mp(out_dir: Path, output: WechatMpOutput) -> None:
         wechat_dir / "meta.json",
         json.dumps({"title": output.title, "digest": output.digest}, ensure_ascii=False, indent=2),
     )
+
+
+# ── 正文真实插图拼接（generate-images 阶段之后调用）───────────
+
+_HEADING_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
+_CANONICAL_INLINE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(images/inline-(\d+)\.png\)")
+_SPLICED_MARKER = "](../images/inline-"
+
+
+def splice_inline_images(body_md: str, images: list[tuple[str, str]]) -> str:
+    """把已生成的插图按顺序插入 body_md 的二级标题（`## `）首段之后。
+
+    images：按顺序排列的 (caption, rel_path) 列表。
+    图片数 < 标题数：多出的标题不插图。
+    图片数 > 标题数：多出的图片依次追加在正文末尾。
+    零标题：全部图片依次追加在正文末尾。
+    """
+    if not images:
+        return body_md
+
+    heading_matches = list(_HEADING_RE.finditer(body_md))
+    n_slots = min(len(heading_matches), len(images))
+
+    insertions: list[tuple[int, str]] = []
+    for heading, (caption, rel_path) in zip(heading_matches[:n_slots], images[:n_slots]):
+        # 跳过标题行后的换行，定位到首段正文的起点，再找该段落末尾的空行
+        paragraph_start = heading.end()
+        while paragraph_start < len(body_md) and body_md[paragraph_start] == "\n":
+            paragraph_start += 1
+        blank_line_pos = body_md.find("\n\n", paragraph_start)
+        pos = blank_line_pos if blank_line_pos != -1 else len(body_md)
+        insertions.append((pos, f"\n\n![{caption}]({rel_path})"))
+
+    result = body_md
+    for pos, markdown in sorted(insertions, key=lambda item: item[0], reverse=True):
+        result = result[:pos] + markdown + result[pos:]
+
+    leftover = images[n_slots:]
+    if leftover:
+        tail = "\n\n" + "\n\n".join(f"![{caption}]({rel_path})" for caption, rel_path in leftover)
+        result = result.rstrip("\n") + tail
+
+    return result
+
+
+def insert_generated_images(content_dir: Path, canonical_md: str) -> bool:
+    """把 canonical_md 里已生成的真实插图拼接进 wechat_mp/article.md。
+
+    从 canonical_md 中按顺序提取 `![caption](images/inline-N.png)` 引用
+    （generate-images 阶段生成，替换了原来的 `[IMAGE: caption]` 占位符），
+    换算成 wechat_mp/article.md 视角的相对路径 `../images/inline-N.png`，
+    调用 splice_inline_images 后原子写回。
+
+    返回 True 表示做了拼接；以下情况返回 False（不算错误）：
+      - content_dir/wechat_mp/article.md 不存在（该内容没有派生过 wechat_mp）
+      - canonical_md 里没有任何真实插图引用
+      - article.md 里已经拼接过（幂等，见 HARD_PARTS §5）
+    """
+    article_path = content_dir / "wechat_mp" / "article.md"
+    if not article_path.exists():
+        return False
+
+    body_md = article_path.read_text(encoding="utf-8")
+    if _SPLICED_MARKER in body_md:
+        return False
+
+    found = sorted(
+        ((int(n), caption) for caption, n in _CANONICAL_INLINE_IMAGE_RE.findall(canonical_md)),
+        key=lambda pair: pair[0],
+    )
+    if not found:
+        return False
+    images = [(caption, f"../images/inline-{n}.png") for n, caption in found]
+
+    spliced = splice_inline_images(body_md, images)
+    _write_atomic(article_path, spliced)
+    return True

@@ -1268,6 +1268,33 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **验收**：草稿创建成功（`draft/add` 返回 `media_id`）**或**因账号未认证返回 `40001`/`48001`（记 `⚠️ BLOCKED`：已知账号能力限制，非代码缺陷，用户当前持有个人/未认证订阅号）
 - **红线**：**高危任务，不进自治流**（CLAUDE.md 工作约定第 7 条 + 自治协议"高危任务例外"）；真实发布需 `publish.enabled=true` 且 `wechat_mp` 在 `publish.allowed_platforms` 白名单
 
+### M13-3｜wechat_mp 正文拼接真实插图（生成侧 + 发布侧 CDN 上传）
+- [x] **目标**：验证"现有流水线能否真正产出公众号图文混排文章"时发现：`prompts/wechat_mp.md`
+  禁止 LLM 派生阶段输出 `[IMAGE:`，且状态机里 wechat_mp 派生（要求 `status=gated`）先于真实插图
+  生成（`generate-images` 要求 `status=approved`）发生，导致真实插图从未进入过 wechat_mp 正文；
+  `publishers/wechat_mp.py` 顶部注释自己也承认 v1 特意没移植 TrendPublish 的
+  `uploadContentImage`（正文内嵌图片上传）。补齐两段：①生成侧用确定性代码（不依赖 LLM 二次
+  配合）把已生成插图拼接进 `wechat_mp/article.md`；②发布侧真实发布时把正文里本地插图上传成
+  微信 CDN url 再替换进去（`draft/add` 的 HTML 正文要求图片必须是微信 CDN 地址，不能是本地路径）。
+  ✅ 完成于 2026-07-14，commit （随后补），备注：`pipeline/creators/derivative_wechat_mp.py`
+  新增 `splice_inline_images()`（按 `##` 标题首段位置插入，图片数与标题数不等时的三种兜底策略）
+  + `insert_generated_images()`（从 canonical_md 提取 `![caption](images/inline-N.png)`，换算
+  `../images/inline-N.png` 相对路径后原子写回，幂等：已拼接过直接跳过）；`pipeline/run.py::
+  cmd_generate_images` 接入 `insert_generated_images()` 调用；`pipeline/publishers/wechat_mp.py`
+  新增 `_upload_content_image()`（`media/uploadimg` 接口）+ `_inline_images_to_cdn()`
+  （正则替换正文里的本地相对路径插图为 CDN url），`validate()` 增加插图文件存在性检查，
+  `publish()` 在 `markdown_to_wechat_html()` 之前接入替换——**dry_run 不受影响**（不触发任何
+  upload）。研究开源实现（宝玉 skills）确认无可直接复用的 Python 库，但验证了"按位置确定性
+  拼接"方向合理；`wechat_mp.py` 自己的移植来源注释是比宝玉 skills 更直接的参考。
+  **测试**：`tests/test_derivative_wechat_mp.py` 新增 9 例（拼接位置四种场景 + 幂等性）；
+  `tests/test_wechat_mp_publisher.py` 新增 7 例（`validate()` 插图存在性 2 例 + `publish()`
+  CDN 上传/替换/dry_run 不触发/文件缺失报错/url 缺失报错/无插图正文行为不变 5 例）。
+  **验证**：`pytest tests/test_derivative_wechat_mp.py tests/test_wechat_mp_publisher.py -q`
+  36+26 全绿；全量 `pytest tests/ -q` 1491 通过 / 12 跳过，7 个失败与本次改动无关（`git stash`
+  核实同样 7 个测试在改动前就失败——M13-1 已记录的既有已知问题：1 个 pyc 缓存误报 + 5 个
+  `test_image_gen.py` 默认模型名不一致 + 1 个 flaky 并发锁计时测试）。真实发布链路（真实
+  `app_id`/`app_secret` 调 CDN 上传接口）无法端到端验证，因为暂无真实凭据——留给 M13-2。
+
 ---
 
 ## 待评估事项（真实用户走查发现，2026-07-11）
