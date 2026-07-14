@@ -1262,10 +1262,11 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 > **引擎选型纠正**：TECH_SPEC §5.6 / HARD_PARTS §7 原占位的 `aigcpanel` 引擎经核实为 **Electron 桌面应用**（AGPL-3.0，本地模型管理，无头服务器场景不适用）——不能像 MPT/Pixelle 一样自托管 HTTP 调用。改用 **LatentSync**（`bytedance/LatentSync`，Apache-2.0，5.8k★，已用 Cog 封装 `cog.yaml`+`predict.py`，`cog build` 可起本地 HTTP predictions 服务）作为唇形同步引擎——自托管零边际成本，符合用户"优先开源、不花钱"的要求（放弃 HeyGen/百度曦灵等商用 API 方案）。**LatentSync 只做唇形同步**（输入：形象循环视频 + TTS 音频 → 输出：口型匹配的成片），不产出人物形象或语音，需要配套：TTS（复用 MPT 链路已用的 edge-tts）+ 形象素材（用户提供的真人循环讲话视频，放 `secrets/avatars/` 或 `assets/avatars/`，非本仓库资产，类比凭据管理）。
 
 ### M12-0｜技术选型落盘 + 形象素材约定（低危，纯文档）
-- [ ] **目标**：把上面两条"认知纠正"落进 `TECH_SPEC.md §5.6`（VideoEngine 引擎名单补充 `digitalhuman` 替代 `aigcpanel` 占位）和 `HARD_PARTS.md §7`（数字人行替换为 LatentSync 方案）；`opensource-survey.md` AIGCPanel 行标注"已评估排除：Electron 桌面应用，非无头服务"
+- [x] **目标**：把上面两条"认知纠正"落进 `TECH_SPEC.md §5.6`（VideoEngine 引擎名单补充 `digitalhuman` 替代 `aigcpanel` 占位）和 `HARD_PARTS.md §7`（数字人行替换为 LatentSync 方案）；`opensource-survey.md` AIGCPanel 行标注"已评估排除：Electron 桌面应用，非无头服务"
 - **步骤**：三处文档编辑，不涉及代码；新增 `docs/HARD_PARTS.md` 小节说明形象素材来源约定——用户需自备一段 5-15s 正面、嘴部清晰、光照均匀的说话/待机循环视频，放 `assets/avatars/<name>.mp4`（.gitignore 排除大文件，仓库只存一个占位说明 + 可选 CC0 示例），config 通过 `style.avatar_template` 选择
 - **验收**：三文档更新且不与既有契约冲突；无代码改动
 - **红线**：不改 VideoEngine 接口（`submit/poll/fetch` 签名不变，`aigcpanel`→`digitalhuman` 只是引擎名占位字符串变化，非契约字段）
+  ✅ 完成于 2026-07-14，commit d291616，备注：TECH_SPEC §5.6 补 pixelle/digitalhuman 引擎说明并废弃 aigcpanel 占位；HARD_PARTS 新增 §6.1 LatentSync 集成要点 + §7 表格行更新；opensource-survey.md 标注 AIGCPanel 排除原因、新增 LatentSync 行。
 
 ### M12-1｜digitalhuman VideoEngine 实现（TDD，中危）
 - [ ] **目标**：`pipeline/creators/video/digitalhuman.py::DigitalHumanEngine` 实现 `VideoEngine` ABC；架构与 `mpt.py`/`pixelle.py` 一致（自托管 HTTP 客户端 + 工厂降级）
