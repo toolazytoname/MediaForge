@@ -1286,14 +1286,14 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **步骤**：新组件 `VideoTypeSelectModal.vue`（卡片网格，点击卡片=选定 `engine` 值并进入下一步）；接入现有创作入口（新增侧边"内容生产"下的「视频创作」路由或在 `/creation` 加 tab，具体挂载点跟随 M11-A 已定的 IA 分组）
 - **验收**：3 张卡片可点选，无死链接/占位跳转；Ant Design Vue 组件风格与既有 webui 一致
 - **红线**：纯前端，不新增/改动 API 契约
-  ✅ 完成于 2026-07-14，commit <待补>，备注：新增 `VideoTypeSelectModal.vue`（恰好 3 张真实卡片，无空壳占位）；侧边栏"内容生产"新增「视频创作」入口；`StartPublishModal.vue`"视频发布"卡片由"即将上线"占位改为跳转 `/creation/video`（仅改这一分支，未动整体结构）；独立校验 subagent 核对客观闸+LLM 评审全 PASS。
+  ✅ 完成于 2026-07-14，commit e303d74，备注：新增 `VideoTypeSelectModal.vue`（恰好 3 张真实卡片，无空壳占位）；侧边栏"内容生产"新增「视频创作」入口；`StartPublishModal.vue`"视频发布"卡片由"即将上线"占位改为跳转 `/creation/video`（仅改这一分支，未动整体结构）；独立校验 subagent 核对客观闸+LLM 评审全 PASS。
 
 ### M12-3｜视频创作向导（Step 流程，复用图文 6 步模式，中危）
 - [x] **目标**：仿 `Creation.vue` 编排 6 个 Step 组件的模式，新建视频创作向导：选内容 → 选类型(M12-2 弹窗) → 口播稿(LLM 派生+可编辑) → 引擎参数(音色/形象模板/比例 9:16|16:9) → 提交后轮询进度 → 预览成片
 - **步骤**：后端加一个薄 bridge（仿 `write_action_bridge.py` 模式）包一层"提交视频生成任务"+"查询进度"只读/受控写接口，不重实现 VideoEngine 编排逻辑；前端 Step 组件仿 `Step2Create.vue`/`Step4ImageGen.vue` 现成的"提交+轮询+展示进度"UI 模式
 - **验收**：dry 模式下（无真实 LatentSync/MPT 服务）向导可走完全程到"预览"步（mock/降级态提示"引擎未部署"，不崩溃）；有真实引擎时可提交任务并轮询到成片
 - **红线**：UI 不得直连 DB/引擎，走既有 db_reads / bridge 分层；不新增可绕过 `publish` 白名单的一键发布入口
-  ✅ 完成于 2026-07-14，commit <待补>，备注：新增 `pipeline/webui/video_bridge.py`（内存 job 注册表，整体替换式更新，不落库；`derive_video_script` 走 `llm.complete` 派生口播稿；`submit_video_job` 区分 `EngineUnavailableError`(引擎未部署→503) 与引擎自身 `CreateError`(参数问题→400)；成功后复用 `derivative._update_formats_field` 写回 `contents.formats`）+ `pipeline/webui/api/video.py`（3 个端点）+ 18 项测试；前端新增 `CreationVideo.vue` 6 步向导 + 6 个 Step 组件 + `useVideoCreationStore`（轮询用 setTimeout 递归+可清理，不伪造进度百分比）；`vue-tsc`/`pytest` 全绿；独立校验 subagent 核对客观闸+LLM 评审全 PASS（含"引擎未部署"降级提示专项检查）。
+  ✅ 完成于 2026-07-14，commit e303d74，备注：新增 `pipeline/webui/video_bridge.py`（内存 job 注册表，整体替换式更新，不落库；`derive_video_script` 走 `llm.complete` 派生口播稿；`submit_video_job` 区分 `EngineUnavailableError`(引擎未部署→503) 与引擎自身 `CreateError`(参数问题→400)；成功后复用 `derivative._update_formats_field` 写回 `contents.formats`）+ `pipeline/webui/api/video.py`（3 个端点）+ 18 项测试；前端新增 `CreationVideo.vue` 6 步向导 + 6 个 Step 组件 + `useVideoCreationStore`（轮询用 setTimeout 递归+可清理，不伪造进度百分比）；`vue-tsc`/`pytest` 全绿；独立校验 subagent 核对客观闸+LLM 评审全 PASS（含"引擎未部署"降级提示专项检查）。
 
 ### M12-4｜数字人链路真机验证（**高危，人工，需 GPU 环境与形象素材，不进自治流**）
 - [ ] **目标**：本机/服务器起 LatentSync cog docker + 用户提供真实形象素材，端到端跑通一条数字人口播视频（脚本→TTS→唇形同步→成片）
