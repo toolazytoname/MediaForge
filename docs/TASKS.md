@@ -1279,7 +1279,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **测试要点**：mock cog HTTP 响应（httpx mock，仿 pixelle 测试模式）；TTS 生成路径可被 mock；avatar 模板缺失→`CreateError`（不是 500 也不是静默用默认）；工厂初始化失败降级不影响其他引擎（回归 mpt/pixelle 现有降级测试）
 - **验收**：单测覆盖 submit/poll/fetch 三态 + 降级路径；`pytest tests/ -q` 全绿；`grep -rn "import anthropic" pipeline/ | grep -v llm.py` 为空
 - **红线**：不改 `VideoRequest`/`VideoJobStatus` 字段；不让 LatentSync/引擎自己编口播文案（脚本仍来自我方 LLM 派生，同 HARD_PARTS §6 教训）
-- ✅ 完成于 2026-07-14，commit <待补>，备注：新增 `pipeline/creators/tts.py`（edge-tts 同步桥接）+ `digitalhuman.py`（Cog predictions 客户端，avatar 缺失/未知模板→CreateError，progress 恒 None，404→task lost，fetch 兼容 URL/base64 data URI，tmp→rename）；config 新增 `DigitalHumanConfig` 并将 `VideoConfig.engine` 的 `aigcpanel` 字面量改为 `digitalhuman`；`config.example.yaml` 补全 `pixelle`/`digitalhuman` 示例块；`__init__.py` 注册工厂分支；独立校验 subagent 核对客观闸+10 项验收标准全 PASS。
+- ✅ 完成于 2026-07-14，commit 8d88b40，备注：新增 `pipeline/creators/tts.py`（edge-tts 同步桥接）+ `digitalhuman.py`（Cog predictions 客户端，avatar 缺失/未知模板→CreateError，progress 恒 None，404→task lost，fetch 兼容 URL/base64 data URI，tmp→rename）；config 新增 `DigitalHumanConfig` 并将 `VideoConfig.engine` 的 `aigcpanel` 字面量改为 `digitalhuman`；`config.example.yaml` 补全 `pixelle`/`digitalhuman` 示例块；`__init__.py` 注册工厂分支；独立校验 subagent 核对客观闸+10 项验收标准全 PASS。
 
 ### M12-2｜前端「新建创作」类型选择弹窗（clone 蚁小二卡片交互，低危）
 - [ ] **目标**：`frontend/src/views/Creation/` 新增视频创作入口，弹窗仿蚁小二"选择创作类型"卡片网格（图标+标题+副标题），但**只放 3 张真实卡片**：素材混剪(mpt)/AI 生成视频(pixelle)/数字人口播(digitalhuman)——不做 seedance/真人口播智剪模板库/新闻体/克隆数字人配音管理等未实现功能的空卡片
