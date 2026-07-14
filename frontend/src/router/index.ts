@@ -11,6 +11,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/contents/:id', name: 'content-detail', component: () => import('../views/ContentDetail.vue') },
   { path: '/review', name: 'review', component: () => import('../views/Review.vue') },
   { path: '/creation', name: 'creation', component: () => import('../views/Creation.vue') },
+  // M12-3 视频创作 6 步向导（素材混剪/AI 生成视频/数字人口播）
+  { path: '/creation/video', name: 'creation-video', component: () => import('../views/CreationVideo.vue') },
   // M11-B 发布中心:合并 PublishRecords / PublishCalendar 为单一页面（含 3 tab）
   { path: '/publish', name: 'publish', component: () => import('../views/PublishCenter.vue') },
   { path: '/publish/calendar', name: 'publish-calendar', component: () => import('../views/PublishCalendar.vue') },

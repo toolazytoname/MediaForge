@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 阶段 H（amend）：4 选 1 弹窗（照抄蚁小二）
 // 标题：「选择发布类型」；4 张卡 2×2 grid
-// - 视频发布：支持平台 (35) → 占位 alert "即将上线"
+// - 视频发布：支持平台 (35) → 跳 /creation/video（M12-3 视频创作向导）
 // - 图文发布：支持平台 (9) → 跳 /creation
 // - 文章发布：支持平台 (19) → 占位 alert "即将上线"
 // - 公众号：占位 alert "即将上线"
@@ -45,7 +45,13 @@ function onSelect(option: PublishOption): void {
     void router.push('/creation')
     return
   }
-  // 其他三种：占位提示
+  if (option.key === 'video') {
+    // 视频：跳 /creation/video 6 步向导（M12-3）
+    close(false)
+    void router.push('/creation/video')
+    return
+  }
+  // 其他两种：占位提示
   close(false)
   comingSoonOpen.value = true
 }

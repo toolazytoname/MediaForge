@@ -965,3 +965,155 @@ export const usePreviewStore = defineStore('preview', () => {
 
   return { running, lastResult, lastRun, lastError, run, reset }
 })
+
+// ── VideoCreation (M12-3: 视频创作向导——脚本派生 + 提交/轮询) ──
+
+export type VideoEngineName = 'mpt' | 'pixelle' | 'digitalhuman'
+export type VideoAspect = '9:16' | '16:9'
+
+export interface VideoJobResult {
+  job_id: string
+  content_id: string
+  engine: VideoEngineName
+  state: string
+  progress: number | null
+  error: string | null
+  output_path: string | null
+  output_url: string | null
+  created_at: string
+  updated_at: string
+}
+
+const VIDEO_POLL_INTERVAL_MS = 3_000
+const VIDEO_TERMINAL_STATES = new Set(['done', 'failed'])
+
+export const useVideoCreationStore = defineStore('video-creation', () => {
+  const script = ref('')
+  const engine = ref<VideoEngineName | null>(null)
+  const aspect = ref<VideoAspect>('9:16')
+  const style = ref<Record<string, any>>({})
+  const job = ref<VideoJobResult | null>(null)
+  const running = ref(false)
+  const polling = ref(false)
+  const lastError = ref<string | null>(null)
+
+  let pollTimer: ReturnType<typeof setTimeout> | null = null
+
+  function stopPolling() {
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer)
+      pollTimer = null
+    }
+    polling.value = false
+  }
+
+  async function deriveScript(contentId: string, durationS: number): Promise<string | null> {
+    running.value = true
+    lastError.value = null
+    try {
+      const r = await api.post<{ script: string }>(
+        `/contents/${contentId}/video-script`,
+        { duration_s: durationS },
+        { timeout: GENERATION_TIMEOUT_MS },
+      )
+      script.value = r.data.script
+      return r.data.script
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  async function submit(
+    contentId: string,
+    durationS: number,
+  ): Promise<VideoJobResult | null> {
+    if (!engine.value) {
+      lastError.value = '请先选择创作类型'
+      return null
+    }
+    running.value = true
+    lastError.value = null
+    job.value = null
+    try {
+      const r = await apiPost<VideoJobResult>('/video-jobs', {
+        content_id: contentId,
+        engine: engine.value,
+        script: script.value,
+        duration_s: durationS,
+        aspect: aspect.value,
+        style: style.value,
+      })
+      job.value = r.data
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  async function pollOnce(): Promise<VideoJobResult | null> {
+    if (!job.value) return null
+    try {
+      const r = await api.get<VideoJobResult>(`/video-jobs/${job.value.job_id}`)
+      job.value = r.data
+      return r.data
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    }
+  }
+
+  // 轮询采用「await 后再 setTimeout 排下一次」的顺序模式（同 usePreviewStore
+  // 的 pollPreviewRun），不是层层嵌套的 recursive setTimeout 栈；到终态或
+  // 出错即停，避免无限轮询。
+  function startPolling(): void {
+    if (polling.value) return
+    polling.value = true
+
+    const tick = async () => {
+      if (!polling.value) return
+      const result = await pollOnce()
+      if (!polling.value) return
+      if (result === null || VIDEO_TERMINAL_STATES.has(result.state)) {
+        stopPolling()
+        return
+      }
+      pollTimer = setTimeout(tick, VIDEO_POLL_INTERVAL_MS)
+    }
+
+    void tick()
+  }
+
+  function reset() {
+    stopPolling()
+    script.value = ''
+    engine.value = null
+    aspect.value = '9:16'
+    style.value = {}
+    job.value = null
+    running.value = false
+    lastError.value = null
+  }
+
+  return {
+    script,
+    engine,
+    aspect,
+    style,
+    job,
+    running,
+    polling,
+    lastError,
+    deriveScript,
+    submit,
+    pollOnce,
+    startPolling,
+    stopPolling,
+    reset,
+  }
+})

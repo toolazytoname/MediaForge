@@ -19,6 +19,7 @@ from pipeline.webui.api import (
     settings,
     sources,
     topics,
+    video,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -32,5 +33,6 @@ api_router.include_router(analytics.router)
 api_router.include_router(accounts.router)
 api_router.include_router(runs.router)
 api_router.include_router(settings.router)
+api_router.include_router(video.router)
 
 __all__ = ["api_router"]

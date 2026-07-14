@@ -20,6 +20,7 @@ import {
   SettingOutlined,
   MessageOutlined,
   RobotOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons-vue'
 import SidebarNavItem from './components/SidebarNavItem.vue'
 import UserAvatarMenu from './components/UserAvatarMenu.vue'
@@ -64,6 +65,7 @@ const groups: ReadonlyArray<NavGroup> = [
     label: '内容生产',
     items: [
       { path: '/creation', label: '创作', icon: EditOutlined },
+      { path: '/creation/video', label: '视频创作', icon: VideoCameraOutlined },
       { path: '/topics', label: '选题池', icon: BulbOutlined },
       { path: '/contents', label: '内容库', icon: DatabaseOutlined },
       { path: '/review', label: '审核台', icon: AuditOutlined },
