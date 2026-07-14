@@ -69,12 +69,25 @@ image_gen:
 
 # ── 视频 ─────────────────────────────────────────────────
 video:
-  engine: mpt                 # mpt | openmontage | aigcpanel（后两者 M5-3 评估后启用）
+  engine: mpt                 # mpt（量产兜底）| pixelle（精品/AI生成视觉，M5-3）| digitalhuman（数字人口播，M12-1）| openmontage（远期观察，未实现）
   mpt:
     base_url: http://127.0.0.1:8080
     voice: zh-CN-YunxiNeural
     poll_interval_s: 30
     timeout_s: 1200
+  pixelle:
+    base_url: http://127.0.0.1:9000
+    poll_interval_s: 30
+    timeout_s: 1800
+    voice: zh-CN-YunxiNeural
+    prompt_prefix: ""          # 可选，全局视觉风格提示（如"现代简约风格，"）
+  digitalhuman:
+    base_url: http://127.0.0.1:5000   # LatentSync cog predictions 服务地址
+    poll_interval_s: 20
+    timeout_s: 1200
+    tts_voice: zh-CN-YunxiNeural
+    avatar_templates:          # 形象素材名 -> 本地视频文件路径
+      default: assets/avatars/default.mp4   # 需自行准备真人形象素材，见 HARD_PARTS §6.1
 
 # ── 发布（默认关！M4 验收前不得打开）──────────────────────
 publish:

@@ -125,11 +125,22 @@ class PixelleConfig(BaseModel):
     prompt_prefix: str = ""     # 全局风格提示
 
 
+class DigitalHumanConfig(BaseModel):
+    """LatentSync 自托管数字人口播引擎配置（HARD_PARTS §6.1，M12-1）。"""
+    model_config = ConfigDict(extra="forbid")
+    base_url: str = "http://127.0.0.1:5000"   # LatentSync cog 服务地址
+    poll_interval_s: int = 20
+    timeout_s: int = 1200
+    tts_voice: str = "zh-CN-YunxiNeural"
+    avatar_templates: dict[str, str] = Field(default_factory=dict)  # name -> 本地视频文件路径
+
+
 class VideoConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    engine: Literal["mpt", "openmontage", "aigcpanel", "pixelle"] = "mpt"
+    engine: Literal["mpt", "openmontage", "digitalhuman", "pixelle"] = "mpt"
     mpt: MPTConfig = Field(default_factory=MPTConfig)
     pixelle: PixelleConfig = Field(default_factory=PixelleConfig)
+    digitalhuman: DigitalHumanConfig = Field(default_factory=DigitalHumanConfig)
 
 
 # ── Publish ───────────────────────────────────────────────

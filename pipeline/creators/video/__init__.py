@@ -21,6 +21,11 @@ from pipeline.creators.video.pixelle import (
     FRAME_TEMPLATE_BY_ASPECT,
     DEFAULT_VOICE,
 )
+from pipeline.creators.video.digitalhuman import (
+    DigitalHumanEngine,
+    build_digitalhuman_engine,
+    is_digitalhuman_alive,
+)
 
 __all__ = [
     "VideoEngine",
@@ -28,10 +33,13 @@ __all__ = [
     "VideoJobStatus",
     "MPTEngine",
     "PixelleEngine",
+    "DigitalHumanEngine",
     "build_mpt_engine",
     "build_pixelle_engine",
+    "build_digitalhuman_engine",
     "is_mpt_alive",
     "is_pixelle_alive",
+    "is_digitalhuman_alive",
     "FRAME_TEMPLATE_BY_ASPECT",
     "DEFAULT_VOICE",
 ]
@@ -43,6 +51,7 @@ __all__ = [
 _ENGINE_BUILDERS = {
     "mpt": build_mpt_engine,
     "pixelle": build_pixelle_engine,
+    "digitalhuman": build_digitalhuman_engine,
 }
 
 

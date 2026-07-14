@@ -357,14 +357,16 @@ def test_build_video_engine_returns_engine_when_ok() -> None:
 def test_build_video_engine_unknown_engine_returns_none() -> None:
     """未知 engine 名 → None（图链不断）。
 
-    aigcpanel 是 TECH_SPEC §6 Literal 中预留但本项目未实现的引擎名（M5-3
-    后才评估 AIGCPanel 数字人）。用它断言未知 engine 降级路径。
+    openmontage 是 TECH_SPEC §5.6 Literal 中预留但本项目未实现的引擎名
+    （远期观察，未落地 builder）。用它断言未知 engine 降级路径。
+    （原先用 aigcpanel 占位；M12-1 把它从 Literal 中移除、替换为
+    digitalhuman 真实引擎名，故改用 openmontage 保持测试意图不变。）
     """
     cfg = AppConfig.model_validate({
         "pillars": [{"id": "ai_daily", "name": "x",
                      "description": "y", "scoring_hint": "z"}],
         "llm": {"tiers": {"cheap": "h", "creative": "s", "critical": "s"}},
-        "video": {"engine": "aigcpanel"},   # 未实现 → None
+        "video": {"engine": "openmontage"},   # 未实现 → None
     })
     eng = build_video_engine(cfg)
     assert eng is None
