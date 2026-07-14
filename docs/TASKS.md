@@ -1253,10 +1253,51 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **验收**：HARD_PARTS §2 验证法——无重复帖、失败有告警、cookie 失效可检测；3 天稳定
 - **红线**：真发高危，人工；出现风控/封号迹象立即停
 
-### M12｜视频线（图文闭环稳定后）
-- [ ] **目标**：图文全链路稳定后，同套编排复制到视频(MPT/Pixelle 引擎已接 M5)；对标蚁小二"浏览器发布助手"直连 AI 视频工具(可灵/即梦/海螺/Vidu)产物发布
-- **前置**：M11-F 图文验收达标
-- 备注：细粒度待图文闭环稳定后再拆
+## M12 — 视频线：数字人口播引擎 + 视频创作向导（2026-07-14，用户驱动，提前于 M11-F 插队）
+
+> **顺序说明**：原计划"图文闭环稳定后再做视频"（前置 M11-F 真账号验证），但用户 2026-07-14 直接指示"现在就做视频生成，尤其真人口播"——这是用户对既定顺序的显式覆盖，非擅自变更。记录在此，M11-F 仍需完成（赚钱验收独立于本节）。
+>
+> **对蚁小二的认知纠正**：`docs/research/yixiaoer-teardown-and-plan.md` 早期结论"蚁小二无原生视频生成 UI"不完整——用户实抓截图证实蚁小二侧栏「更多→创作→新增创作」有真实的"选择创作类型"卡片弹窗（6 卡：seedance 2.0/数字人口播/真人口播智剪/素材混剪/新闻体/克隆数字人配音）。本节要抄的正是这个弹窗交互模式，但**只做我们真支持的卡片**，不做空壳卡片（CLAUDE.md 反对"半成品"）。
+>
+> **引擎选型纠正**：TECH_SPEC §5.6 / HARD_PARTS §7 原占位的 `aigcpanel` 引擎经核实为 **Electron 桌面应用**（AGPL-3.0，本地模型管理，无头服务器场景不适用）——不能像 MPT/Pixelle 一样自托管 HTTP 调用。改用 **LatentSync**（`bytedance/LatentSync`，Apache-2.0，5.8k★，已用 Cog 封装 `cog.yaml`+`predict.py`，`cog build` 可起本地 HTTP predictions 服务）作为唇形同步引擎——自托管零边际成本，符合用户"优先开源、不花钱"的要求（放弃 HeyGen/百度曦灵等商用 API 方案）。**LatentSync 只做唇形同步**（输入：形象循环视频 + TTS 音频 → 输出：口型匹配的成片），不产出人物形象或语音，需要配套：TTS（复用 MPT 链路已用的 edge-tts）+ 形象素材（用户提供的真人循环讲话视频，放 `secrets/avatars/` 或 `assets/avatars/`，非本仓库资产，类比凭据管理）。
+
+### M12-0｜技术选型落盘 + 形象素材约定（低危，纯文档）
+- [ ] **目标**：把上面两条"认知纠正"落进 `TECH_SPEC.md §5.6`（VideoEngine 引擎名单补充 `digitalhuman` 替代 `aigcpanel` 占位）和 `HARD_PARTS.md §7`（数字人行替换为 LatentSync 方案）；`opensource-survey.md` AIGCPanel 行标注"已评估排除：Electron 桌面应用，非无头服务"
+- **步骤**：三处文档编辑，不涉及代码；新增 `docs/HARD_PARTS.md` 小节说明形象素材来源约定——用户需自备一段 5-15s 正面、嘴部清晰、光照均匀的说话/待机循环视频，放 `assets/avatars/<name>.mp4`（.gitignore 排除大文件，仓库只存一个占位说明 + 可选 CC0 示例），config 通过 `style.avatar_template` 选择
+- **验收**：三文档更新且不与既有契约冲突；无代码改动
+- **红线**：不改 VideoEngine 接口（`submit/poll/fetch` 签名不变，`aigcpanel`→`digitalhuman` 只是引擎名占位字符串变化，非契约字段）
+
+### M12-1｜digitalhuman VideoEngine 实现（TDD，中危）
+- [ ] **目标**：`pipeline/creators/video/digitalhuman.py::DigitalHumanEngine` 实现 `VideoEngine` ABC；架构与 `mpt.py`/`pixelle.py` 一致（自托管 HTTP 客户端 + 工厂降级）
+- **步骤**：
+  1. TTS：抽取/复用 edge-tts 封装（若 `mpt.py` 内联未抽出，新建 `pipeline/creators/tts.py::synthesize(script, voice) -> Path`，MPT 引擎顺手改为调用它，DRY，不改 MPT 对外行为）
+  2. `submit()`：script→TTS 音频；按 `req.style["avatar_template"]` 取形象视频路径（缺省用 config 默认模板，模板文件不存在则抛 `CreateError`，不静默降级出错成片）；POST 本地 LatentSync cog server `/predictions`（async，`Prefer: respond-async` 或轮询自带 id），返回 `job_id`
+  3. `poll()`：GET `/predictions/{job_id}`，映射 cog 状态（`starting/processing`→running，`succeeded`→done，`failed/canceled`→failed），progress 无则 None（照抄 Pixelle "不被假象百分比骗"的教训）
+  4. `fetch()`：下载 predictions 输出（cog 输出为文件路径或 base64/URL，视本地部署方式定，下载到 `dest`）
+  5. config 新增 `DigitalHumanConfig`（base_url / poll_interval_s / timeout_s / tts_voice / avatar_templates: dict[name, path]）+ `build_video_engine(cfg)` 工厂分支，初始化失败（服务未起/模板缺失）捕获降级，不影响 mpt/pixelle 链路
+- **测试要点**：mock cog HTTP 响应（httpx mock，仿 pixelle 测试模式）；TTS 生成路径可被 mock；avatar 模板缺失→`CreateError`（不是 500 也不是静默用默认）；工厂初始化失败降级不影响其他引擎（回归 mpt/pixelle 现有降级测试）
+- **验收**：单测覆盖 submit/poll/fetch 三态 + 降级路径；`pytest tests/ -q` 全绿；`grep -rn "import anthropic" pipeline/ | grep -v llm.py` 为空
+- **红线**：不改 `VideoRequest`/`VideoJobStatus` 字段；不让 LatentSync/引擎自己编口播文案（脚本仍来自我方 LLM 派生，同 HARD_PARTS §6 教训）
+
+### M12-2｜前端「新建创作」类型选择弹窗（clone 蚁小二卡片交互，低危）
+- [ ] **目标**：`frontend/src/views/Creation/` 新增视频创作入口，弹窗仿蚁小二"选择创作类型"卡片网格（图标+标题+副标题），但**只放 3 张真实卡片**：素材混剪(mpt)/AI 生成视频(pixelle)/数字人口播(digitalhuman)——不做 seedance/真人口播智剪模板库/新闻体/克隆数字人配音管理等未实现功能的空卡片
+- **步骤**：新组件 `VideoTypeSelectModal.vue`（卡片网格，点击卡片=选定 `engine` 值并进入下一步）；接入现有创作入口（新增侧边"内容生产"下的「视频创作」路由或在 `/creation` 加 tab，具体挂载点跟随 M11-A 已定的 IA 分组）
+- **验收**：3 张卡片可点选，无死链接/占位跳转；Ant Design Vue 组件风格与既有 webui 一致
+- **红线**：纯前端，不新增/改动 API 契约
+
+### M12-3｜视频创作向导（Step 流程，复用图文 6 步模式，中危）
+- [ ] **目标**：仿 `Creation.vue` 编排 6 个 Step 组件的模式，新建视频创作向导：选内容 → 选类型(M12-2 弹窗) → 口播稿(LLM 派生+可编辑) → 引擎参数(音色/形象模板/比例 9:16|16:9) → 提交后轮询进度 → 预览成片
+- **步骤**：后端加一个薄 bridge（仿 `write_action_bridge.py` 模式）包一层"提交视频生成任务"+"查询进度"只读/受控写接口，不重实现 VideoEngine 编排逻辑；前端 Step 组件仿 `Step2Create.vue`/`Step4ImageGen.vue` 现成的"提交+轮询+展示进度"UI 模式
+- **验收**：dry 模式下（无真实 LatentSync/MPT 服务）向导可走完全程到"预览"步（mock/降级态提示"引擎未部署"，不崩溃）；有真实引擎时可提交任务并轮询到成片
+- **红线**：UI 不得直连 DB/引擎，走既有 db_reads / bridge 分层；不新增可绕过 `publish` 白名单的一键发布入口
+
+### M12-4｜数字人链路真机验证（**高危，人工，需 GPU 环境与形象素材，不进自治流**）
+- [ ] **目标**：本机/服务器起 LatentSync cog docker + 用户提供真实形象素材，端到端跑通一条数字人口播视频（脚本→TTS→唇形同步→成片）
+- **前置**：M12-1 完成；用户提供 `assets/avatars/*.mp4` 素材 + GPU 环境（LatentSync v1.5 约 8GB 显存起）
+- **验收**：产出 mp4 且口型基本对得上音频；质感是否达到可发布标准由用户判断（非自动化验收项）
+- **红线**：需 GPU/素材等用户侧资源，不进自治协议；卡在环境准备属正常 `⚠️ BLOCKED`，非代码缺陷
+
+备注：M11-F（图文真账号验收）仍按原计划独立推进，与本节并行，互不阻塞。
 
 ### M13-1｜公众号（wechat_mp）Publisher —— 官方 API 草稿箱方案实现（低危，代码+测试）
 - [x] **目标**：移植 TrendPublish（`liyown/ai-trend-publish`，MIT）的微信公众号官方 API 草稿箱发布能力，接入 config/derivative/registry 三层管线；dry_run 全流程可测，真实调用依赖账号认证（见 M13-2）

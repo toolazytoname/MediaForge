@@ -115,6 +115,24 @@
 
 ---
 
+## §6.1 LatentSync 集成（数字人口播引擎，M12-1）
+
+**为什么难**：数字人口播不是单一服务能搞定的——它是三段拼接：TTS（文字→音频）+ 形象素材（一段真人循环讲话/待机视频）+ 唇形同步（LatentSync 把音频"贴"到形象视频的嘴型上）。原计划的 `aigcpanel`（modstart-lib/aigcpanel）核实为 **Electron 桌面应用**（AGPL-3.0，捆绑本地模型管理 UI），不是无头服务，无法像 MPT/Pixelle 一样被 cron 流水线远程调用——**已废弃**。
+
+**决策（2026-07-14，用户要求优先开源方案）**：改用 `bytedance/LatentSync`（Apache-2.0，5.8k★，`cog.yaml` + `predict.py` 已做 Cog 封装，`cog build` 起本地 HTTP predictions 服务），自托管零边际成本；不用 HeyGen/D-ID/百度智能云曦灵等商用 API（评估过，见调研记录，成本非零、且非本次用户诉求）。
+
+**实现要点**：
+1. `pipeline/creators/video/digitalhuman.py`：TTS 复用 edge-tts（同 §6，与 MPT 共享封装，不重复实现）→ 生成音频；`req.style["avatar_template"]` 选一个本地形象视频路径（config `DigitalHumanConfig.avatar_templates: dict[name, path]`，缺省用第一个/报错，不静默用错模板）
+2. 调本地 LatentSync cog 服务：`POST /predictions`（video=形象视频, audio=TTS 音频）→ 轮询 `GET /predictions/{id}` → `succeeded` 后下载输出 mp4
+3. **形象素材是用户侧资产，不是本仓库代码问题**：需要一段 5-15s、正面、嘴部清晰、光照均匀的真人说话/待机循环视频，放 `assets/avatars/<name>.mp4`（gitignore 排除，仓库只留占位说明）。没有素材 = `CreateError`，不是代码缺陷
+4. LatentSync 只做唇形同步，**不产出人物形象、不产出语音、不写文案**——文案仍来自我方 LLM 派生（同 §6 教训：不让引擎自己编内容）
+5. GPU 要求：LatentSync v1.5 约 8GB 显存起，本地无 GPU 环境时该引擎初始化失败，工厂函数捕获降级，不影响 mpt/pixelle 链路
+6. 版本锁定：docker-compose pin LatentSync 具体 commit/tag，升级手动验证
+
+**验证**：见 TASKS.md M12-4（真机验证，需真实 GPU + 形象素材，人工执行，不进自治流）。
+
+---
+
 ## §7 备选方案登记（当前选型失效时的 Plan B）
 
 | 组件 | 当前选型 | Plan B | 切换触发条件 |
@@ -128,7 +146,7 @@
 | 无人值守兜底（A 路线 headless） | 现有自写 Playwright（M4-3/M5-2） | **移植 MPP `platform_configs.py` 配置化架构（MIT，加平台=改配置）** | 自写 headless 加平台成本过高时移植 MPP 架构 |
 | 视频生成（量产） | MoneyPrinterTurbo（M5-1 已实装，工厂降级） | NarratoAI（解说类）/ 直接 ffmpeg + edge-tts 自拼 | MPT 停更或质量不满意 |
 | 视频生成（精品/AI 生成类） | Pixelle-Video（M5-3 已实装为 VideoEngine 第二引擎，mode=fixed 注入我方脚本，404 重提交） | OpenMontage（远期观察）/ 人工 + Remotion | 生图成本失控或项目停更 |
-| 数字人 | AIGCPanel（M5-3 缩减为速评后留 Backlog） | HeyGen 等商业 API | 本地部署质量/性能不达标 + 账号过带货门槛 + 平台虚拟人报备完成 |
+| 数字人 | **LatentSync 自托管（Apache-2.0，M12-1 落地；`aigcpanel` 已废弃——核实为 Electron 桌面应用非无头服务，见 §6.1）** | HeyGen / 百度智能云曦灵等商业 API | 自托管质量/GPU 性能不达标，或需要无 GPU 环境时切商用 API |
 | 热点源 | RSS + DailyHotApi 自部署 | newsnow 自部署 | DailyHotApi 接口挂 |
 | 图像生成 | 不用（模板渲染兜底）；provider=none；可选 baoyu-image-gen subprocess（M2-4.5 子任务待激活，11 provider，见 evaluation-notes §5） | Gemini/OpenAI 图像 API | 模板卡片视觉疲劳、数据表明配图影响点击；或 baoyu-image-gen 升级破坏 CLI 签名（真集成时复核 HEAD） |
 

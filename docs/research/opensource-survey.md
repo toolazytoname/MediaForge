@@ -60,7 +60,8 @@
 
 | 项目 | Stars | 说明 |
 |------|-------|------|
-| [AIGCPanel](https://github.com/modstart-lib/aigcpanel) | 5.2k | 一站式数字人系统：视频合成/声音克隆/本地模型管理，活跃 | 数字人口播赛道备选（V2+） |
+| [AIGCPanel](https://github.com/modstart-lib/aigcpanel) | 5.2k | 一站式数字人系统：视频合成/声音克隆/本地模型管理，活跃 | **已评估排除（2026-07-14）**：核实为 Electron 桌面应用（AGPL-3.0），无头服务器场景不适用，见 HARD_PARTS §6.1 |
+| [LatentSync](https://github.com/bytedance/LatentSync) | 5.8k | 字节跳动，Stable Diffusion 唇形同步，`cog.yaml`+`predict.py` 已 Cog 封装可起本地 HTTP 服务，Apache-2.0 | **数字人口播引擎选型（M12-1）**：自托管零边际成本，只做唇形同步，需搭配 TTS+用户提供形象素材 |
 | [LuoGen-agent](https://github.com/LuoGen-AI/LuoGen-agent) | 0.8k | 对标文案提取→仿写→声音克隆→数字人→发布全链 | 思路参考 |
 
 ### 结论修正

@@ -290,9 +290,11 @@ class VideoRequest:
     style: dict                    # 引擎特有参数（音色/模板/素材偏好）
 ```
 
-- config `video.engine: mpt`（默认）。引擎选择在派生阶段按内容标记可覆盖（头部精品内容可指定 `openmontage`）
+- config `video.engine: mpt`（默认）。引擎选择在派生阶段按内容标记可覆盖（头部精品内容可指定 `pixelle`/`digitalhuman`）
 - `mpt` 引擎：HTTP 客户端对接 MoneyPrinterTurbo API（HARD_PARTS §6）
-- `openmontage` 引擎（可选，M5-3 评估后实现）：以 headless agent 一次性任务驱动（subprocess 调 `claude -p` 或 Agent SDK），产物回收到 output 目录。**该引擎不可用不得影响 mpt 链路**（工厂函数捕获初始化失败降级）
+- `pixelle` 引擎（M5-3 已实装）：对接 Pixelle-Video，`mode=fixed` 跳过其自带文案，承接"精品/AI 生成视觉"定位
+- `digitalhuman` 引擎（M12-1，数字人口播）：自托管 LatentSync（唇形同步）+ TTS + 形象模板三段拼接，见 HARD_PARTS §6.1。**原计划的 `aigcpanel` 占位已废弃**——核实为 Electron 桌面应用（AGPL-3.0），不适合无头 cron 场景
+- `openmontage` 引擎（可选，远期观察，未实现）：以 headless agent 一次性任务驱动（subprocess 调 `claude -p` 或 Agent SDK），产物回收到 output 目录。**该引擎不可用不得影响 mpt 链路**（工厂函数捕获初始化失败降级）
 
 ## 6. config.yaml 契约
 
