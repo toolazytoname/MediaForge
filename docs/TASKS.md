@@ -142,7 +142,7 @@
   ✅ 完成于 2026-07-06，commit 188c311，备注：`pipeline/topics/url_dedup.py` (~95 行纯函数) + `pipeline/topics/runner.py` 接入 `merge_by_url` + `ScoreRunResult.duplicates_merged` 新字段 + `cmd_score` 打印新计数。tests 22 新增（url_dedup 18 + runner 集成 4），全量 885 pass + 12 skip（原 863 + 22），4 失败 pre-existing 不变。**契约零变更**；in-memory 合并，DB 中重复条目下次 cron 仍会被再次合并（少量 LLM 浪费），彻底解决需 schema 加 `merged_into_topic_id` 字段（动契约，留 TODO）。
 
 ### M1-7 AI 语义主题去重（借鉴 Horizon）
-- [ ] **目标**：score 后、selector 前用 LLM 识别"同主题不同 URL/不同标题"的条目并去重，避免同一事件多角度报道占满 daily_quota
+- [x] **目标**：score 后、selector 前用 LLM 识别"同主题不同 URL/不同标题"的条目并去重，避免同一事件多角度报道占满 daily_quota
 - **步骤**：
   1. `pipeline/topics/topic_dedup.py` 新增纯函数 `dedup_topics(items, ai_client) -> (reps, dups)`：单次 AI 调用，prompt 移植 Horizon `src/ai/prompts.py` 的 `TOPIC_DEDUP_SYSTEM/USER`（MIT License）；失败静默 fallback（返回 (items, [])）
   2. 复用 `creators/llm.py::complete_json`（已有 JSON fence + 自动重试）
@@ -155,7 +155,7 @@
   ✅ 完成于 2026-07-07，commit 2b4df08，备注：topic_dedup.py 243 行（prompt MIT 搬运 commit 3e21c04 + 失败 fallback 静默 + keyword-only ai_client）+ runner.py 接入顺序 URL→语义→score + ScoreRunResult.duplicates_semantic_merged + cmd_score 打印 + tests 25（纯函数 20 + 集成 5），全测 940 绿/12 skip（2 pre-existing 失败已 stash 验证）。verify PASS 10/10。
 
 ### M1-8 AI 智能筛选预筛（评估任务，借鉴 sansan0/TrendRadar filter.py）
-- [ ] **目标**：评估"两阶段 AI 筛选"（A: 兴趣描述→标签；B: 标题批量分类+relevance）作为 M1-4 score 前的预筛是否值得做
+- [x] **目标**：评估"两阶段 AI 筛选"（A: 兴趣描述→标签；B: 标题批量分类+relevance）作为 M1-4 score 前的预筛是否值得做
 - **步骤**：
   1. 设计 spec 草案：`pipeline/topics/prefilter.py` 设计 + cost 估算（每次 ingest 多 N 次 LLM 调用 vs 减少下游 score 调用量）+ threshold 策略
   2. 评估 ROI：score 阶段 cheap 档 ≈ $0.001/条，预筛再 cheap ≈ $0.001/条；预筛只对"高 relevance"的条目进入 score 才能摊薄；50% 命中率才能打平，70%+ 才有正收益
@@ -166,7 +166,7 @@
   ✅ 完成于 2026-07-07，commit <待填>，备注：**DECISION = 推迟**（不落地也不放弃）。评估文档落入 `docs/research/evaluation-notes.md` §6.3，2 方案设计 + ROI 数学（实测 score_cost $0.000534 / prefilter A $0.000294 / prefilter B=10 $0.000181 per-item，N=50 baseline $0.0267/日；持平点 A=45.1% / B=66.2%；典型 H=50% 时 A +5% / B −16%）。推迟依据 4 条：① 绝对金额小（最坏 +45% 也月度 $1.2）② H 数值未知无 ground truth ③ M1-7 已用一次 LLM、再插预筛与 score 引入抖动风险 ④ min_score=6.0 已现成过滤低 relevance。**4 条触发重新评估条件**：30d_avg_raw>200 且月度成本占比>60% / review 耗时突增 / daily_quota 扩到 ≥20 / score JSON 解析失败率>5%。**回看窗**：M6 完成 + 30 天；最迟 M6+60 天复评。pipeline 代码零变更（红线遵守）。
 
 ### M1-9 多 provider 坑结构化收编（借鉴 Horizon ai/client.py）
-- [ ] **目标**：把 `creators/llm.py::MiniMaxProvider` 散落的特殊 case（NO_RESPONSE_FORMAT / TEMP_CLAMP / JSON fence）提到 `PROVIDER_SPECS` 注册表，新增 provider 不用改 llm.py 主逻辑
+- [x] **目标**：把 `creators/llm.py::MiniMaxProvider` 散落的特殊 case（NO_RESPONSE_FORMAT / TEMP_CLAMP / JSON fence）提到 `PROVIDER_SPECS` 注册表，新增 provider 不用改 llm.py 主逻辑
 - **步骤**：
   1. `pipeline/creators/llm.py` 新增 `PROVIDER_SPECS: dict[str, ProviderSpec]` 注册表（fields: supports_response_format / min_temperature / extra_fence_strip / 价格等）
   2. 各 provider 创建时按 spec 读配置
