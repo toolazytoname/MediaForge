@@ -308,6 +308,7 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
 
     from pipeline.config import load_config
     from pipeline.creators import image_gen
+    from pipeline.creators.derivative_toutiao_images import sync_toutiao_images
     from pipeline.creators.derivative_wechat_mp import insert_generated_images
     from pipeline.creators.image_gen import generate_image
     from pipeline.models import ContentStatus
@@ -431,6 +432,13 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
                 #     derivative_wechat_mp.py 模块说明）
                 if insert_generated_images(content_dir, canonical_md):
                     print(f"  ↻ {c.id}: spliced inline images into wechat_mp/article.md",
+                          file=sys.stderr)
+
+                # 3.6 同步同一批真实插图进 toutiao.md（头条真实发布读取的文件，
+                #     创作阶段只留 [IMAGE: caption] 占位符，见
+                #     derivative_toutiao_images.py 模块说明）
+                if sync_toutiao_images(content_dir, canonical_md):
+                    print(f"  ↻ {c.id}: synced inline images into toutiao.md",
                           file=sys.stderr)
 
                 # 4. 写回 contents（封面 + inline 路径）
