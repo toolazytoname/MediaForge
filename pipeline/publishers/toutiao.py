@@ -299,6 +299,21 @@ def _real_publish_fn(
         except Exception:
             pass  # 截图失败不阻断
 
+    def _find_visible_locator(page, selectors: tuple, timeout_ms: int = 6000):
+        """逐个候选选择器等它出现并可见（SPA 水合比 load 事件慢，
+        不能只查一次 count()——真实头条页面首屏白屏几秒是常态）。"""
+        for css in selectors:
+            try:
+                page.wait_for_selector(css, timeout=timeout_ms, state="visible")
+            except PWTimeout:
+                continue
+            except Exception:
+                continue
+            loc = page.locator(css).first
+            if loc.count() > 0:
+                return loc
+        return None
+
     with sync_playwright() as p:
         try:
             browser = p.chromium.launch(headless=True)
@@ -329,18 +344,14 @@ def _real_publish_fn(
                     f"could not reach toutiao publish page; "
                     f"tried {selectors.PUBLISH_URL_FALLBACK}"
                 )
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except PWTimeout:
+                pass  # SPA 可能有长轮询，networkidle 超时不代表页面没渲染好
             _shot(page, "01_publish_page")
 
             # 2. 填标题
-            title_locator = None
-            for css in selectors.TITLE_SELECTORS:
-                try:
-                    loc = page.locator(css).first
-                    if loc.count() > 0 and loc.is_visible():
-                        title_locator = loc
-                        break
-                except Exception:
-                    continue
+            title_locator = _find_visible_locator(page, selectors.TITLE_SELECTORS)
             if title_locator is None:
                 raise PublishError(
                     "toutiao title input not found "
@@ -351,15 +362,7 @@ def _real_publish_fn(
             _shot(page, "02_title_filled")
 
             # 3. 填正文
-            body_locator = None
-            for css in selectors.BODY_SELECTORS:
-                try:
-                    loc = page.locator(css).first
-                    if loc.count() > 0 and loc.is_visible():
-                        body_locator = loc
-                        break
-                except Exception:
-                    continue
+            body_locator = _find_visible_locator(page, selectors.BODY_SELECTORS)
             if body_locator is None:
                 raise PublishError(
                     "toutiao body editor not found "
@@ -385,15 +388,7 @@ def _real_publish_fn(
                     continue
 
             # 5. 点发布
-            submit_locator = None
-            for css in selectors.SUBMIT_BUTTON:
-                try:
-                    loc = page.locator(css).first
-                    if loc.count() > 0 and loc.is_visible():
-                        submit_locator = loc
-                        break
-                except Exception:
-                    continue
+            submit_locator = _find_visible_locator(page, selectors.SUBMIT_BUTTON)
             if submit_locator is None:
                 raise PublishError(
                     "toutiao submit button not found "

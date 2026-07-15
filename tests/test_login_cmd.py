@@ -98,11 +98,10 @@ def test_login_toutiao_saves_storage_state(
     fake_browser = MagicMock()
     fake_browser.new_context.return_value = fake_context
 
-    # wait_for_url 第一次调用 → 抛 TimeoutError 模拟「未跳转」前的瞬态；
-    # 测试只需让 login_toutiao 至少走一次 wait_for_url 即可验证结构
     fake_page = fake_context.new_page.return_value
-    fake_page.wait_for_url.return_value = None
     fake_page.goto.return_value = MagicMock(status=200)
+    fake_page.url = "https://mp.toutiao.com/profile_v4/public/"
+    fake_page.inner_text.return_value = ""  # 页面干净，无登录指示词
 
     fake_p = MagicMock()
     fake_p.chromium.launch.return_value = fake_browser
@@ -125,17 +124,87 @@ def test_login_toutiao_saves_storage_state(
         assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
 
 
-def test_login_toutiao_timeout_raises_publish_error(
+def test_login_toutiao_url_left_auth_but_page_still_login_raises(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """wait_for_url 超时 → PublishError（不抛 raw Playwright TimeoutError）。"""
+    """回归测试：头条把 profile_v3/public/ 重定向到 profile_v4/public/，
+    网址不含 login/auth/passport，但页面仍是登录表单（SPA 原地渲染）。
+    URL 干净之后，必须靠页面文字二次确认——不然会把这种情况误判为登录
+    成功，存一份没有真实 session 的 storage_state（现网实测过的真实
+    bug：只存下风控 cookie，之后真实发布全部失败在登录页）。
+    """
     monkeypatch.chdir(tmp_path)
-
-    from playwright.sync_api import TimeoutError as PWTimeout
 
     fake_page = MagicMock()
     fake_page.goto.return_value = MagicMock(status=200)
-    fake_page.wait_for_url.side_effect = PWTimeout("simulated")
+    fake_page.url = "https://mp.toutiao.com/profile_v4/public/"  # URL "干净"（假阳性）
+    fake_page.inner_text.return_value = "扫码登录"  # 但页面文字仍是登录框，一直不清空
+
+    fake_context = MagicMock()
+    fake_context.new_page.return_value = fake_page
+    fake_browser = MagicMock()
+    fake_browser.new_context.return_value = fake_context
+
+    fake_p = MagicMock()
+    fake_p.chromium.launch.return_value = fake_browser
+    fake_p.__enter__ = lambda s: fake_p
+    fake_p.__exit__ = lambda s, *a: None
+
+    with patch("playwright.sync_api.sync_playwright", return_value=fake_p):
+        with pytest.raises(PublishError, match="login timeout"):
+            login_toutiao("main", timeout_s=1)
+
+
+def test_login_toutiao_waits_for_login_indicators_to_clear_before_saving(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """页面文字先显示登录指示词，随后清空 → 应继续轮询直到**连续多次**清空
+    （debounce，防止踩中 SPA 客户端重定向途中"某一帧恰好干净"的 race）
+    后再存 storage_state，而不是第一次检测到干净就立刻当作登录成功。"""
+    monkeypatch.chdir(tmp_path)
+
+    fake_state = {
+        "cookies": [{"name": "sessionid", "value": "real", "domain": ".toutiao.com"}],
+        "origins": [],
+    }
+    fake_context = MagicMock()
+    fake_context.storage_state.return_value = fake_state
+    fake_browser = MagicMock()
+    fake_browser.new_context.return_value = fake_context
+
+    fake_page = MagicMock()
+    fake_context.new_page.return_value = fake_page
+    fake_page.goto.return_value = MagicMock(status=200)
+    fake_page.url = "https://mp.toutiao.com/profile_v4/public/"
+    # 前两次仍显示登录框，第三次起清空；需连续 3 次干净（_LOGIN_STABLE_CHECKS_REQUIRED）
+    # 才判定成功，所以共 5 次调用（2 脏 + 3 净）
+    fake_page.inner_text.side_effect = ["扫码登录", "请先登录", "", "", ""]
+
+    fake_p = MagicMock()
+    fake_p.chromium.launch.return_value = fake_browser
+    fake_p.__enter__ = lambda s: fake_p
+    fake_p.__exit__ = lambda s, *a: None
+
+    with patch("playwright.sync_api.sync_playwright", return_value=fake_p):
+        out_path = login_toutiao("main", timeout_s=5)
+
+    assert out_path.exists()
+    loaded = json.loads(out_path.read_text(encoding="utf-8"))
+    assert loaded == fake_state
+    assert fake_page.inner_text.call_count == 5
+
+
+def test_login_toutiao_timeout_raises_publish_error(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """URL 一直停在登录路径（从未跳出）→ PublishError，不抛 raw Playwright
+    TimeoutError。"""
+    monkeypatch.chdir(tmp_path)
+
+    fake_page = MagicMock()
+    fake_page.goto.return_value = MagicMock(status=200)
+    fake_page.url = "https://mp.toutiao.com/auth/page/login?redirect_url=x"
+    fake_page.inner_text.return_value = "扫码登录"
 
     fake_context = MagicMock()
     fake_context.new_page.return_value = fake_page
@@ -380,8 +449,9 @@ def test_login_douyin_saves_storage_state(
     }
 
     fake_page = MagicMock()
-    fake_page.wait_for_url.return_value = None
     fake_page.goto.return_value = MagicMock(status=200)
+    fake_page.url = "https://creator.douyin.com/creator-micro/home"
+    fake_page.inner_text.return_value = ""
 
     fake_context = MagicMock()
     fake_context.storage_state.return_value = fake_state
@@ -410,14 +480,13 @@ def test_login_douyin_saves_storage_state(
 def test_login_douyin_timeout_raises_publish_error(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """扫码超时 → PublishError。"""
+    """URL 一直停在登录路径（从未跳出）→ PublishError。"""
     monkeypatch.chdir(tmp_path)
-
-    from playwright.sync_api import TimeoutError as PWTimeout
 
     fake_page = MagicMock()
     fake_page.goto.return_value = MagicMock(status=200)
-    fake_page.wait_for_url.side_effect = PWTimeout("simulated")
+    fake_page.url = "https://sso.douyin.com/passport/web/login/"
+    fake_page.inner_text.return_value = "扫码登录"
 
     fake_context = MagicMock()
     fake_context.new_page.return_value = fake_page
@@ -522,8 +591,9 @@ def test_login_toutiao_emits_structured_log_events(
     fake_browser = MagicMock()
     fake_browser.new_context.return_value = fake_context
     fake_page = fake_context.new_page.return_value
-    fake_page.wait_for_url.return_value = None
     fake_page.goto.return_value = MagicMock(status=200)
+    fake_page.url = "https://mp.toutiao.com/profile_v4/public/"
+    fake_page.inner_text.return_value = ""
 
     fake_p = MagicMock()
     fake_p.chromium.launch.return_value = fake_browser

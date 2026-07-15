@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -136,6 +137,105 @@ def _chmod_600(path: Path) -> None:
 
 # ── Playwright 登录骨架（头条 / 抖音共用） ──────────────────
 
+# 登录确认轮询参数（现网实测校准——见 `_wait_for_confirmed_login` docstring）
+_LOGIN_SETTLE_S = 3.0
+_LOGIN_POLL_INTERVAL_S = 1.5
+_LOGIN_STABLE_CHECKS_REQUIRED = 3
+_LOGIN_PROGRESS_LOG_EVERY_S = 5.0
+
+
+def _wait_for_confirmed_login(
+    page,
+    profile: LoginProfile,
+    account: str,
+    *,
+    timeout_s: int,
+) -> None:
+    """轮询确认真实登录完成，取代"只看一次 URL/文字快照就当作登录成功"。
+
+    背景（现网实测踩过的坑）：`page.wait_for_url(predicate)` 在 predicate
+    对"当前" URL 已成立时会立刻返回（不等待真正的跳转发生）。头条这类平台
+    未登录时访问 `PROFILE_URL_FALLBACK[0]`，服务端先 200 返回一个不含
+    login/auth/passport 字样的中间态 URL（实测：profile_v3 被 302 到
+    profile_v4/public/），SPA 客户端 JS 还要再花约 1s 才把地址栏和页面
+    内容换成真正的登录页（/auth/page/login?...）。旧实现在这约 1s 的窗口
+    内只做一次性检查，误判"已经不在登录态"，存了一份只有风控 cookie
+    （gd_random/gfkadpd/x-web-secsdk-uid，无 sessionid 等真实 session）
+    的 storage_state——表现正是用户反馈的"浏览器一闪就消失，从没真正
+    登录成功"。
+
+    修法（debounce，而非一次性快照）：
+    1. 先静置 `_LOGIN_SETTLE_S` 秒，给客户端跳转时间落地；
+    2. 之后每 `_LOGIN_POLL_INTERVAL_S` 秒检查一次 URL + 页面文字，两者
+       都"干净"（不含 exit_keywords / LOGIN_INDICATORS）才计一次；
+    3. 要求连续 `_LOGIN_STABLE_CHECKS_REQUIRED` 次都干净才判定登录完成
+       ——中途只要脏一次立刻清零重计，避免再次踩中"某一帧恰好干净"的 race；
+    4. 读取页面文字失败（例如页面正在跳转导致 DOM 暂不可用）按"脏"处理，
+       不能当作"干净"直接放行；
+    5. 每 `_LOGIN_PROGRESS_LOG_EVERY_S` 秒打一条中文进度日志，方便观察
+       登录卡在哪一步，不必靠反复真人重试排查。
+    """
+    indicators = getattr(profile.selectors_module, "LOGIN_INDICATORS", ())
+    started = time.monotonic()
+    deadline = started + timeout_s
+
+    # 静置：让 SPA 客户端跳转先落地，避免在中间态 URL 上做判断
+    page.wait_for_timeout(int(_LOGIN_SETTLE_S * 1000))
+
+    stable = 0
+    last_progress_log = time.monotonic()
+    while True:
+        url = page.url
+        url_dirty = any(kw in url.lower() for kw in profile.exit_keywords)
+        try:
+            page_text = page.inner_text("body")
+            text_dirty = any(ind in page_text for ind in indicators)
+        except Exception as e:
+            text_dirty = True  # 读取失败 = 无法确认干净，当脏处理
+            page_text = f"<读取失败: {e!r}>"
+
+        dirty = url_dirty or text_dirty
+        if dirty:
+            if stable > 0:
+                _login_log_event(
+                    logging.INFO,
+                    f"检测到仍在登录态（url_dirty={url_dirty} "
+                    f"text_dirty={text_dirty}），继续等待",
+                    ref_id=account,
+                    platform=profile.platform,
+                )
+            stable = 0
+        else:
+            stable += 1
+            if stable >= _LOGIN_STABLE_CHECKS_REQUIRED:
+                _login_log_event(
+                    logging.INFO,
+                    f"已确认离开登录页（连续 {stable} 次检查干净），登录成功",
+                    ref_id=account,
+                    platform=profile.platform,
+                )
+                return
+
+        now = time.monotonic()
+        if now - last_progress_log >= _LOGIN_PROGRESS_LOG_EVERY_S:
+            elapsed = int(now - started)
+            _login_log_event(
+                logging.INFO,
+                f"⏳ 仍在等待登录（已等待 {elapsed}s / 最多 {timeout_s}s），"
+                f"当前页面 url={url}",
+                ref_id=account,
+                platform=profile.platform,
+            )
+            last_progress_log = now
+
+        if now >= deadline:
+            raise PublishError(
+                f"login timeout after {timeout_s}s; url={url} "
+                f"url_dirty={url_dirty} text_dirty={text_dirty} "
+                f"(page still shows login state)"
+            )
+        page.wait_for_timeout(int(_LOGIN_POLL_INTERVAL_S * 1000))
+
 
 def _playwright_login_run(
     profile: LoginProfile,
@@ -143,15 +243,16 @@ def _playwright_login_run(
     *,
     timeout_s: int = 300,
 ) -> Path:
-    """Playwright 登录骨架：launch → new_context → 遍历 URL fallback → 等待 URL
-    离开登录路径 → storage_state 落盘 + chmod 600 → finally browser.close。
+    """Playwright 登录骨架：launch → new_context → 遍历 URL fallback → 轮询
+    确认真实登录（见 `_wait_for_confirmed_login`）→ storage_state 落盘 +
+    chmod 600 → finally browser.close。
 
     90% 代码从原 `login_toutiao` 搬来；唯一差异由 `LoginProfile` 注入。
     所有进度通过 `log_event(stage="login", ref_id=account)` 发出，便于
     U7-7 Web UI 通过 logging.Handler 订阅。
     """
     try:
-        from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+        from playwright.sync_api import sync_playwright
     except ImportError as e:
         raise PublishError(
             f"playwright not installed: {e}; "
@@ -203,20 +304,9 @@ def _playwright_login_run(
                 platform=profile.platform,
             )
 
-            # 等待 URL 离开登录路径
-            try:
-                page.wait_for_url(
-                    lambda url: not any(
-                        kw in url.lower()
-                        for kw in profile.exit_keywords
-                    ),
-                    timeout=timeout_s * 1000,
-                )
-            except PWTimeout as e:
-                raise PublishError(
-                    f"login timeout after {timeout_s}s; user did not complete "
-                    f"login or page did not redirect away from auth"
-                ) from e
+            _wait_for_confirmed_login(
+                page, profile, account, timeout_s=timeout_s,
+            )
 
             # 保存 storage_state
             state = context.storage_state()
