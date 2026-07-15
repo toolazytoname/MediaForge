@@ -27,6 +27,7 @@ from pipeline.publishers.toutiao import (
     BODY_MIN_LEN,
     TITLE_MAX_LEN,
     ToutiaoPublisher,
+    _resolve_toutiao_media,
 )
 
 
@@ -278,6 +279,112 @@ def test_publish_fn_failure_propagates(
     )
     with pytest.raises(PublishError, match="submit button"):
         pub.publish(_bundle(out_root), account, dry_run=False)
+
+
+def test_publish_passes_resolved_media_to_publish_fn(
+    out_root: Path, cookies_path: Path, account: AccountConfig,
+) -> None:
+    """media_paths 为空时 publish() 传给 publish_fn 的 images 应为磁盘扫描结果。"""
+    (out_root / "cover.png").write_bytes(b"fake-png")
+    images_dir = out_root / "images"
+    images_dir.mkdir()
+    (images_dir / "inline-1.png").write_bytes(b"fake-png-1")
+    (images_dir / "inline-2.png").write_bytes(b"fake-png-2")
+
+    captured: dict = {}
+
+    def fake_probe(*a, **kw) -> tuple[int, str, str]:
+        return (200, "https://mp.toutiao.com/profile/", "ok")
+
+    def fake_publish(**kw) -> PublishResult:
+        captured.update(kw)
+        return PublishResult(platform_post_id="1", url=None, raw_response="{}")
+
+    pub = ToutiaoPublisher(
+        cookies_path=cookies_path,
+        health_probe=fake_probe,
+        publish_fn=fake_publish,
+    )
+    pub.publish(_bundle(out_root), account, dry_run=False)
+    assert captured["images"] == (
+        out_root / "cover.png",
+        images_dir / "inline-1.png",
+        images_dir / "inline-2.png",
+    )
+
+
+# ── _resolve_toutiao_media ───────────────────────────────────
+
+
+def test_resolve_toutiao_media_prefers_bundle_media_paths(tmp_path: Path) -> None:
+    p1 = tmp_path / "a.png"
+    p2 = tmp_path / "b.png"
+    bundle = PostBundle(
+        content_id="c1", title="t", body_path=tmp_path / "toutiao.md",
+        media_paths=(p1, p2), tags=(), extra={},
+    )
+    assert _resolve_toutiao_media(bundle) == (p1, p2)
+
+
+def test_resolve_toutiao_media_scans_disk_when_media_paths_empty(tmp_path: Path) -> None:
+    content_dir = tmp_path / "c_scan"
+    content_dir.mkdir()
+    (content_dir / "cover.png").write_bytes(b"x")
+    images_dir = content_dir / "images"
+    images_dir.mkdir()
+    (images_dir / "inline-1.png").write_bytes(b"x")
+
+    bundle = PostBundle(
+        content_id="c1", title="t", body_path=content_dir / "toutiao.md",
+        media_paths=(), tags=(), extra={},
+    )
+    result = _resolve_toutiao_media(bundle)
+    assert result == (content_dir / "cover.png", images_dir / "inline-1.png")
+
+
+def test_resolve_toutiao_media_sorts_inline_numerically_not_lexically(
+    tmp_path: Path,
+) -> None:
+    content_dir = tmp_path / "c_sort"
+    content_dir.mkdir()
+    images_dir = content_dir / "images"
+    images_dir.mkdir()
+    for n in (2, 10, 1):
+        (images_dir / f"inline-{n}.png").write_bytes(b"x")
+
+    bundle = PostBundle(
+        content_id="c1", title="t", body_path=content_dir / "toutiao.md",
+        media_paths=(), tags=(), extra={},
+    )
+    result = _resolve_toutiao_media(bundle)
+    assert result == (
+        images_dir / "inline-1.png",
+        images_dir / "inline-2.png",
+        images_dir / "inline-10.png",
+    )
+
+
+def test_resolve_toutiao_media_empty_dir_returns_empty_tuple(tmp_path: Path) -> None:
+    content_dir = tmp_path / "c_empty"
+    content_dir.mkdir()
+    bundle = PostBundle(
+        content_id="c1", title="t", body_path=content_dir / "toutiao.md",
+        media_paths=(), tags=(), extra={},
+    )
+    assert _resolve_toutiao_media(bundle) == ()
+
+
+# ── validate: 未处理的 [IMAGE: 占位符防线 ─────────────────────
+
+
+def test_validate_rejects_unresolved_image_placeholder(tmp_path: Path) -> None:
+    d = tmp_path / "c_placeholder"
+    d.mkdir(parents=True)
+    body = "正文……\n\n[IMAGE: 一张配图]\n\n" + ("正文内容" * 100)
+    (d / "toutiao.md").write_text(body, encoding="utf-8")
+    pub = ToutiaoPublisher(cookies_path=tmp_path / "x.json")
+    issues = pub.validate(_bundle(d))
+    assert any("generate-images" in i for i in issues)
 
 
 # ── extract_post_id ────────────────────────────────────────

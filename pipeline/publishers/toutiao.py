@@ -76,6 +76,40 @@ def _resolve_toutiao_body(bundle: PostBundle) -> Path:
     )
 
 
+def _resolve_toutiao_media(bundle: PostBundle) -> tuple[Path, ...]:
+    """bundle.media_paths 非空则直接用；为空则扫描 body_path.parent 下
+    cover.png + images/inline-*.png（generate-images 阶段产物，见
+    derivative_toutiao_images.py）。
+
+    与 douyin.py::_resolve_douyin_video、xiaohongshu.py::_resolve_xhs_bundle
+    同一模式——safe_publish.py::build_post_bundle 始终传 media_paths=()，
+    由各 adapter 自己取派生媒体。
+
+    返回顺序：cover.png 在前，inline 按数字排序（避免 inline-10 排在
+    inline-2 前的字典序错误）。
+    """
+    if bundle.media_paths:
+        return tuple(Path(p) for p in bundle.media_paths)
+
+    base = bundle.body_path.parent
+    media: list[Path] = []
+    cover = base / "cover.png"
+    if cover.exists():
+        media.append(cover)
+
+    images_dir = base / "images"
+    if images_dir.exists():
+        inline: list[tuple[int, Path]] = []
+        for p in images_dir.glob("inline-*.png"):
+            m = re.match(r"inline-(\d+)\.png$", p.name)
+            if m:
+                inline.append((int(m.group(1)), p))
+        inline.sort(key=lambda pair: pair[0])
+        media.extend(p for _, p in inline)
+
+    return tuple(media)
+
+
 # ── 头条 Publisher ──────────────────────────────────────────
 
 
@@ -143,6 +177,15 @@ class ToutiaoPublisher(PublisherAdapter):
                 f"body too long: {body_len} chars (max {BODY_MAX_LEN})"
             )
 
+        # 2.5 未处理的图片占位符：generate-images 阶段应已把 [IMAGE: ...]
+        # 替换为真实插图引用（见 derivative_toutiao_images.py）。漏跑会让
+        # 占位符文字原样出现在真实发布的文章里。
+        if "[IMAGE:" in body:
+            issues.append(
+                "body contains unresolved [IMAGE: ...] placeholder(s); "
+                "run `python -m pipeline.run generate-images` first"
+            )
+
         # 3. cookies 文件存在性
         if not self._cookies.exists():
             issues.append(
@@ -183,7 +226,7 @@ class ToutiaoPublisher(PublisherAdapter):
             cookies_path=self._cookies,
             body_path=body_path,
             title=bundle.title,
-            images=bundle.media_paths,
+            images=_resolve_toutiao_media(bundle),
             screenshot_dir=self._screenshots,
             selectors=sel,
             account_id=account.id,
