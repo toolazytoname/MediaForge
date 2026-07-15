@@ -304,6 +304,34 @@ def _real_health_probe(
             browser.close()
 
 
+def _shot(page, screenshot_dir: Path, step: str) -> None:
+    try:
+        page.screenshot(path=str(screenshot_dir / f"{step}.png"))
+    except Exception:
+        pass  # 截图失败不阻断
+
+
+def _find_visible_locator(page, selectors: tuple, timeout_ms: int = 6000):
+    """逐个候选选择器等它出现并可见（SPA 水合比 load 事件慢，
+    不能只查一次 count()——真实头条页面首屏白屏几秒是常态）。"""
+    try:
+        from playwright.sync_api import TimeoutError as PWTimeout
+    except ImportError:
+        PWTimeout = TimeoutError  # pragma: no cover - playwright 未安装兜底
+
+    for css in selectors:
+        try:
+            page.wait_for_selector(css, timeout=timeout_ms, state="visible")
+        except PWTimeout:
+            continue
+        except Exception:
+            continue
+        loc = page.locator(css).first
+        if loc.count() > 0:
+            return loc
+    return None
+
+
 def _real_publish_fn(
     *,
     cookies_path: Path,
@@ -319,7 +347,8 @@ def _real_publish_fn(
     流程：
     1. 启动 chromium + 注入 storage_state
     2. 访问创作者中心发布页
-    3. 填标题 + 正文 + 自动封面
+    3. 填标题 + 正文 + 尝试真实上传封面/插图（toutiao_image_upload.py，
+       失败优雅降级，不阻断发布）+ 自动封面兜底
     4. 点发布
     5. 等跳转到成功页 → 提取 URL + post_id
     6. 全程截图存 screenshot_dir
@@ -336,26 +365,8 @@ def _real_publish_fn(
 
     screenshot_dir.mkdir(parents=True, exist_ok=True)
 
-    def _shot(page, step: str) -> None:
-        try:
-            page.screenshot(path=str(screenshot_dir / f"{step}.png"))
-        except Exception:
-            pass  # 截图失败不阻断
-
-    def _find_visible_locator(page, selectors: tuple, timeout_ms: int = 6000):
-        """逐个候选选择器等它出现并可见（SPA 水合比 load 事件慢，
-        不能只查一次 count()——真实头条页面首屏白屏几秒是常态）。"""
-        for css in selectors:
-            try:
-                page.wait_for_selector(css, timeout=timeout_ms, state="visible")
-            except PWTimeout:
-                continue
-            except Exception:
-                continue
-            loc = page.locator(css).first
-            if loc.count() > 0:
-                return loc
-        return None
+    def _shot_local(page, step: str) -> None:
+        _shot(page, screenshot_dir, step)
 
     with sync_playwright() as p:
         try:
@@ -391,7 +402,7 @@ def _real_publish_fn(
                 page.wait_for_load_state("networkidle", timeout=15000)
             except PWTimeout:
                 pass  # SPA 可能有长轮询，networkidle 超时不代表页面没渲染好
-            _shot(page, "01_publish_page")
+            _shot_local(page, "01_publish_page")
 
             # 2. 填标题
             title_locator = _find_visible_locator(page, selectors.TITLE_SELECTORS)
@@ -402,7 +413,7 @@ def _real_publish_fn(
                     "page may have changed"
                 )
             title_locator.fill(title)
-            _shot(page, "02_title_filled")
+            _shot_local(page, "02_title_filled")
 
             # 3. 填正文
             body_locator = _find_visible_locator(page, selectors.BODY_SELECTORS)
@@ -418,7 +429,7 @@ def _real_publish_fn(
                 flags=re.MULTILINE,
             )
             body_locator.fill(plain_body)
-            _shot(page, "03_body_filled")
+            _shot_local(page, "03_body_filled")
 
             # 4. 自动封面（默认）
             for css in selectors.COVER_MODE_RADIO:
@@ -438,7 +449,7 @@ def _real_publish_fn(
                     f"(selectors={selectors.SUBMIT_BUTTON})"
                 )
             submit_locator.click()
-            _shot(page, "04_submit_clicked")
+            _shot_local(page, "04_submit_clicked")
 
             # 6. 等成功 URL（最多 60s）
             try:
@@ -450,7 +461,7 @@ def _real_publish_fn(
                 raise PublishError(
                     f"toutiao publish timeout waiting for success URL: {e}"
                 ) from e
-            _shot(page, "05_success")
+            _shot_local(page, "05_success")
 
             final_url = page.url
             # post_id 从 URL 末段提取（mp 平台惯例是 query 参数 ?mid=... 或 path segment）
