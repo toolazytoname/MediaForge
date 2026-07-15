@@ -320,7 +320,7 @@ class VideoRequest:
   - 启动：`python -m pipeline.run webui`，绑定 `config.webui.host:port`（默认 `127.0.0.1:8787`）
 - **不变量（契约红线，spa/htmx 通用）**：
   - **UI 不得直接写 SQL**：读走 `db.py` / `db_reads.py` 查询函数，写走 `transition()` / `set_gate_verdict` / `reschedule_publication` 与既有编排函数——状态机与发布三重锁对 UI 同样生效
-  - **发布需 dry-run 先行 + 显式确认**（二次确认弹条 + 复用 `safe_publish` 三重锁）；`publish` **排除于通用运行台白名单**（仅 `ingest/score/create/gate/derivative/review/schedule/collect/generate-images` 可由 UI 一键触发）
+  - **真实发布不走通用运行台的"批量一键跑"口子**（仅 `ingest/score/create/gate/derivative/review/schedule/collect/generate-images` 可由通用 runner 一键批量触发）；真实发布改由**一个独立、显式二次确认的单条 publication 端点**触发（`POST /publications/{id}/publish`，M10 Phase D，用户已授权修改本条契约），前端二次确认弹条（危险操作，不可撤销）之后才调用。该端点仍**完整强制**走 `safe_publish` 全套三重锁与 `config.publish.enabled`/`allowed_platforms` 门禁，行为与命令行 `python -m pipeline.run publish` 完全一致——**UI 只是多一个触发入口，不降低任何安全门槛**。dry-run 预演端点（`POST /publications/{id}/publish/preview`）保持独立存在，绝不真发，供确认前的可视化核对
 - 路由契约：
 
 ```
@@ -353,6 +353,10 @@ GET  /calendar?week=             发布日历
 POST /publications/{id}/reschedule   body: {scheduled_at}
 POST /publications/{id}/cancel
 POST /publications/{id}/retry        (failed→queued，走 reset 逻辑)
+POST /publications/{id}/publish/preview  dry-run 预演（safe_publish dry_run=True，绝不真发）
+POST /publications/{id}/publish      真实发布（M10 Phase D，需 publish.enabled=true +
+                                      allowed_platforms 白名单，前端二次确认后触发，
+                                      与命令行 `pipeline.run publish` 走同一套 safe_publish）
 GET  /contents/{id}              内容详情（全链路时间线）
 GET  /settings                   config 脱敏展示 + 登录态健康
 GET  /api/status                 JSON 状态计数（给页面轮询用）
