@@ -39,6 +39,10 @@ from pipeline.publishers.cookie_health import (
     load_storage_state,
 )
 from pipeline.publishers import toutiao_selectors as sel
+from pipeline.publishers.toutiao_image_upload import (
+    attempt_cover_upload,
+    attempt_inline_image_upload,
+)
 
 
 # ── 常量 ───────────────────────────────────────────────────
@@ -431,15 +435,31 @@ def _real_publish_fn(
             body_locator.fill(plain_body)
             _shot_local(page, "03_body_filled")
 
-            # 4. 自动封面（默认）
-            for css in selectors.COVER_MODE_RADIO:
-                try:
-                    loc = page.locator(css).first
-                    if loc.count() > 0 and loc.is_visible():
-                        loc.click()
-                        break
-                except Exception:
-                    continue
+            # 3.5 尝试真实上传封面 + 插图（toutiao_image_upload.py，选择器未经
+            # 真实站点验证，只做一次直接尝试；失败优雅降级，不阻断发布）
+            cover_path = images[0] if images and images[0].name == "cover.png" else None
+            inline_images = tuple(p for p in images if p.name != "cover.png")
+            cover_uploaded = attempt_cover_upload(
+                page, cover_path, selectors.IMAGE_FILE_INPUT, _shot_local,
+            )
+            image_upload_result = attempt_inline_image_upload(
+                page, inline_images, selectors.IMAGE_FILE_INPUT, _shot_local,
+                screenshot_dir,
+            )
+            image_upload_result = {
+                **image_upload_result, "cover_uploaded": cover_uploaded,
+            }
+
+            # 4. 自动封面兜底（真实封面上传已成功则跳过，避免覆盖）
+            if not cover_uploaded:
+                for css in selectors.COVER_MODE_RADIO:
+                    try:
+                        loc = page.locator(css).first
+                        if loc.count() > 0 and loc.is_visible():
+                            loc.click()
+                            break
+                    except Exception:
+                        continue
 
             # 5. 点发布
             submit_locator = _find_visible_locator(page, selectors.SUBMIT_BUTTON)
@@ -475,6 +495,7 @@ def _real_publish_fn(
                     "account": account_id,
                     "final_url": final_url,
                     "post_id": post_id,
+                    "image_upload": image_upload_result,
                 }, ensure_ascii=False),
             )
         finally:

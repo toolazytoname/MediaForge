@@ -20,8 +20,12 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Form, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+# 进程内全局：记录 /upload/image 收到的文件名（e2e 测试用来断言"确实收到了文件"，
+# 而不仅仅是上传逻辑没有抛异常）。子进程独立，不与其它测试进程共享状态。
+_received_uploads: list[str] = []
 
 
 # ── HTML 模板（最小可用；选择器全部命中） ─────────────────
@@ -56,8 +60,20 @@ PUBLISH_HTML = """<!doctype html>
     文章正文占位符
   </div>
   <input type="radio" name="cover_mode" value="auto" checked />
+  <!-- 真实头条编辑器的图片 input 视觉隐藏，用 display:none 模拟 -->
+  <input type="file" accept="image/*" multiple style="display:none" id="image-upload" />
   <button type="submit" class="publish-btn">发布</button>
 </form>
+<script>
+// 模拟真实站点：选中文件后立即 fetch 上传（set_input_files 触发 change 事件）
+document.getElementById("image-upload").addEventListener("change", (ev) => {
+  for (const f of ev.target.files) {
+    const body = new FormData();
+    body.append("file", f);
+    fetch("/upload/image", { method: "POST", body });
+  }
+});
+</script>
 </body></html>"""
 
 # 成功后跳转目标
@@ -106,6 +122,18 @@ async def content_manage(mid: str = "") -> HTMLResponse:
     return HTMLResponse(
         SUCCESS_HTML.replace("已发布", f"已发布 mid={mid}"),
     )
+
+
+@app.post("/upload/image")
+async def upload_image(file: UploadFile) -> JSONResponse:
+    """记录收到的文件名，供 e2e 测试断言真实收到了文件（而非只是没抛异常）。"""
+    _received_uploads.append(file.filename or "")
+    return JSONResponse({"ok": True, "filename": file.filename})
+
+
+@app.get("/debug/uploads")
+async def debug_uploads() -> JSONResponse:
+    return JSONResponse({"received": list(_received_uploads)})
 
 
 # ── 测试用启动器（subprocess + uvicorn CLI） ────────────────

@@ -135,6 +135,83 @@ def _patched_selectors(fake_url: str):
     )
 
 
+# ── 真实图片上传 e2e（Phase C：attempt_cover_upload / attempt_inline_image_upload） ──
+
+
+def test_real_image_upload_end_to_end(
+    fake_server_url: str,
+    toutiao_cookies: Path,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """真 Playwright 打开 fake 发布页 → 用生产代码 attempt_cover_upload /
+    attempt_inline_image_upload 实际上传文件 → 断言 fake server 真的收到了文件
+    （而不仅仅是上传逻辑没有抛异常）。"""
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+        pytest.skip("asyncio loop already running; skipping e2e")
+    except RuntimeError:
+        pass
+
+    from pipeline.publishers.toutiao_image_upload import (
+        attempt_cover_upload,
+        attempt_inline_image_upload,
+    )
+
+    fake_sel = _patched_selectors(fake_server_url)
+    chromium = _chromium_available()
+    monkeypatch.setenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", chromium)
+
+    cover_path = tmp_path / "cover.png"
+    cover_path.write_bytes(b"fake-cover-bytes")
+    inline_1 = tmp_path / "inline-1.png"
+    inline_1.write_bytes(b"fake-inline-1-bytes")
+    inline_2 = tmp_path / "inline-2.png"
+    inline_2.write_bytes(b"fake-inline-2-bytes")
+
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            executable_path=chromium, headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        try:
+            ctx = browser.new_context(storage_state=str(toutiao_cookies))
+            page = ctx.new_page()
+            resp = page.goto(fake_sel.PUBLISH_URL_FALLBACK[0], timeout=20000)
+            assert resp is not None and resp.status == 200
+
+            def _shot(page, step):
+                pass  # 测试不需要落盘截图
+
+            cover_uploaded = attempt_cover_upload(
+                page, cover_path, fake_sel.IMAGE_FILE_INPUT, _shot,
+            )
+            assert cover_uploaded is True
+
+            result = attempt_inline_image_upload(
+                page, (inline_1, inline_2), fake_sel.IMAGE_FILE_INPUT, _shot,
+                tmp_path,
+            )
+            assert result == {"attempted": 2, "uploaded": 2, "status": "ok"}
+
+            # fetch() 是异步的，等浏览器把所有上传请求发完
+            page.wait_for_timeout(500)
+        finally:
+            browser.close()
+
+    # 断言 fake server 真的收到了文件（不只是 Playwright 调用没抛异常）
+    import httpx
+    with httpx.Client() as client:
+        r = client.get(f"{fake_server_url}/debug/uploads", timeout=5)
+        assert r.status_code == 200
+        received = r.json()["received"]
+        assert "cover.png" in received
+        assert "inline-1.png" in received
+        assert "inline-2.png" in received
+
+
 # ── 真实 end-to-end 测试 ──────────────────────────────────
 
 
