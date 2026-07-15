@@ -966,6 +966,86 @@ export const usePreviewStore = defineStore('preview', () => {
   return { running, lastResult, lastRun, lastError, run, reset }
 })
 
+// ── RealPublish (M10 Phase D: UI「立即发布」——真实 safe_publish dry_run=False） ──
+
+export interface RealPublishResult {
+  published: boolean
+  reason: string
+  platform_post_id: string | null
+  url: string | null
+}
+
+export type RealPublishRunStatus = 'queued' | 'succeeded' | 'failed'
+
+export interface RealPublishRun {
+  run_id: string
+  publication_id?: string
+  status: RealPublishRunStatus
+  started_at?: string
+  finished_at?: string
+  result?: RealPublishResult
+  error_code?: string
+  error?: string
+}
+
+const REAL_PUBLISH_POLL_INTERVAL_MS = 1_000
+const REAL_PUBLISH_POLL_TIMEOUT_MS = 30_000
+
+async function pollRealPublishRun(runId: string): Promise<RealPublishRun> {
+  const deadline = Date.now() + REAL_PUBLISH_POLL_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    const r = await api.get<RealPublishRun>(`/runs/${runId}`)
+    const data = r.data
+    if (data.status === 'succeeded' || data.status === 'failed') {
+      return data
+    }
+    await new Promise((resolve) => setTimeout(resolve, REAL_PUBLISH_POLL_INTERVAL_MS))
+  }
+  throw new Error(`real publish run ${runId} timed out`)
+}
+
+export const useRealPublishStore = defineStore('realPublish', () => {
+  const running = ref(false)
+  const lastResult = ref<RealPublishResult | null>(null)
+  const lastRun = ref<RealPublishRun | null>(null)
+  const lastError = ref<string | null>(null)
+
+  async function run(publicationId: string): Promise<RealPublishRun | null> {
+    running.value = true
+    lastError.value = null
+    lastResult.value = null
+    lastRun.value = null
+    try {
+      const queued = await apiPost<{ run_id: string; status: 'queued' }>(
+        `/publications/${publicationId}/publish`,
+        {},
+      )
+      const run = await pollRealPublishRun(queued.data.run_id)
+      lastRun.value = run
+      if (run.status === 'succeeded' && run.result) {
+        lastResult.value = run.result
+        return run
+      }
+      lastError.value = `${run.error_code ?? 'publish_error'}: ${run.error ?? ''}`.trim()
+      return run
+    } catch (e) {
+      lastError.value = unwrapError(e)
+      return null
+    } finally {
+      running.value = false
+    }
+  }
+
+  function reset() {
+    running.value = false
+    lastResult.value = null
+    lastRun.value = null
+    lastError.value = null
+  }
+
+  return { running, lastResult, lastRun, lastError, run, reset }
+})
+
 // ── VideoCreation (M12-3: 视频创作向导——脚本派生 + 提交/轮询) ──
 
 export type VideoEngineName = 'mpt' | 'pixelle' | 'digitalhuman'
