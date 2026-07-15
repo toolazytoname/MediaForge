@@ -341,6 +341,11 @@ GET  /api/v1/accounts            账号 + cookie 健康
 GET  /api/v1/accounts/login-guidance  各平台登录引导
 GET  /api/v1/runs                运行历史
 GET  /api/v1/settings            config 脱敏展示 + doctor 报告
+POST /api/v1/settings/publish-enabled            写 publish.enabled（发布总开关，
+                                                  用户明确要求可从 UI 操作，落盘 config.yaml，
+                                                  即时生效，无需重启 webui）
+POST /api/v1/settings/publish-allowed-platforms  写 publish.allowed_platforms（整体覆盖，
+                                                  platform key 须是 platforms.* 已知字段）
 
 # 旧：htmx legacy（标注 deprecated，SPA parity 后移除）
 GET  /                           Dashboard（htmx 三表计数）

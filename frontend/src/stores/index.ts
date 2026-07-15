@@ -583,7 +583,34 @@ export const useSettingsStore = defineStore('settings', () => {
       return false
     }
   }
-  return { config, doctor, keyGroups, loading, error, load, loadKeys, saveKey, clearKey }
+  // 发布总开关（用户明确要求可从 UI 操作，不必手改 config.yaml）
+  async function setPublishEnabled(enabled: boolean): Promise<boolean> {
+    try {
+      await api.post('/settings/publish-enabled', { enabled })
+      message.success(enabled ? '已开启真实发布' : '已关闭真实发布')
+      await load()
+      return true
+    } catch (e) {
+      message.error(`保存失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  async function setPublishAllowedPlatforms(platforms: string[]): Promise<boolean> {
+    try {
+      await api.post('/settings/publish-allowed-platforms', { platforms })
+      message.success('已保存平台白名单')
+      await load()
+      return true
+    } catch (e) {
+      message.error(`保存失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  return {
+    config, doctor, keyGroups, loading, error,
+    load, loadKeys, saveKey, clearKey,
+    setPublishEnabled, setPublishAllowedPlatforms,
+  }
 })
 
 // ── Creation (M10 P2 阶段 A) ────────────────────────────

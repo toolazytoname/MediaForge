@@ -133,4 +133,99 @@ def add_account_to_config(
     return True
 
 
-__all__ = ["remove_account_from_config", "add_account_to_config"]
+# ── publish.enabled / allowed_platforms（Settings 页「发布总开关」）──
+#
+# 用户明确要求把这两个字段从「只能手改 config.yaml」改为「可从 UI 操作」
+# （见 TASKS.md「待评估事项（用户临场提需求，2026-07-16）」）。与账号增删
+# 不同，这两个字段不存在天然的「no-op」语义——写哪个值就该生效哪个值，
+# 所以返回的是写入后的当前值，而不是「是否发生了变化」的 bool。
+# config.yaml 不存在时直接抛异常（而不是静默 no-op）：这是发布安全总闸，
+# 调用方必须显式知道写入失败了。
+
+
+def set_publish_enabled(
+    enabled: bool,
+    *,
+    config_path: str | Path | None = None,
+) -> bool:
+    """写 config.yaml 的 `publish.enabled`。
+
+    Args:
+        enabled: 目标值。
+        config_path: 覆盖 config.yaml 路径；默认 `deps._CONFIG_PATH`。
+
+    Returns:
+        写入后的 `enabled` 值（即 `enabled` 参数本身）。
+
+    Raises:
+        FileNotFoundError: config.yaml 不存在。
+    """
+    path = Path(config_path if config_path is not None else deps._CONFIG_PATH)
+    if not path.exists():
+        raise FileNotFoundError(f"config not found: {path}")
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.load(f)
+    if data is None:
+        data = {}
+
+    publish_cfg = data.get("publish")
+    if publish_cfg is None:
+        publish_cfg = {}
+        data["publish"] = publish_cfg
+    publish_cfg["enabled"] = enabled
+
+    with path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+    return enabled
+
+
+def set_publish_allowed_platforms(
+    platforms: list[str],
+    *,
+    config_path: str | Path | None = None,
+) -> list[str]:
+    """写 config.yaml 的 `publish.allowed_platforms`（整体覆盖，非追加）。
+
+    Args:
+        platforms: 目标白名单（platform key 列表，如 `["toutiao", "x"]`）。
+            合法性校验（是否是已知 platform）由调用方（API 层）负责——本函数
+            只管落盘，不重复读取/校验 `platforms.*` 配置块。
+        config_path: 覆盖 config.yaml 路径；默认 `deps._CONFIG_PATH`。
+
+    Returns:
+        写入后的 `allowed_platforms` 值（即 `platforms` 参数本身）。
+
+    Raises:
+        FileNotFoundError: config.yaml 不存在。
+    """
+    path = Path(config_path if config_path is not None else deps._CONFIG_PATH)
+    if not path.exists():
+        raise FileNotFoundError(f"config not found: {path}")
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.load(f)
+    if data is None:
+        data = {}
+
+    publish_cfg = data.get("publish")
+    if publish_cfg is None:
+        publish_cfg = {}
+        data["publish"] = publish_cfg
+    publish_cfg["allowed_platforms"] = list(platforms)
+
+    with path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f)
+    return list(platforms)
+
+
+__all__ = [
+    "remove_account_from_config",
+    "add_account_to_config",
+    "set_publish_enabled",
+    "set_publish_allowed_platforms",
+]

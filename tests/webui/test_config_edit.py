@@ -10,9 +10,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from pipeline.webui.config_edit import (
     add_account_to_config,
     remove_account_from_config,
+    set_publish_allowed_platforms,
+    set_publish_enabled,
 )
 
 _CONFIG_YAML = """\
@@ -175,3 +179,109 @@ def test_add_account_missing_config_file_returns_false(tmp_path: Path) -> None:
     path = tmp_path / "no-such-config.yaml"
     added = add_account_to_config("toutiao", "main", config_path=path)
     assert added is False
+
+
+# ── set_publish_enabled / set_publish_allowed_platforms（Settings
+# 页「发布总开关」——用户明确要求把 publish.enabled/allowed_platforms
+# 从「只能手改 config.yaml」改为「可从 UI 操作」，见 TASKS.md「待评估
+# 事项（用户临场提需求，2026-07-16）」） ─────────────────────────
+
+
+_CONFIG_YAML_PUBLISH = """\
+timezone: Asia/Shanghai
+pillars: []
+llm:
+  tiers:
+    cheap: x
+    creative: y
+    critical: z
+
+# ── 发布 ────────────────────────────────────────────────
+publish:
+  enabled: false
+  allowed_platforms: []       # 白名单，如 [x, toutiao, xiaohongshu]
+  min_gap_hours: 4            # 同平台同账号最小间隔
+"""
+
+
+def _write_publish_config(tmp_path: Path) -> Path:
+    p = tmp_path / "config.yaml"
+    p.write_text(_CONFIG_YAML_PUBLISH, encoding="utf-8")
+    return p
+
+
+def test_set_publish_enabled_true(tmp_path: Path) -> None:
+    path = _write_publish_config(tmp_path)
+    result = set_publish_enabled(True, config_path=path)
+    assert result is True
+
+    text = path.read_text(encoding="utf-8")
+    assert "enabled: true" in text
+    assert "min_gap_hours: 4" in text  # 兄弟字段原样保留
+    assert "# 白名单" in text  # 注释原样保留
+
+
+def test_set_publish_enabled_false(tmp_path: Path) -> None:
+    path = _write_publish_config(tmp_path)
+    set_publish_enabled(True, config_path=path)
+    result = set_publish_enabled(False, config_path=path)
+    assert result is False
+    assert "enabled: false" in path.read_text(encoding="utf-8")
+
+
+def test_set_publish_enabled_creates_publish_block_if_missing(tmp_path: Path) -> None:
+    p = tmp_path / "config.yaml"
+    p.write_text(
+        "timezone: Asia/Shanghai\npillars: []\n"
+        "llm:\n  tiers: {cheap: x, creative: y, critical: z}\n",
+        encoding="utf-8",
+    )
+    result = set_publish_enabled(True, config_path=p)
+    assert result is True
+    assert "enabled: true" in p.read_text(encoding="utf-8")
+
+
+def test_set_publish_enabled_missing_config_file_raises(tmp_path: Path) -> None:
+    path = tmp_path / "no-such-config.yaml"
+    with pytest.raises(FileNotFoundError):
+        set_publish_enabled(True, config_path=path)
+
+
+def test_set_publish_allowed_platforms_writes_list(tmp_path: Path) -> None:
+    path = _write_publish_config(tmp_path)
+    result = set_publish_allowed_platforms(["toutiao", "x"], config_path=path)
+    assert result == ["toutiao", "x"]
+
+    text = path.read_text(encoding="utf-8")
+    assert "toutiao" in text
+    assert "min_gap_hours: 4" in text  # 兄弟字段原样保留
+    assert "# 白名单" in text  # 注释原样保留
+
+
+def test_set_publish_allowed_platforms_empty_list(tmp_path: Path) -> None:
+    path = _write_publish_config(tmp_path)
+    set_publish_allowed_platforms(["toutiao"], config_path=path)
+    result = set_publish_allowed_platforms([], config_path=path)
+    assert result == []
+
+
+def test_set_publish_allowed_platforms_creates_publish_block_if_missing(
+    tmp_path: Path,
+) -> None:
+    p = tmp_path / "config.yaml"
+    p.write_text(
+        "timezone: Asia/Shanghai\npillars: []\n"
+        "llm:\n  tiers: {cheap: x, creative: y, critical: z}\n",
+        encoding="utf-8",
+    )
+    result = set_publish_allowed_platforms(["toutiao"], config_path=p)
+    assert result == ["toutiao"]
+    assert "toutiao" in p.read_text(encoding="utf-8")
+
+
+def test_set_publish_allowed_platforms_missing_config_file_raises(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "no-such-config.yaml"
+    with pytest.raises(FileNotFoundError):
+        set_publish_allowed_platforms(["toutiao"], config_path=path)

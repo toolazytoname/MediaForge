@@ -1463,3 +1463,62 @@ tests/test_doctor.py -q` 68 通过；全量 `pytest tests/ -q` 1475 通过 / 12 
 
 ---
 
+## 待评估事项（用户临场提需求，2026-07-16）✅ 已完成：发布总开关可从 Settings UI 操作
+
+用户原话："打开publish.enabled，页面搞一个开关吧，真麻烦"。核实后确认
+`config.yaml` 的 `publish.enabled` 当时确为 `false`（M4 前的默认安全值，
+本次由用户明确要求直接改为 `true`）；进一步核实发现 `publish.allowed_platforms`
+仍是空列表 `[]`（空白名单 = 全部拒绝），单独打开 `enabled` 并不能让任何
+平台真正发出内容。就"要不要顺手把 toutiao 加进白名单"询问用户后，用户
+明确改口："这些配置，都开放到界面上吧，可以让我通过UI 操作"——即两个
+字段都不由我代为设置，而是要求做成 UI 可操作项。
+
+**本次是对 2026-07-13 那次「API Key 配置」条目里"明确未做"一项的直接
+推翻**：那次记录写的是"config.yaml 里非密钥类字段的可视化编辑——CLAUDE.md
+M8 明确锁定'只读展示，不做 UI 改'，本次不推翻这个历史决策"。这次因为
+用户当场明确要求，只对 `publish.enabled` / `publish.allowed_platforms`
+这两个字段破例开放可写 UI，其余非密钥字段（budget/pillars/gate 阈值等）
+仍遵循 M8 决策保持只读展示，未被推翻。
+
+**改动**：
+- `config.yaml`：`publish.enabled` 由用户授权直接改为 `true`
+  （文件本身 gitignored，不出现在 git 历史里）；`allowed_platforms`
+  保持 `[]`，故意不代用户设置，留给用户自己通过下面的新 UI 操作。
+- `pipeline/webui/config_edit.py` 新增 `set_publish_enabled()` /
+  `set_publish_allowed_platforms()`，复用既有的 `ruamel.yaml` round-trip
+  模式（保留 config.yaml 注释/格式）。与账号增删函数不同，这两个函数
+  返回写入后的当前值而非"是否发生变化"的 bool；`config.yaml` 不存在时
+  直接抛 `FileNotFoundError`（这是发布安全总闸，不接受静默 no-op）。
+- `pipeline/webui/api/settings.py` 新增 `POST /settings/publish-enabled`
+  （校验 `enabled` 须为 bool，400 `invalid_enabled`）、
+  `POST /settings/publish-allowed-platforms`（校验须为 `list[str]`，
+  400 `invalid_platforms`；校验每个 platform key 都在
+  `PlatformsConfig.model_fields` 里，未知值 400 `unknown_platform`）。
+- 前端：`useSettingsStore` 新增 `setPublishEnabled()` /
+  `setPublishAllowedPlatforms()`；`Settings.vue` 新增「发布总开关」卡片
+  （置顶），含风险提示 `a-alert`、`a-switch`（开启需 `Modal.confirm`
+  二次确认，danger 样式；关闭无需确认——安全方向）、平台白名单
+  `a-checkbox-group` + 保存按钮。
+- 测试：`tests/webui/test_config_edit.py` 新增 8 例（覆盖两个新函数的
+  写入/幂等创建 publish 块/文件不存在异常）；
+  `tests/webui/test_api_m10_5.py::TestSettingsPublishEnabled/
+  TestSettingsPublishAllowedPlatforms` 新增 7 例（含类型校验、未知
+  platform 拒绝时不落盘、写入后下一次 `GET /settings` 立即读到新值）。
+
+**验证**：`pytest tests/webui/test_config_edit.py tests/webui/test_api_m10_5.py
+-q` 全绿（`test_config_edit.py` 19 例，`test_api_m10_5.py` 35 例）；全量
+`pytest tests/ -q` 无新增回归（与本次改动前同样的 7 个既有失败，均已在
+2026-07-13 条目里记录为无关问题）；`npx vite build` 产出可用的生产
+bundle（`npm run build` 因 `Step3Script.vue` 一处与本次无关的既有 TS6133
+错误短路失败，绕过 `vue-tsc -b` 直接跑 `vite build` 验证）。
+
+**明确未做（后续任务）**：
+- ⬜ `deps.get_config()` 目前每次请求都重新读盘（无缓存），本次新端点
+  直接依赖这个既有行为实现"写入即时生效、无需重启 webui"——如果未来
+  给 config 加缓存层，这两个端点需要同步接入缓存失效逻辑。
+- ⬜ 其余非密钥类 config 字段（budget/pillars/gate 阈值等）仍遵循 M8
+  只读展示决策，未开放可写 UI；仅 `publish.enabled`/`allowed_platforms`
+  本次破例。
+
+---
+

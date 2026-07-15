@@ -6,6 +6,13 @@ GET /api/v1/settings — config 脱敏展示 + doctor 报告合并
 GET/POST/DELETE /api/v1/settings/keys — 全局服务 key（LLM/image-gen）的
 查看/保存/清除，落盘到 `secrets/env.json`（见 `pipeline.env_keys`），
 保存/清除后立即热重载 provider，不需要重启 webui 进程。
+
+用户临场提需求（见 TASKS.md「待评估事项（用户临场提需求，2026-07-16）」）：
+POST /api/v1/settings/publish-enabled — 写 config.yaml 的 publish.enabled
+POST /api/v1/settings/publish-allowed-platforms — 写 publish.allowed_platforms
+两者都是「发布总开关」——直接落盘到 config.yaml，不经过任何审批流程；
+`deps.get_config()` 每次请求都重新读盘（无缓存），写完立即对下一次
+safe_publish 门禁生效，无需重启 webui 进程。
 """
 from __future__ import annotations
 
@@ -15,6 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 
 from pipeline import doctor
+from pipeline.config import PlatformsConfig
 from pipeline.env_keys import (
     DEFAULT_ENV_SECRETS_PATH,
     IMAGE_ENV_VARS,
@@ -24,6 +32,10 @@ from pipeline.env_keys import (
     write_env_secret,
 )
 from pipeline.webui import deps
+from pipeline.webui.config_edit import (
+    set_publish_allowed_platforms,
+    set_publish_enabled,
+)
 from pipeline.webui.sanitize import sanitize_config
 
 router = APIRouter(tags=["settings"])
@@ -155,3 +167,53 @@ def clear_key(name: str) -> dict[str, Any]:
     os.environ.pop(name, None)
     reload_error = _reload_providers()
     return {"name": name, "set": False, "reload_error": reload_error}
+
+
+# ── publish.enabled / allowed_platforms（发布总开关，用户明确要求
+# 能从 UI 操作，不必手改 config.yaml——见 TASKS.md「待评估事项（用户
+# 临场提需求，2026-07-16）」） ───────────────────────────────
+
+
+@router.post("/settings/publish-enabled")
+def set_publish_enabled_endpoint(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """写 config.yaml 的 `publish.enabled`——发布总开关。
+
+    body: {"enabled": bool}
+    → 200 {"enabled": bool}
+    → 400 invalid_enabled（非 bool）
+    """
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_enabled", "message": "enabled must be a boolean",
+        }})
+    result = set_publish_enabled(enabled)
+    return {"enabled": result}
+
+
+@router.post("/settings/publish-allowed-platforms")
+def set_publish_allowed_platforms_endpoint(
+    body: dict[str, Any] = Body(...),
+) -> dict[str, Any]:
+    """写 config.yaml 的 `publish.allowed_platforms`（整体覆盖）。
+
+    body: {"platforms": list[str]}
+    → 200 {"platforms": list[str]}
+    → 400 invalid_platforms（非 list[str]）/ unknown_platform（含未知 platform key）
+    """
+    platforms = body.get("platforms")
+    if not isinstance(platforms, list) or not all(
+        isinstance(p, str) for p in platforms
+    ):
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_platforms", "message": "platforms must be a list of strings",
+        }})
+    known = set(PlatformsConfig.model_fields.keys())
+    unknown = [p for p in platforms if p not in known]
+    if unknown:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "unknown_platform",
+            "message": f"unknown platform(s) {unknown}; known: {sorted(known)}",
+        }})
+    result = set_publish_allowed_platforms(platforms)
+    return {"platforms": result}

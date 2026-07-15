@@ -346,3 +346,91 @@ class TestSettingsKeysDelete:
         import json as _json
         data = _json.loads((keys_env / "env.json").read_text(encoding="utf-8"))
         assert data == {}
+
+
+# ── settings/publish-enabled / publish-allowed-platforms（发布总
+# 开关，用户明确要求能从 UI 操作——见 TASKS.md「待评估事项（用户临场
+# 提需求，2026-07-16）」） ──────────────────────────────────────
+
+
+@pytest.fixture
+def publish_cfg_env(client, tmp_env):
+    """在 tmp_env 的 config.yaml 里补一个 publish/platforms 块，供本组测试用。"""
+    cfg_path = tmp_env / "config.yaml"
+    cfg_path.write_text(
+        "timezone: Asia/Shanghai\n"
+        "pillars:\n  - id: ai_daily\n    name: AI\n    description: d\n    scoring_hint: s\n"
+        "sources: []\n"
+        "llm: {tiers: {cheap: m, creative: m, critical: m}}\n"
+        "budget: {monthly_usd: 80.0}\n"
+        "publish: {enabled: false, allowed_platforms: []}\n"
+        "platforms: {toutiao: {kind: playwright, windows: [], accounts: []}}\n",
+        encoding="utf-8",
+    )
+    return cfg_path
+
+
+class TestSettingsPublishEnabled:
+    def test_invalid_type_rejected(self, client, publish_cfg_env):
+        r = client.post("/api/v1/settings/publish-enabled", json={"enabled": "yes"})
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"]["code"] == "invalid_enabled"
+
+    def test_sets_true_and_persists(self, client, publish_cfg_env):
+        r = client.post("/api/v1/settings/publish-enabled", json={"enabled": True})
+        assert r.status_code == 200
+        assert r.json() == {"enabled": True}
+        assert "enabled: true" in publish_cfg_env.read_text(encoding="utf-8")
+
+        # 落盘后下一次 GET /settings 立即读到新值（无缓存）
+        r2 = client.get("/api/v1/settings")
+        assert r2.json()["config"]["publish"]["enabled"] is True
+
+    def test_sets_false_and_persists(self, client, publish_cfg_env):
+        client.post("/api/v1/settings/publish-enabled", json={"enabled": True})
+        r = client.post("/api/v1/settings/publish-enabled", json={"enabled": False})
+        assert r.status_code == 200
+        assert r.json() == {"enabled": False}
+        assert "enabled: false" in publish_cfg_env.read_text(encoding="utf-8")
+
+
+class TestSettingsPublishAllowedPlatforms:
+    def test_invalid_type_rejected(self, client, publish_cfg_env):
+        r = client.post(
+            "/api/v1/settings/publish-allowed-platforms", json={"platforms": "toutiao"},
+        )
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"]["code"] == "invalid_platforms"
+
+    def test_unknown_platform_rejected(self, client, publish_cfg_env):
+        r = client.post(
+            "/api/v1/settings/publish-allowed-platforms",
+            json={"platforms": ["not_a_real_platform"]},
+        )
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"]["code"] == "unknown_platform"
+        # 拒绝时不落盘
+        assert "not_a_real_platform" not in publish_cfg_env.read_text(encoding="utf-8")
+
+    def test_sets_list_and_persists(self, client, publish_cfg_env):
+        r = client.post(
+            "/api/v1/settings/publish-allowed-platforms",
+            json={"platforms": ["toutiao"]},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"platforms": ["toutiao"]}
+        assert "toutiao" in publish_cfg_env.read_text(encoding="utf-8")
+
+        r2 = client.get("/api/v1/settings")
+        assert r2.json()["config"]["publish"]["allowed_platforms"] == ["toutiao"]
+
+    def test_empty_list_clears(self, client, publish_cfg_env):
+        client.post(
+            "/api/v1/settings/publish-allowed-platforms",
+            json={"platforms": ["toutiao"]},
+        )
+        r = client.post(
+            "/api/v1/settings/publish-allowed-platforms", json={"platforms": []},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"platforms": []}
