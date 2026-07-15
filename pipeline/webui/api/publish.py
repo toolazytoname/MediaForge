@@ -8,6 +8,13 @@ POST /api/v1/publications/{id}/cancel        queued → cancelled
 POST /api/v1/publications/{id}/retry         failed → queued（不调真实 publish）
 POST /api/v1/publications/{publication_id}/publish/preview
                                               dry-run 预演（绝不真发）
+POST /api/v1/publications/{publication_id}/publish
+                                              真实发布（M10 Phase D，需
+                                              config.publish.enabled=true +
+                                              allowed_platforms 白名单，UI
+                                              二次确认后触发，与命令行
+                                              `pipeline.run publish` 走同一套
+                                              safe_publish 三重锁）
 """
 from __future__ import annotations
 
@@ -21,7 +28,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
 
 from pipeline import db, db_reads
-from pipeline.webui import deps, preview_bridge, write_action_bridge
+from pipeline.webui import deps, preview_bridge, publish_bridge, write_action_bridge
 from pipeline.webui.api.runs import register_run
 from pipeline.webui.calendar import bucket_week
 from pipeline.webui.serialize import metric_dict, pub_dict
@@ -275,4 +282,98 @@ def preview_publication_endpoint(
         publication_id=publication_id,
     )
     background.add_task(_execute_preview, run_id, publication_id, now)
+    return {"run_id": run_id, "status": "queued"}
+
+
+# ── M10 Phase D：真实发布端点（用户已授权修改 TECH_SPEC §7 契约） ──
+
+
+_REAL_PUBLISH_ERROR_CODES = {
+    publish_bridge.PublicationNotFoundError: "publication_not_found",
+    publish_bridge.PublicationWrongStatusError: "wrong_status",
+    publish_bridge.ConfigLoadError: "config_load_error",
+    publish_bridge.PlatformNotConfiguredError: "platform_not_configured",
+    publish_bridge.AccountNotFoundError: "account_not_found",
+    publish_bridge.AdapterInitError: "adapter_init_error",
+}
+
+
+def _execute_real_publish(
+    run_id: str,
+    publication_id: str,
+    started_at: str,
+) -> None:
+    """后台任务体：调 publish_bridge._run_real_publish，把结果写进 run registry。
+
+    真实 conn + 真实 adapter + dry_run=False；state.db 会被 safe_publish
+    内部真实改动。任何异常都被分类映射到 error_code。
+    """
+    try:
+        with deps._db() as conn:
+            result = publish_bridge._run_real_publish(
+                conn, publication_id, run_id, started_at,
+            )
+        register_run(
+            run_id,
+            status="succeeded",
+            started_at=started_at,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            result=result,
+        )
+    except publish_bridge.PreviewError as e:
+        code = _REAL_PUBLISH_ERROR_CODES.get(type(e), "publish_error")
+        register_run(
+            run_id,
+            status="failed",
+            started_at=started_at,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error_code=code,
+            error=str(e),
+        )
+        logger.warning("real publish failed run_id=%s code=%s err=%s", run_id, code, e)
+    except Exception as e:  # noqa: BLE001 — 不让后台任务静默死掉
+        register_run(
+            run_id,
+            status="failed",
+            started_at=started_at,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error_code="unexpected",
+            error=str(e),
+        )
+        logger.error(
+            "real publish unexpected run_id=%s err=%s\n%s",
+            run_id, e, traceback.format_exc(),
+        )
+
+
+@router.post(
+    "/publications/{publication_id}/publish",
+    status_code=202,
+)
+def real_publish_endpoint(
+    publication_id: str,
+    background: BackgroundTasks,
+) -> dict[str, Any]:
+    """真实发布：对一条 queued publication 走真实 validate + safe_publish(dry_run=False)。
+
+    立即返回 202 + run_id；后台通过 FastAPI BackgroundTasks 执行，结果写内存
+    run registry。前端复用与 /publish/preview 相同的 GET /api/v1/runs/{run_id}
+    轮询基础设施。
+
+    关键护栏（与命令行 `pipeline.run publish` 完全一致，UI 只是多一个触发
+    入口，不降低任何安全门槛）：
+      - 直接调 safe_publish(..., dry_run=False)，真实 conn，真实 adapter；
+      - safe_publish 内部仍强制 config.publish.enabled + allowed_platforms
+        两道锁 + 乐观锁 + INTENT 日志，本端点不做任何绕过；
+      - 前端必须在调用前完成显式二次确认（危险操作，不可撤销）。
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    run_id = f"run_{uuid.uuid4().hex[:8]}_{int(time.time() * 1000) % 1_000_000}"
+    register_run(
+        run_id,
+        status="queued",
+        started_at=now,
+        publication_id=publication_id,
+    )
+    background.add_task(_execute_real_publish, run_id, publication_id, now)
     return {"run_id": run_id, "status": "queued"}
