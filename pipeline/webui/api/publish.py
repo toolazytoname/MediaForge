@@ -71,6 +71,7 @@ def publish_records(
     status: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
     account_id: Optional[str] = Query(None, description="M11-B: 按发布账号过滤"),
+    content_id: Optional[str] = Query(None, description="按内容过滤（ContentDetail 页跳转用）"),
     pending_only: bool = Query(False, description="M11-B: 仅未成功发布（published_at IS NULL）"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -79,7 +80,8 @@ def publish_records(
     with deps._db() as conn:
         pubs = db.list_publications(
             conn, status=status, platform=platform, account_id=account_id,
-            pending_only=pending_only, limit=limit, offset=offset,
+            content_id=content_id, pending_only=pending_only,
+            limit=limit, offset=offset,
         )
         items = []
         for p in pubs:

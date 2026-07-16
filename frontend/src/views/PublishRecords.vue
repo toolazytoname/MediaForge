@@ -9,6 +9,7 @@
 //   - 确认后 → POST /api/v1/publications/{id}/publish（真实 safe_publish dry_run=False）
 //   - 仍完整强制 safe_publish 三重锁 + config.publish.enabled/allowed_platforms 门禁
 import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Modal } from 'ant-design-vue'
 import {
   usePublishStore,
@@ -21,12 +22,17 @@ import {
 import { storeToRefs } from 'pinia'
 import { formatDateTime } from '../utils/format'
 
+const route = useRoute()
+const router = useRouter()
 const store = usePublishStore()
 const previewStore = usePreviewStore()
 const realPublishStore = useRealPublishStore()
 const settingsStore = useSettingsStore()
 const { records, loading } = storeToRefs(store)
-const filters = ref<{ status?: string; platform?: string; with_metric?: boolean }>({ with_metric: true })
+const filters = ref<{ status?: string; platform?: string; content_id?: string; with_metric?: boolean }>({
+  with_metric: true,
+  content_id: typeof route.query.content_id === 'string' ? route.query.content_id : undefined,
+})
 
 const drawerOpen = ref(false)
 const drawerMode = ref<'preview' | 'publish'>('preview')
@@ -37,6 +43,11 @@ const realPublishError = ref<string | null>(null)
 
 function reload() {
   store.loadRecords({ ...filters.value })
+}
+function clearContentFilter() {
+  filters.value = { ...filters.value, content_id: undefined }
+  router.replace({ query: { ...route.query, content_id: undefined } })
+  reload()
 }
 onMounted(async () => {
   if (!settingsStore.config) {
@@ -139,6 +150,15 @@ function closeDrawer() {
 
 <template>
   <h2>发布记录</h2>
+  <a-alert
+    v-if="filters.content_id"
+    type="info"
+    show-icon
+    closable
+    style="margin-bottom: 12px"
+    :message="`已按内容过滤：${filters.content_id}`"
+    @close="clearContentFilter"
+  />
   <a-space style="margin-bottom: 12px">
     <a-select v-model:value="filters.status" placeholder="status" allow-clear style="width: 140px" @change="reload">
       <a-select-option value="queued">queued</a-select-option>

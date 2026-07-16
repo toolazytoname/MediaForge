@@ -547,7 +547,7 @@ def sum_llm_cost_this_month(
 # 各表的「可过滤列」白名单——防止 SQL 注入。filter 列名字符串硬编码到 SQL。
 _TOPICS_FILTER_COLS = frozenset({"status", "pillar", "source"})
 _CONTENTS_FILTER_COLS = frozenset({"status", "pillar"})
-_PUBS_FILTER_COLS = frozenset({"status", "platform", "account_id"})
+_PUBS_FILTER_COLS = frozenset({"status", "platform", "account_id", "content_id"})
 
 
 def _build_filter_where(
@@ -660,6 +660,7 @@ def list_publications(
     status: str | None = None,
     platform: str | None = None,
     account_id: str | None = None,
+    content_id: str | None = None,
     pending_only: bool = False,
     limit: int = 50,
     offset: int = 0,
@@ -673,10 +674,12 @@ def list_publications(
       - account_id：按发布账号过滤（white-list 列名由 _PUBS_FILTER_COLS 守护）
       - pending_only：只返回尚未成功发布的（published_at IS NULL），
         用于蚁小二式「发布模式」筛（计划中 vs 已完成）
+      - content_id：按内容过滤（用户临场提需求，2026-07-16——ContentDetail
+        页需要"跳转到该内容的发布记录"这个真实可用的链接，而非死链）
     """
     where, vals = _build_filter_where(
         _PUBS_FILTER_COLS, status=status, platform=platform,
-        account_id=account_id,
+        account_id=account_id, content_id=content_id,
     )
     if pending_only:
         clause = "published_at IS NULL"

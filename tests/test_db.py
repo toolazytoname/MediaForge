@@ -881,6 +881,21 @@ class TestListPublicationsM11B:
         assert len(out) == 1
         assert out[0].account_id == "acct_alice"
 
+    def test_filter_by_content_id(self, conn):
+        topic_a = _topic(content_hash="h_lpc_a")
+        topic_b = _topic(content_hash="h_lpc_b")
+        db.insert_topic(conn, topic_a)
+        db.insert_topic(conn, topic_b)
+        content_a = _content(topic_a.id)
+        content_b = _content(topic_b.id)
+        db.insert_content(conn, content_a)
+        db.insert_content(conn, content_b)
+        db.insert_publication(conn, _pub(content_a.id, account_id="a1"))
+        db.insert_publication(conn, _pub(content_b.id, account_id="a1"))
+        out = db.list_publications(conn, content_id=content_a.id)
+        assert len(out) == 1
+        assert out[0].content_id == content_a.id
+
     def test_pending_only_excludes_published(self, conn):
         topic = _topic(content_hash="h_lpo")
         db.insert_topic(conn, topic)

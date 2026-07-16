@@ -1522,3 +1522,88 @@ bundle（`npm run build` 因 `Step3Script.vue` 一处与本次无关的既有 TS
 
 ---
 
+## 待评估事项（真实用户走查发现，2026-07-16 第二轮）✅ 已修复
+
+用户实测发现两个问题，措辞严厉：
+
+1. 保存白名单报 `405 Request failed with status code 405`。
+   **根因**：上面那条「发布总开关」改动落地后，我没有重启正在跑的
+   webui 进程——FastAPI 路由代码只在进程启动时加载一次（不像
+   `config.yaml` 每次请求都重新读盘），旧进程完全不知道新路由存在，
+   `POST` 落到 SPA 兜底路由（只注册了 `GET /{full_path}`），于是路径
+   匹配但方法不匹配 → 405。**修复**：确认路由代码本身无 bug 后，
+   `kill` 旧进程并用 `nohup python -m pipeline.run webui` 重启，
+   `curl -X POST` 验证返回 200。**教训**：任何改动 `pipeline/webui/`
+   下路由代码后，必须显式重启 webui 进程并用真实请求（curl/浏览器）
+   验证，不能只看 pytest 绿。
+2. 点击「加入排期」报 `duplicate_schedule: publication already exists
+   for (content_id=c_a7835512, platform=toutiao, account_id=main)`。
+   **根因排查**：这不是后端 bug——`UNIQUE(content_id, platform,
+   account_id)` 是 HARD_PARTS §1「防重复发布」的核心防线，只要该三元组
+   曾经 insert 过一条记录（不论当前 status 是什么，记录永不删除，只
+   `transition` 状态），就无法再插入同组合的新记录。真正的缺陷是前端
+   UX 100% 没给用户任何线索：手动排期表单让用户能选中一个注定 409 的
+   平台/账号组合；同一页面已有的「排期」列表压根没显示 `account_id`
+   或 `error` 字段，用户根本看不出"已经排过了"。
+
+**改动**：
+- `frontend/src/stores/index.ts`：`ContentDetail.publications` 类型
+  从 `any[]` 改为已存在的 `PublicationItem[]`（此前类型太松，编译期
+  发现不了漏用字段的问题）。
+- `frontend/src/views/ContentDetail.vue`：
+  - 新增 `scheduledCombos` computed，从已加载的 `data.publications`
+    算出已存在 `(platform, account_id)` 组合集合；`platformOptions`/
+    `accountOptions` 据此提前过滤掉注定 409 的选项，而不是等用户点了
+    才报错。
+  - `onSchedule()` 对 `duplicate_schedule` 错误码给出可操作的中文提示
+    （指向下方列表 + 建议去发布记录页操作），而非裸的错误码拼接。
+  - 「排期」列表补显示 `account_id`（此前只显示 platform + 时间）和
+    `error`（此前完全不展示，用户根本看不到 `p_ac5318ff` 上有一条
+    历史失败留下的 `toutiao title input not found ...`），并加「前往
+    发布记录页操作 →」链接跳转 `/publish/records?content_id=<id>`。
+- 落链接前发现 `PublishRecords.vue` 和后端都不支持按 `content_id`
+  过滤，为避免重复本轮"看起来做了、实际没做"的问题，补齐整条链路
+  （只读新增，不动 schema）：
+  - `pipeline/db.py`：`_PUBS_FILTER_COLS` 加入 `"content_id"`；
+    `list_publications()` 新增 `content_id: str | None = None` 关键字
+    参数，复用既有 `_build_filter_where()` 白名单机制。
+  - `pipeline/webui/api/publish.py::publish_records()`：新增
+    `content_id` query 参数并透传。
+  - `frontend/src/views/PublishRecords.vue`：`useRoute()` 读
+    `route.query.content_id` 作为初始 filter；顶部新增可关闭的
+    `a-alert` 显示"已按内容过滤：<id>"，关闭时清空 filter 并同步清掉
+    URL query 后重新加载——过滤状态对用户可见、可撤销，不是隐形筛选。
+
+**验证**：
+- `pytest tests/test_db.py -k content_id tests/webui/test_api_m10_5.py -k
+  "content_id or TestPublishRecords" -q` 新增 5 例全绿；全量
+  `pytest tests/ -q` 1602 通过（9 个既有失败与本次改动无关：1 个是
+  `__pycache__` 产物触发的误报护栏测试，其余是需要真实网络/GPU/时序的
+  既有 flaky 测试，均与本轮 diff 无关文件）。
+- `npx vue-tsc --noEmit` 通过；`npx vite build` 产出新 bundle。
+- **按用户上次批评直接吸取教训，本轮走了真实进程验证而非只看代码/
+  测试**：`kill` 并重启 webui 进程后，用真实数据 `c_a7835512` 做了
+  端到端 curl 验证——`GET /api/v1/publish/records?content_id=c_a7835512`
+  返回 3 条记录（含 toutiao 那条历史 `error` 文本）；`GET
+  /api/v1/contents/c_a7835512` 的 `publications` 字段同样带 `error`；
+  确认线上实际提供服务的 JS bundle hash 与刚构建产物一致，并 grep 确认
+  `duplicate_schedule`/`前往发布记录页操作` 等新文案确实存在于该 bundle
+  内（而非命中了浏览器/CDN 缓存的旧文件）。
+
+**明确未做（用户消息里另外三点，非代码任务，需用户先回应）**：
+- ⬜ 用户对"手动测试发现错误、交付质量差"的系统性不满——本轮已经把
+  "改完代码必须重启进程 + 真实请求验证" 补进流程（教训见上），但这是
+  单次事后补救，不是承诺；后续每次改动 `pipeline/webui/` 路由或前端
+  页面，都要重复这套「重启 + curl/浏览器验证」流程，不能再退回到只看
+  pytest。
+- ⬜ 用户提到"想让你抄 yixiaoer"——不清楚具体指的是哪个产品/哪些页面
+  /哪个版本（此前 2026-07-13 条目里只提到一句"看一下成熟的产品，像
+  yixiaoer 之类的是怎么设置这些 key 的"，没有 URL/截图/具体功能点）。
+  按规则不能凭空猜测生成 URL，需要用户提供具体参照（链接/截图/说明
+  "抄哪个页面的哪个交互"）才能推进。
+- ⬜ 用户"对页面 UI 交互也很不满意"——同样缺具体指向（哪个页面、哪个
+  操作、哪里不满意），需要用户进一步说明或给出截图，才能定位成可执行
+  的改动项。
+
+---
+

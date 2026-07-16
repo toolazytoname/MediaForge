@@ -51,21 +51,36 @@ const schedEligible = computed(() => {
   return data.value.status === 'approved' || data.value.status === 'gated'
 })
 
-// 平台选项（去重自 accountsStore.items；不硬编码）
+// 已存在 publication 记录的 (platform, account_id) 组合——UNIQUE(content_id,
+// platform, account_id) 约束下，无论该记录当前状态是什么（queued/failed/...），
+// 同组合都无法再新建一条，只能对已有记录重试/查看，不能重复"加入排期"。
+const scheduledCombos = computed(() => {
+  const set = new Set<string>()
+  for (const p of data.value?.publications ?? []) {
+    set.add(`${p.platform}::${p.account_id}`)
+  }
+  return set
+})
+
+// 平台选项（去重自 accountsStore.items；不硬编码）——排除该平台下所有账号
+// 都已存在排期记录的情况，避免用户选中一个注定会 409 的平台
 const platformOptions = computed(() => {
   const set = new Set<string>()
   for (const it of accountsStore.items) {
-    if (it.platform) set.add(it.platform)
+    if (it.platform && !scheduledCombos.value.has(`${it.platform}::${it.account}`)) {
+      set.add(it.platform)
+    }
   }
   return Array.from(set).sort()
 })
 
-// 当前平台下的账号选项
+// 当前平台下的账号选项——排除已有排期记录的账号
 const accountOptions = computed(() => {
   if (!schedPlatform.value) return []
   return accountsStore.items
     .filter((it) => it.platform === schedPlatform.value)
     .map((it) => it.account)
+    .filter((acc) => !scheduledCombos.value.has(`${schedPlatform.value}::${acc}`))
 })
 
 // 表单齐全才能提交
@@ -146,7 +161,14 @@ async function onSchedule() {
     await refresh()
   } else {
     const [code, ...rest] = (schedStore.lastError ?? '').split(':')
-    schedErrorAlert.value = { code: code ?? 'unknown', msg: rest.join(':').trim() }
+    if (code === 'duplicate_schedule') {
+      schedErrorAlert.value = {
+        code,
+        msg: '该平台/账号已存在排期记录（见下方「排期」列表），无法重复添加；如需重试，请在发布记录页对该条已有记录操作',
+      }
+    } else {
+      schedErrorAlert.value = { code: code ?? 'unknown', msg: rest.join(':').trim() }
+    }
   }
 }
 
@@ -345,9 +367,26 @@ function goSettings() {
             <a-list size="small" :data-source="data.publications">
               <template #renderItem="{ item }">
                 <a-list-item>
-                  <a-tag color="blue">{{ item.platform }}</a-tag>
-                  <span style="margin-left: 8px">{{ formatDateTime(item.scheduled_at) }}</span>
-                  <a-tag style="margin-left: 8px">{{ item.status }}</a-tag>
+                  <div style="width: 100%">
+                    <a-tag color="blue">{{ item.platform }}</a-tag>
+                    <span style="margin-left: 4px; color: #666">{{ item.account_id }}</span>
+                    <span style="margin-left: 8px">{{ formatDateTime(item.scheduled_at) }}</span>
+                    <a-tag
+                      style="margin-left: 8px"
+                      :color="item.status === 'published' ? 'green' : item.status === 'failed' ? 'red' : 'default'"
+                    >
+                      {{ item.status }}
+                    </a-tag>
+                    <a
+                      style="margin-left: 8px"
+                      @click="router.push(`/publish/records?content_id=${data!.id}`)"
+                    >
+                      前往发布记录页操作 →
+                    </a>
+                    <div v-if="item.error" style="color: #cf1322; font-size: 12px; margin-top: 4px">
+                      上次错误：{{ item.error }}
+                    </div>
+                  </div>
                 </a-list-item>
               </template>
               <template #empty>

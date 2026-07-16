@@ -123,7 +123,7 @@ export interface ContentDetail extends TopicItem {
   canonical_html: string
   files: { path: string; platform: string | null; kind: string; exists: boolean; size: number }[]
   images: { cover: string | null; inline: string[] }
-  publications: any[]
+  publications: PublicationItem[]
 }
 
 export const useContentsStore = defineStore('contents', () => {

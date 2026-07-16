@@ -124,6 +124,16 @@ class TestPublishRecords:
         assert len(body["items"]) == 1
         assert body["items"][0]["platform"] == "x"
 
+    def test_with_content_id_filter(self, client, tmp_env):
+        conn = db.connect(str(tmp_env / "state.db"))
+        p1 = _seed_published(conn, platform="x", account_id="a1")
+        _seed_published(conn, platform="toutiao", account_id="a2")
+        conn.close()
+        r = client.get(f"/api/v1/publish/records?content_id={p1.content_id}")
+        body = r.json()
+        assert len(body["items"]) == 1
+        assert body["items"][0]["content_id"] == p1.content_id
+
     def test_with_metric(self, client, tmp_env):
         from pipeline.models import Metric
         conn = db.connect(str(tmp_env / "state.db"))
