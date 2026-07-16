@@ -1230,7 +1230,7 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 
 ### M11-H｜创作编辑器可用性修复（补齐 M11-G 承诺，用户实测不满意，低危）
 - [x] **目标**：M11-G 打勾了但用户实测「完全用不起来」——修复两个有证据的具体缺口：编辑已有草稿时正文栏是空的（编辑回填 bug），以及编辑器没有实时预览（M11-G 自己写的验收标准里承诺的"左右分栏编辑/预览"没真正做出来）。**M11-E（MultiPost 后端集成）本任务暂缓，不写任何代码**，继续保持高危/待人工确认挂起状态
-  ✅ 完成于 2026-07-16，commit 待补（本次提交），备注：`get_content_detail` 新增 `canonical_markdown` 字段（复用已读文件内容，测试先红后绿）；前端新增 `markdown-it`+`dompurify`+`frontend/src/utils/markdown.ts::renderMarkdown()`；`ManualEditor.vue` 修复 `loadContent()` 回填 bug + 加左右分栏实时预览；纠正 `evaluation-notes.md`/`HARD_PARTS.md` 里 MultiPost"RESTful API"的错误假设为真实的 `postMessage`+信任握手机制；Playwright 端到端验证（隔离 scratch server，未碰生产 state.db）确认编辑回填、实时预览、非 draft 只读均正常，零 console 错误；`pytest` 除 9 个预存在无关失败外全绿，成本护栏 grep 空。
+  ✅ 完成于 2026-07-16，commit fc656fe，备注：`get_content_detail` 新增 `canonical_markdown` 字段（复用已读文件内容，测试先红后绿）；前端新增 `markdown-it`+`dompurify`+`frontend/src/utils/markdown.ts::renderMarkdown()`；`ManualEditor.vue` 修复 `loadContent()` 回填 bug + 加左右分栏实时预览；纠正 `evaluation-notes.md`/`HARD_PARTS.md` 里 MultiPost"RESTful API"的错误假设为真实的 `postMessage`+信任握手机制；Playwright 端到端验证（隔离 scratch server，未碰生产 state.db）确认编辑回填、实时预览、非 draft 只读均正常，零 console 错误；`pytest` 除 9 个预存在无关失败外全绿，成本护栏 grep 空。
 - **缘起**：用户手动装了 MultiPost 扩展试用其网页版编辑器（`multipost.app/dashboard/md`），觉得它的 Markdown 实时预览体验是自己想要的，同时明确指出「虽然任务列表里打勾了，但其实我不满意，现在这个我完全用不起来」——审计确认这不是主观错觉：`ManualEditor.vue::loadContent()` 代码里直接写着"本期编辑模式下空 body"，根因是 `GET /api/v1/contents/{id}` 只读了 canonical.md 原文用来生成 HTML，从不把原文塞进响应；且前端依赖里当时没有任何 markdown 渲染库，没有预览能力
 - **步骤**：
   1. 后端 `pipeline/webui/api/contents.py::get_content_detail` 新增响应字段 `canonical_markdown`（复用已读取的文件内容，不改函数签名/不新增端点）
