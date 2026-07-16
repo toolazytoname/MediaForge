@@ -1228,6 +1228,19 @@ P4（UI 发布，最高危，最后）：M10-P4-*
 - **红线**：**不改 models 字段 / SQL schema / Adapter 签名 / 状态机转移表**；topic_id 保持 NOT NULL（用 manual topic 桥接，不改约束）；不新增状态；手动创作路径**禁止调用 LLM**（成本护栏 HARD_PARTS §4）；不 mock 状态机
 - **前置/顺序**：依赖 M11-A（内容生产分组导航就位）；与 M11-B/C/D 无冲突可并行；属**内容生产**而非发布，不涉真发→可进自治流
 
+### M11-H｜创作编辑器可用性修复（补齐 M11-G 承诺，用户实测不满意，低危）
+- [x] **目标**：M11-G 打勾了但用户实测「完全用不起来」——修复两个有证据的具体缺口：编辑已有草稿时正文栏是空的（编辑回填 bug），以及编辑器没有实时预览（M11-G 自己写的验收标准里承诺的"左右分栏编辑/预览"没真正做出来）。**M11-E（MultiPost 后端集成）本任务暂缓，不写任何代码**，继续保持高危/待人工确认挂起状态
+  ✅ 完成于 2026-07-16，commit 待补（本次提交），备注：`get_content_detail` 新增 `canonical_markdown` 字段（复用已读文件内容，测试先红后绿）；前端新增 `markdown-it`+`dompurify`+`frontend/src/utils/markdown.ts::renderMarkdown()`；`ManualEditor.vue` 修复 `loadContent()` 回填 bug + 加左右分栏实时预览；纠正 `evaluation-notes.md`/`HARD_PARTS.md` 里 MultiPost"RESTful API"的错误假设为真实的 `postMessage`+信任握手机制；Playwright 端到端验证（隔离 scratch server，未碰生产 state.db）确认编辑回填、实时预览、非 draft 只读均正常，零 console 错误；`pytest` 除 9 个预存在无关失败外全绿，成本护栏 grep 空。
+- **缘起**：用户手动装了 MultiPost 扩展试用其网页版编辑器（`multipost.app/dashboard/md`），觉得它的 Markdown 实时预览体验是自己想要的，同时明确指出「虽然任务列表里打勾了，但其实我不满意，现在这个我完全用不起来」——审计确认这不是主观错觉：`ManualEditor.vue::loadContent()` 代码里直接写着"本期编辑模式下空 body"，根因是 `GET /api/v1/contents/{id}` 只读了 canonical.md 原文用来生成 HTML，从不把原文塞进响应；且前端依赖里当时没有任何 markdown 渲染库，没有预览能力
+- **步骤**：
+  1. 后端 `pipeline/webui/api/contents.py::get_content_detail` 新增响应字段 `canonical_markdown`（复用已读取的文件内容，不改函数签名/不新增端点）
+  2. 前端新增 `markdown-it` + `dompurify` 依赖、`frontend/src/utils/markdown.ts::renderMarkdown()`（渲染 + XSS 消毒）
+  3. `ManualEditor.vue::loadContent()` 从 `canonical_markdown` 回填 `bodyMarkdown`（不再置空）；编辑器卡片改左右分栏，左编辑右实时预览（`computed` + `v-html`，纯客户端零网络往返）；删除过时的"不会回填"提示文案
+  4. 纠正 `docs/research/evaluation-notes.md` M11-0 节与 `docs/HARD_PARTS.md` §7 里 MultiPost"RESTful API 触发"的错误假设（实为 `window.postMessage` + 域名信任握手，回传弱，图片需公网 URL），供未来 M11-E 重启时参考
+- **验收**：新建草稿→输入 markdown→右侧预览实时更新；保存→跳转编辑页→正文正确回填（不再是空的）；再次编辑保存正常；非 draft 内容仍只读；`GET /contents/{id}` 返回的 `canonical_markdown` 与写入内容一致（单测覆盖）；`pytest -q` 全绿；`grep "import anthropic" pipeline/ | grep -v llm.py` 空
+- **声明改动文件**：`pipeline/webui/api/contents.py`、`frontend/src/utils/markdown.ts`（新增）、`frontend/src/views/ManualEditor.vue`、`frontend/package.json`、`tests/webui/test_api_m10_4.py`、`docs/research/evaluation-notes.md`、`docs/HARD_PARTS.md`、`docs/TASKS.md`
+- **红线**：不改 `PublisherAdapter`/`safe_publish`/状态机/models 字段；不触碰 Review.vue 编辑能力（编辑仍仅限 status=draft）；不重新设计整页 IA；不涉真发，可进自治流
+
 ### M11-0｜发布通道开源集成评估（先于 M11-E 一切编码，高危前置，M0-0 式时间盒）
 - [x] **目标**：确定国内发布走 Wechatsync 还是 MultiPost、以何方式与编排层对接，输出 DECISION 与集成架构，**仅评估不真发**
   ✅ 完成于 2026-07-10，commit 2a4ee47，备注：`gh api` + `git clone --depth 1` 实读三仓；DECISION 落 `evaluation-notes.md` M11-0 节 + HARD_PARTS §7 增 3 行。**结论**：图文+视频主通道=**MultiPost**（Apache-2.0 + RESTful API + video/ 29 平台全覆盖，触发/回传最清晰）；图文长尾=**参考 Wechatsync**（MCP/CLI 现成但 GPL-3.0→仅进程外调用不 vendor，且它**图文 only 不做视频**）；无人值守兜底=**参考 MPP**（Python+Playwright 同构，移植 `platform_configs.py`）。触发经 `MultiPostExtensionPublisher(PublisherAdapter)`（签名不变）+ 编排层三重锁不绕。M11-E 拆细为 E-1(读平台/账号)→E-2(dry-run 骨架)→E-3(真发·高危人工)→E-4(MPP 兜底参考)。

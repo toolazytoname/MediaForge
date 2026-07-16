@@ -211,6 +211,7 @@ class TestContentsAPI:
         body = r.json()
         assert body["id"] == "c_d"
         assert "<h1>" in body["canonical_html"]
+        assert body["canonical_markdown"] == "# Hello"
         assert isinstance(body["files"], list)
         assert body["images"] == {"cover": None, "inline": []}
         assert body["publications"] == []

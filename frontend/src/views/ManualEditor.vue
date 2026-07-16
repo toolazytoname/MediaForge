@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // M11-G 双模式创作编辑器：手动草稿 + 编辑现有 draft 共用同一组件
 // - 两种模式:create (POST /contents body_markdown) / edit (PATCH /contents/{id})
-// - 简易 Markdown 编辑器:大 textarea(本期不接 monaco,保持最小实现)
+// - 简易 Markdown 编辑器:textarea + 实时预览分栏(M11-H,本期不接 monaco,保持最小实现)
 // - 右侧属性面板:pillar / formats 多选 / 「保存草稿」/「送门禁」按钮
 // - 编辑模式下,status 非 draft 时整个表单只读(防直接改 gated+ 内容)
 //   仅渲染「该内容已离开 draft,请前往 /contents/{id}」引导
@@ -10,6 +10,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { formatDateTime } from '../utils/format'
+import { renderMarkdown } from '../utils/markdown'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +20,7 @@ interface ContentDetail {
   title: string
   pillar: string
   canonical_path: string
+  canonical_markdown: string
   formats: string[]
   status: string
   topic_id: string
@@ -64,16 +66,7 @@ async function loadContent(id: string) {
     pillar.value = d.pillar
     formats.value = Array.isArray(d.formats) ? d.formats : []
     contentStatus.value = d.status
-    // 读 canonical.md 内容（如文件读得到；本期用 fetch 文件路径）
-    try {
-      // canonical_path 是相对路径，直接走 vite 的 fs 不行；
-      // 简化：从 /contents/{id} 详情一般含有 canonical_html,这里直接走 markdown
-      // 因为 /api/v1/contents/{id} 当前不返回 canonical.md 原文（M10-4 仅给 HTML），
-      // 所以本期编辑模式下空 body,提示用户「已加载基本信息,请重新粘贴原文」。
-      bodyMarkdown.value = ''
-    } catch (e) {
-      bodyMarkdown.value = ''
-    }
+    bodyMarkdown.value = d.canonical_markdown ?? ''
     if (d.status !== 'draft') {
       mode.value = 'readonly'
     } else {
@@ -103,6 +96,7 @@ const canSave = computed(() => Boolean(
 ))
 
 const editable = computed(() => mode.value === 'create' || mode.value === 'edit')
+const previewHtml = computed(() => renderMarkdown(bodyMarkdown.value))
 
 async function saveDraft() {
   if (!canSave.value) return
@@ -195,13 +189,24 @@ async function sendToGate() {
               />
             </a-form-item>
             <a-form-item label="正文 (Markdown)">
-              <a-textarea
-                v-model:value="bodyMarkdown"
-                placeholder="# 标题&#10;&#10;正文..."
-                :auto-size="{ minRows: 16, maxRows: 32 }"
-                :disabled="!editable"
-                style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace;"
-              />
+              <a-row :gutter="12">
+                <a-col :span="12">
+                  <a-textarea
+                    v-model:value="bodyMarkdown"
+                    placeholder="# 标题&#10;&#10;正文..."
+                    :auto-size="{ minRows: 16, maxRows: 32 }"
+                    :disabled="!editable"
+                    style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace;"
+                  />
+                </a-col>
+                <a-col :span="12">
+                  <div
+                    class="md-preview"
+                    style="min-height: 300px; max-height: 640px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 16px;"
+                    v-html="previewHtml"
+                  />
+                </a-col>
+              </a-row>
             </a-form-item>
           </a-form>
         </a-card>
@@ -259,7 +264,7 @@ async function sendToGate() {
             保存后会自动跳转到编辑页，方便继续打磨。
           </p>
           <p v-else style="font-size: 12px; color: #8c8c8c; margin-top: 8px">
-            重新粘贴正文即可整体覆盖。本期编辑模式不会回填 canonical.md 原文（M10-4 接口仅返回 HTML）。
+            正文会从 canonical.md 原文回填，右侧为实时预览，修改后保存即整体覆盖。
           </p>
         </a-card>
       </a-col>

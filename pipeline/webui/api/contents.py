@@ -68,19 +68,23 @@ def get_content_detail(content_id: str) -> dict[str, Any]:
                 "message": f"content {content_id} not found",
             }})
         pubs = db.get_publications_by_content(conn, content_id)
-    # canonical.md → HTML（文件不存在时返回空串）
+    # canonical.md → 原文 + HTML（文件不存在时均返回空串）
+    canonical_markdown = ""
     canonical_html = ""
     try:
         cp = Path(c.canonical_path)
         if cp.exists():
+            canonical_markdown = cp.read_text(encoding="utf-8")
             canonical_html = md_to_html(
-                cp.read_text(encoding="utf-8"),
+                canonical_markdown,
                 image_base_url=content_output_url_prefix(c),
             )
     except Exception:
+        canonical_markdown = ""
         canonical_html = ""
     return {
         **content_dict(c),
+        "canonical_markdown": canonical_markdown,
         "canonical_html": canonical_html,
         "files": list_content_files(c),
         "images": content_image_urls(c),

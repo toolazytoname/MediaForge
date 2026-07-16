@@ -319,6 +319,17 @@ M1-7 已在 URL dedup 之后、score 之前跑了一次 cheap LLM 调语义聚�
 - **Wechatsync GPL-3.0**：仅**进程外 CLI/MCP 调用**（聚合），**不 import、不 vendor、不静态/动态链接其源码**；一旦要读它的适配器逻辑照抄，必须自己重写而非拷贝。
 - **MultiPost Apache-2.0 / MPP MIT**：宽松，可集成/借鉴/移植；保留 `LICENSE`/`NOTICE`，移植代码注明出处与 pin commit。
 
+### ⚠️ 更正（2026-07-16，M11-H 调研纠偏）：MultiPost 触发机制不是"RESTful API"
+
+上面 DECISION 与「触发/回传如何塞进 `PublisherAdapter`」两节里"**RESTful API + Extension API 最易触发/回传**"的判断有误，源码实读（`git clone --depth 1 https://github.com/leaperone/MultiPost-Extension`，读 `src/contents/extension.ts`/`src/background/`）纠正如下：
+
+- **真实触发机制是 `window.postMessage`**，由内容脚本（`src/contents/extension.ts`）注入到被信任的页面里监听，不是独立可从任意后端直连的 RESTful HTTP 接口。消息类型如 `MULTIPOST_EXTENSION_PUBLISH`/`MULTIPOST_EXTENSION_GET_ACCOUNT_INFOS` 等。
+- **需要一次性人工"信任域名"握手**：扩展把可信域名存在 `chrome.storage.local["trustedDomains"]`，出厂只预置了 `multipost.app`；MediaForge 若要触发，必须先让用户在浏览器里手动点一次"信任"弹窗（或想办法把自己的桥页面域名加入白名单），不能纯后端无人值守打通。
+- **结果回传很弱**：源码注释显示"任意回调即视为完成"，实际只拿得到 tab 句柄，**没有结构化的成功/失败/`platform_post_id`/URL**，与 M11-E-3 的"人工核对无重复帖"高度相关——回传不可靠意味着自动判定发布是否成功这件事基本做不到，仍需人工盯屏确认。
+- **图片必须是公网可访问的 URL**，不能直接喂本地文件路径；MediaForge 本地产出的图片要接入 MultiPost，需要额外起一个可公网访问（或至少扩展所在浏览器能访问）的静态文件服务把图片"发布"成 URL 再传给扩展。
+
+**结论调整**：MultiPost 作为图文/视频分发通道的选型结论（Apache-2.0、覆盖面广）本身不变；但集成复杂度、无人值守可行性、结果可信度都比原判断悲观得多——**M11-E-1/E-2 的验证目标需从"打通 RESTful API"改为"打通 postMessage 桥 + 域名信任握手"**，且真正开发前应先手动验证一遍握手+回传的可靠性上限，避免过早投入自动化。M11-E 本身暂缓，此更正供未来重新启动时参考，防止复读旧结论踩同一个坑。
+
 ### 落 M11-E 的子任务拆细（细粒度，弱模型可接棒；**真发部分高危、人工、不进自治流**）
 
 1. **M11-E-1（低危，可自治）**：装 MultiPost 扩展 + 起本地桥，跑通 `MULTIPOST_EXTENSION_PLATFORMS`/`_GET_ACCOUNT_INFOS`——**只读**平台/账号列表，不发任何内容。产出：桥连通性验证 + 账号映射表。
