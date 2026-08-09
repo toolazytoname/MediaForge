@@ -107,6 +107,22 @@
 
   ✅ 完成于 2026-08-09，commit 0a5cd78，备注：灵感可由想法、URL 或粘贴文本保存，并在填写创作意图后显式提升为 Project；浏览器路径与全量分批回归已验证。
 
+### R5｜项目研究板与可追溯声明（TDD，先证据后成文）
+
+- [ ] **目标**：让每个 Project 在写稿前拥有可编辑、可追溯的研究板，明确区分来源事实、个人判断与待确认项，并让冲突或反方限制显式可见。
+- **步骤**：
+  1. 在 `output/projects/<project_id>/research.json` 建立严格、原子、不可变的 Research sidecar，不改变冻结 Project manifest；每条来源至少包含标题、URL 或本地引用、摘要、录入时间，每条声明至少包含文本、类型（`fact`/`judgment`/`open_question`）、来源引用、状态与可选限制/反方观点；
+  2. 提供 Project 作用域的研究板读取、替换式新增/更新来源和声明 API。所有写入必须显式操作，禁止网页抓取、LLM 提取或静默改写；来源和声明引用不存在时返回明确错误；
+  3. 在项目详情中新增“研究板”区域，可新增来源与声明、显示类型和来源链接、显示无来源事实与未解决问题的检查提示；
+  4. Project 不存在或 research manifest 损坏时维持错误 envelope；不写 SQLite、Topic、Content 或正文。
+- **测试 / 验收**：
+  - 覆盖 research round-trip、时间/字段/引用完整性、坏 JSON/未知字段拒绝、原子写、不可变更新、Project 不存在和 API 错误 envelope；
+  - 浏览器真人路径：在一个已有项目中加入至少两个来源和三种声明，能一眼看出哪些事实无来源、哪些项待确认、何处存在限制或反方；
+  - 全量测试、前端构建、文本源码 Anthropic 护栏通过。
+- **声明改动文件**：`docs/TASKS.md`、`pipeline/research.py`、`pipeline/webui/api/research.py`、`pipeline/webui/api/__init__.py`、`tests/test_research.py`、`tests/webui/test_research_api.py`、`frontend/src/stores/index.ts`、`frontend/src/views/Projects.vue`、`frontend/dist/`（仅由 `npm run build` 再生成）。
+- **红线**：不改 `pipeline/models.py`、SQLite schema、Project v0 manifest 字段、Adapter 签名、已有 Content 正文或发布行为；不抓取 URL、不调用 LLM、不把来源内容伪装为已核查事实；用户必须能保留个人判断与未确认项。
+- **参考**：[PRODUCT_RESET_PLAN.md §1.4、§5.1、§5.3、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §4、§10.5](./HARD_PARTS.md)。
+
 ---
 
 ## M0 — 项目地基（预计 1-2 天）
