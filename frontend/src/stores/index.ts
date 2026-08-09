@@ -60,6 +60,50 @@ export const useDashboardStore = defineStore('dashboard', () => {
   return { data, loading, error, load }
 })
 
+// ── Projects ──────────────────────────────────────────────
+
+export interface ProjectItem {
+  id: string
+  title: string
+  idea: string
+  audience: string
+  goal: string
+  voice: string
+  autonomy: 'assist' | 'collaborate' | 'draft' | 'pack'
+  content_ids: string[]
+  asset_paths: string[]
+  created_at: string
+  updated_at: string
+}
+
+export const useProjectsStore = defineStore('projects', () => {
+  const items = ref<ProjectItem[]>([])
+  const total = ref(0)
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+
+  async function load() {
+    loading.value = true
+    error.value = null
+    try {
+      const response = await api.get<{ items: ProjectItem[]; total: number }>('/projects')
+      items.value = response.data.items
+      total.value = response.data.total
+    } catch (e) {
+      error.value = unwrapError(e)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function getDetail(id: string): Promise<ProjectItem> {
+    const response = await api.get<ProjectItem>(`/projects/${id}`)
+    return response.data
+  }
+
+  return { items, total, loading, error, load, getDetail }
+})
+
 // ── Topics ─────────────────────────────────────────────────
 
 export interface TopicItem {

@@ -72,7 +72,7 @@
 
 ### R3｜重构导航与“今天”页（TDD，创作者入口优先）
 
-- [ ] **目标**：把普通用户的主导航从旧流水线阶段收敛为“今天 / 灵感 / 项目 / 资产 / 发布 / 复盘”，使首页成为可继续工作的安静工作台，而非紫色横幅和状态统计页。
+- [x] **目标**：把普通用户的主导航从旧流水线阶段收敛为“今天 / 灵感 / 项目 / 资产 / 发布 / 复盘”，使首页成为可继续工作的安静工作台，而非紫色横幅和状态统计页。
 - **步骤**：
   1. 新增只读 Project API（列表、单项详情），复用 R2 sidecar；损坏 manifest 必须返回可理解的 500 错误，缺失项目返回 404，不得初始化或修改 SQLite；
   2. 将 `/` 重做为“今天”，显示最近项目、明确的下一步和无项目空态；新增 `/projects` 和 `/projects/:id` 只读入口，项目创建留给 R4；
@@ -82,8 +82,8 @@
   - API 覆盖空项目列表、按更新时间返回、单项目读取、缺失 ID 的错误 envelope、损坏 manifest 不被吞掉；
   - 浏览器真人路径：首次打开首页可在 3 分钟内理解“项目是主题工作空间”，能进入项目列表和已有项目详情，并能从开发者抽屉找到旧工具；无项目时不得伪造进度或指标；
   - `npm run build`、全量 Python 测试、Anthropic import 护栏均通过；不生成真实发布或内容。
-- **声明改动文件**：`docs/TASKS.md`、`pipeline/webui/api/__init__.py`、`pipeline/webui/api/projects.py`、`tests/webui/test_projects_api.py`、`frontend/src/router/index.ts`、`frontend/src/layouts/AppShell.vue`、`frontend/src/views/Today.vue`、`frontend/src/views/Projects.vue`、`frontend/src/stores/index.ts`、`frontend/src/App.vue`。
-- **红线**：不改 `pipeline/models.py`、SQLite schema、Topic/Content/Publication 关系、Adapter 签名和 `TECH_SPEC.md`；不接入项目创建、Idea Inbox、AI 写作、图像、Variant 或真实发布；不静默改动用户正文；不触及现有 `PublishCenter.vue` 与 `multipost_bridge.py`。
+- **声明改动文件**：`docs/TASKS.md`、`pipeline/webui/api/__init__.py`、`pipeline/webui/api/projects.py`、`tests/webui/test_projects_api.py`、`frontend/src/router/index.ts`、`frontend/src/layouts/AppShell.vue`、`frontend/src/views/Today.vue`、`frontend/src/views/Projects.vue`、`frontend/src/stores/index.ts`、`frontend/src/App.vue`、`frontend/dist/`（仅由 `npm run build` 再生成）。既有用户脏文件 `CLAUDE.md`、`frontend/src/views/PublishCenter.vue`、`pipeline/publishers/multipost_bridge.py` 与 `state.db.bak-20260711-090813` 不纳入本任务 diff gate。
+- **红线**：不改 `pipeline/models.py`、SQLite schema、Topic/Content/Publication 关系、Adapter 签名和 `TECH_SPEC.md`；不接入项目创建、Idea Inbox、AI 写作、图像、Variant 或真实发布；不静默改动用户正文；不触及现有 `PublishCenter.vue` 与 `multipost_bridge.py`。Anthropic 护栏只扫描文本源码，排除 `__pycache__` 生成文件，且只允许 `pipeline/creators/llm.py` 命中。
 - **参考**：[PRODUCT_RESET_PLAN.md §4、§5、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §1、§4、§10.5](./HARD_PARTS.md)。
 
 ---
