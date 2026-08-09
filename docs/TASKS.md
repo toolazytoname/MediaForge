@@ -57,6 +57,8 @@
 - **声明改动文件**：`docs/TASKS.md`、`pipeline/db.py`、`tests/test_publish_safety.py`。
 - **红线**：不改 schema、状态机、`safe_publish`、发布白名单或真实发布行为；busy timeout 仅用于等待本地 SQLite 写锁。
 
+  ✅ 完成于 2026-08-09，commit 28a7ade，备注：连接期显式等待 SQLite 锁，跨进程锁测试连续 5 次通过，全量测试恢复绿色。
+
 ### R2｜Project sidecar manifest v0（TDD，低风险）
 
 - [ ] **目标**：在不触碰 SQLite 既有契约的前提下，建立 `output/projects/<project_id>/project.json` 作为主题项目的持久化边界，可聚合已有 content ID 与项目级创作信息。
@@ -65,6 +67,8 @@
 - **声明改动文件**：`docs/TASKS.md`、`pipeline/projects.py`、`tests/test_projects.py`。
 - **红线**：不改 `pipeline/models.py`、SQLite schema、Topic/Content/Publication 的关系、Adapter 签名或前端/API；不写入或覆盖 content 正文；不进行真实发布。
 - **参考**：[PRODUCT_RESET_PLAN.md §6.1](./PRODUCT_RESET_PLAN.md)。
+
+  ✅ 完成于 2026-08-09，commit 28a7ade，备注：新增不可变 Project sidecar manifest 存储、严格校验与原子写入；8 项专项测试和全量测试通过。
 
 ---
 
