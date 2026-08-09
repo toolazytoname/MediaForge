@@ -38,12 +38,16 @@
 - **声明改动文件**：执行 R0 时仅允许新增/更新 `docs/product-validation/r0-real-theme-script.md` 与本任务的完成记录；本次将任务迁入清单仅修改 `docs/TASKS.md`。
 - **参考**：[PRODUCT_RESET_PLAN.md §10—§12](./PRODUCT_RESET_PLAN.md)；`TECH_SPEC.md`（仅作契约核对，不修改）。
 
+  ⚠️ BLOCKED（2026-08-09）：等待用户提供或确认真实主题、3—5 个来源、目标读者/独特观点、质量标准及安全导出方式；不得用历史实验内容或 AI 虚构素材代替。R1 可独立继续。
+
 ### R1｜恢复可验证的工程基线（小修复）
 
 - [ ] **目标**：恢复 Python 全量测试与前端生产构建的绿色基线，消除已确认的测试漂移和 TypeScript 未使用变量。
 - **声明改动文件**：`docs/TASKS.md`、`frontend/src/views/CreationVideo/components/Step3Script.vue`、`frontend/dist/`（由生产构建生成）、`tests/test_creators_llm.py`、`tests/test_image_gen.py`、`tests/test_publish_safety.py`。
 - **验收**：`.venv/bin/python -m pytest tests/ -q` 全绿；`frontend/npm run build` 成功；Anthropic 源码导入护栏仍只允许 `pipeline/creators/llm.py`；MiniMax 默认 `image-01-live` 的预算测试可通过；跨进程发布锁测试使用运行时有效的 due 时间。
 - **红线**：不改 `pipeline/` 运行时行为、SQLite schema、`models.py` 字段、Adapter 签名或 TECH_SPEC 契约；不触及 `PublishCenter.vue`、`multipost_bridge.py` 和其他既有脏文件；不进行真实发布。
+
+  ✅ 完成于 2026-08-09，commit 7977ba3，备注：测试与构建基线恢复为 1611 passed / 13 skipped，生产构建成功。
 
 ---
 
