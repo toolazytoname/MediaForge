@@ -95,6 +95,33 @@ export interface IdeaItem {
   updated_at: string
 }
 
+export interface ResearchSource {
+  id: string
+  title: string
+  reference: string
+  summary: string
+  entered_at: string
+  updated_at: string
+}
+
+export interface ResearchClaim {
+  id: string
+  text: string
+  kind: 'fact' | 'judgment' | 'open_question'
+  source_ids: string[]
+  status: 'unverified' | 'verified' | 'open' | 'resolved'
+  limitation: string | null
+  counterpoint: string | null
+  entered_at: string
+  updated_at: string
+}
+
+export interface ResearchBoard {
+  project_id: string
+  sources: ResearchSource[]
+  claims: ResearchClaim[]
+}
+
 export const useProjectsStore = defineStore('projects', () => {
   const items = ref<ProjectItem[]>([])
   const total = ref(0)
@@ -159,6 +186,38 @@ export const useIdeasStore = defineStore('ideas', () => {
   }
 
   return { items, total, loading, error, load, create, promote }
+})
+
+export const useResearchStore = defineStore('research', () => {
+  const board = ref<ResearchBoard | null>(null)
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+
+  async function load(projectId: string): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      board.value = (await api.get<ResearchBoard>(`/projects/${projectId}/research`)).data
+    } catch (e) {
+      error.value = unwrapError(e)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function addSource(projectId: string, input: Pick<ResearchSource, 'title' | 'reference' | 'summary'>): Promise<ResearchSource> {
+    const source = (await apiPost<ResearchSource>(`/projects/${projectId}/research/sources`, input)).data
+    if (board.value?.project_id === projectId) board.value = { ...board.value, sources: [...board.value.sources, source] }
+    return source
+  }
+
+  async function addClaim(projectId: string, input: Omit<ResearchClaim, 'id' | 'entered_at' | 'updated_at'>): Promise<ResearchClaim> {
+    const claim = (await apiPost<ResearchClaim>(`/projects/${projectId}/research/claims`, input)).data
+    if (board.value?.project_id === projectId) board.value = { ...board.value, claims: [...board.value.claims, claim] }
+    return claim
+  }
+
+  return { board, loading, error, load, addSource, addClaim }
 })
 
 // ── Topics ─────────────────────────────────────────────────
