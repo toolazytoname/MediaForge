@@ -163,6 +163,23 @@
 
   ✅ 完成于 2026-08-09，commit 661c458，备注：视觉圣经、封面/插图槽位、候选与失败审计均项目侧落盘；GPT Image 2 只在用户点击时调用。专项 55 passed、全量分组 1660 passed/13 skipped，fake provider 浏览器路径已验证生成、编辑与选择；构建产物为保护用户的 PublishCenter 改动而未暂存。
 
+### R8｜微信 / 头条独立版本与真实预览（TDD，主稿不覆盖）
+
+- [ ] **目标**：从同一份项目主稿创建微信公众号和头条两个独立、可编辑且可锁定的图文版本；上游主稿变更只能显示“有更新”，不得覆盖人工编辑后的平台稿。
+- **步骤**：
+  1. 在 `output/projects/<project_id>/variants.json` 建立严格、原子 sidecar，保存 platform、标题、摘要、正文、封面/插图资产引用、源主稿版本、锁定状态、人工修改状态、上游更新状态与有限版本历史；不改 Project v0/SQLite/既有 Content；
+  2. 新增读取、从主稿显式创建微信/头条版本、手工保存、锁定/解锁、主稿更新检查与版本恢复 API；仅 `wechat_mp` 与 `toutiao` 可创建，重复创建幂等；手工编辑后更新标记不得自动改正文；
+  3. 提供只读的微信 / 头条预览 HTML，展示标题、摘要、正文、已选择视觉资产及平台差异说明；预览不调用发布器、不创建 Publication、不请求网络；
+  4. 项目工作台新增“平台版本”区域：用户可创建两份初稿、独立编辑/锁定、看到上游版本提示、预览微信与头条排版，并清楚看到“不会自动覆盖你的修改”。
+- **测试 / 验收**：
+  - 覆盖 sidecar round-trip、严格字段与资产引用、原子写、双平台限定、创建幂等、独立手工修改、锁定、上游更新、恢复语义与坏 manifest；
+  - API 覆盖错误 envelope、预览只读、禁止创建其他平台、无 SQLite/Content/Publication 变化；
+  - 浏览器真人路径：先保存主稿，创建微信与头条版本，手改并锁定其中一份，再更新主稿，确认只显示上游更新，两个预览均可查看且未触发发布；
+  - 全量 Python 测试、前端生产构建、文本源码 Anthropic 护栏通过。
+- **声明改动文件**：`docs/TASKS.md`、`pipeline/variants.py`、`pipeline/webui/api/variants.py`、`pipeline/webui/api/__init__.py`、`tests/test_variants.py`、`tests/webui/test_variants_api.py`、`frontend/src/stores/index.ts`、`frontend/src/views/Projects.vue`；`frontend/dist/` 仅由 `npm run build` 再生成，因当前构建会纳入用户未提交的前端源码而不暂存。
+- **红线**：不改 SQLite schema、`models.py`、Project v0 字段、Adapter 签名、已有 Content/主稿正文或发布行为；不得生成其他平台、自动发布、自动覆盖人工版本、伪造发布/预览数据；不触及 `CLAUDE.md`、`PublishCenter.vue`、`multipost_bridge.py`、备份文件及既有用户改动。
+- **参考**：[PRODUCT_RESET_PLAN.md §5.2、§8、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §1、§5、§10.5](./HARD_PARTS.md)。
+
 ---
 
 ## M0 — 项目地基（预计 1-2 天）
