@@ -1529,3 +1529,20 @@ export const useVideoCreationStore = defineStore('video-creation', () => {
     reset,
   }
 })
+
+export interface PlatformVariantVersion { version: number; title: string; summary: string; body: string; asset_ids: string[]; saved_at: string; reason: string }
+export interface PlatformVariant { platform: 'wechat_mp' | 'toutiao'; title: string; summary: string; body: string; asset_ids: string[]; source_master_version: number; version: number; locked: boolean; manually_modified: boolean; upstream_updated: boolean; created_at: string; updated_at: string; history: PlatformVariantVersion[] }
+export interface VariantSet { project_id: string; variants: PlatformVariant[] }
+
+export const useVariantsStore = defineStore('variants', () => {
+  const variants = ref<PlatformVariant[]>([])
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+  async function load(projectId: string) { loading.value = true; error.value = null; try { variants.value = (await api.get<VariantSet>(`/projects/${projectId}/variants`)).data.variants } catch (e) { error.value = unwrapError(e) } finally { loading.value = false } }
+  async function create(projectId: string, platform: PlatformVariant['platform']) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}`, {})).data; variants.value = variants.value.some(x => x.platform === platform) ? variants.value : [...variants.value, item]; return item }
+  async function save(projectId: string, platform: PlatformVariant['platform'], input: Pick<PlatformVariant, 'title' | 'summary' | 'body' | 'asset_ids'>) { const item = (await api.put<PlatformVariant>(`/projects/${projectId}/variants/${platform}`, input)).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
+  async function lock(projectId: string, platform: PlatformVariant['platform'], locked: boolean) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/lock`, { locked })).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
+  async function checkUpstream(projectId: string, platform: PlatformVariant['platform']) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/check-upstream`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
+  async function restore(projectId: string, platform: PlatformVariant['platform'], version: number) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/versions/${version}/restore`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
+  return { variants, loading, error, load, create, save, lock, checkUpstream, restore }
+})

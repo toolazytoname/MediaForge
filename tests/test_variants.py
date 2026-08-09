@@ -1,0 +1,62 @@
+from __future__ import annotations
+
+import json
+import pytest
+
+from pipeline import master_documents, projects, variants, visuals
+
+
+def _project(root):
+    projects.create_project(title="项目", idea="想法", audience="读者", goal="文章", voice="清晰", autonomy="collaborate", now="2026-08-09T00:00:00+00:00", project_id="prj_variant", projects_root=root)
+    master_documents.save_manual("prj_variant", title="主标题", body="主稿正文", now="2026-08-09T00:01:00+00:00", projects_root=root)
+
+
+def test_create_is_idempotent_and_manual_variant_is_independent(tmp_path):
+    root = tmp_path / "projects"; _project(root)
+    first = variants.create_from_master("prj_variant", "wechat_mp", now="2026-08-09T00:02:00+00:00", projects_root=root)
+    assert variants.create_from_master("prj_variant", "wechat_mp", now="2026-08-09T00:03:00+00:00", projects_root=root) == first
+    edited = variants.save_manual("prj_variant", "wechat_mp", title="微信标题", summary="微信摘要", body="微信正文", asset_ids=[], now="2026-08-09T00:04:00+00:00", projects_root=root)
+    toutiao = variants.create_from_master("prj_variant", "toutiao", now="2026-08-09T00:05:00+00:00", projects_root=root)
+    assert edited.body == "微信正文" and edited.manually_modified and toutiao.body == "主稿正文"
+    assert not (root / "prj_variant" / "variants.json.tmp").exists()
+
+
+def test_lock_upstream_and_restore_never_overwrite_variant(tmp_path):
+    root = tmp_path / "projects"; _project(root)
+    variants.create_from_master("prj_variant", "wechat_mp", now="2026-08-09T00:02:00+00:00", projects_root=root)
+    variants.save_manual("prj_variant", "wechat_mp", title="人工", summary="摘要", body="人工正文", asset_ids=[], now="2026-08-09T00:03:00+00:00", projects_root=root)
+    locked = variants.set_locked("prj_variant", "wechat_mp", locked=True, now="2026-08-09T00:04:00+00:00", projects_root=root)
+    with pytest.raises(variants.VariantsError, match="locked"):
+        variants.save_manual("prj_variant", "wechat_mp", title="x", summary="x", body="x", asset_ids=[], now="2026-08-09T00:05:00+00:00", projects_root=root)
+    master_documents.save_manual("prj_variant", title="新主稿", body="新正文", now="2026-08-09T00:06:00+00:00", projects_root=root)
+    changed = variants.check_upstream("prj_variant", "wechat_mp", now="2026-08-09T00:07:00+00:00", projects_root=root)
+    assert locked.locked and changed.upstream_updated and changed.body == "人工正文"
+    variants.set_locked("prj_variant", "wechat_mp", locked=False, now="2026-08-09T00:08:00+00:00", projects_root=root)
+    assert variants.restore_version("prj_variant", "wechat_mp", 1, now="2026-08-09T00:09:00+00:00", projects_root=root).body == "主稿正文"
+
+
+def test_rejects_unknown_fields_platform_and_bad_asset_reference(tmp_path):
+    root = tmp_path / "projects"; _project(root)
+    with pytest.raises(variants.VariantsError, match="platform"):
+        variants.create_from_master("prj_variant", "xiaohongshu", now="2026-08-09T00:02:00+00:00", projects_root=root)
+    variants.create_from_master("prj_variant", "wechat_mp", now="2026-08-09T00:02:00+00:00", projects_root=root)
+    with pytest.raises(variants.VariantsError, match="unknown or unselected"):
+        variants.save_manual("prj_variant", "wechat_mp", title="标题", summary="摘要", body="正文", asset_ids=["vas_missing"], now="2026-08-09T00:03:00+00:00", projects_root=root)
+    path = root / "prj_variant" / "variants.json"; raw = json.loads(path.read_text()); raw["extra"] = 1; path.write_text(json.dumps(raw))
+    with pytest.raises(variants.VariantsError, match="unknown"):
+        variants.load_variants("prj_variant", projects_root=root)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda raw: raw["variants"][0]["history"].extend([dict(raw["variants"][0]["history"][0]), dict(raw["variants"][0]["history"][0])]),
+    lambda raw: raw["variants"][0]["history"].reverse(),
+    lambda raw: raw["variants"][0]["history"][0].update(asset_ids=["vas_missing"]),
+])
+def test_loaded_history_is_strict_and_revalidates_assets(tmp_path, mutate):
+    root = tmp_path / "projects"; _project(root)
+    variants.create_from_master("prj_variant", "wechat_mp", now="2026-08-09T00:02:00+00:00", projects_root=root)
+    variants.save_manual("prj_variant", "wechat_mp", title="人工", summary="摘要", body="正文", asset_ids=[], now="2026-08-09T00:03:00+00:00", projects_root=root)
+    variants.save_manual("prj_variant", "wechat_mp", title="人工二", summary="摘要二", body="正文二", asset_ids=[], now="2026-08-09T00:04:00+00:00", projects_root=root)
+    path = root / "prj_variant" / "variants.json"; raw = json.loads(path.read_text()); mutate(raw); path.write_text(json.dumps(raw))
+    with pytest.raises(variants.VariantsError, match="history|asset"):
+        variants.load_variants("prj_variant", projects_root=root)
