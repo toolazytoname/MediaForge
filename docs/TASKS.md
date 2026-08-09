@@ -184,7 +184,7 @@
 
 ### R9｜内容包审批（TDD，发布前人工关口）
 
-- [ ] **目标**：在不触发真实发布或创建 Publication 的前提下，汇总项目主稿、已选视觉资产、微信公众号和头条版本及其检查项，让用户逐项人工批准或撤回批准，形成可审计的内容包审批记录。
+- [x] **目标**：在不触发真实发布或创建 Publication 的前提下，汇总项目主稿、已选视觉资产、微信公众号和头条版本及其检查项，让用户逐项人工批准或撤回批准，形成可审计的内容包审批记录。
 - **步骤**：
   1. 在 `output/projects/<project_id>/approval.json` 建立严格、原子 sidecar，固定关联当前主稿版本、双平台版本、已选择视觉资产和检查项；保存每一项的状态、人工备注、批准人（本地用户标识即可）、时间与不可变历史；不改 Project/Variant/Visual/SQLite；
   2. 新增内容包读取、重新检查、逐项批准/撤回、备注和完成度 API。只有微信与头条版本均存在、没有未处理上游更新、视觉引用可解析时才可获得“可审批”状态；批准不生成平台草稿、不调用 publisher；
@@ -198,6 +198,8 @@
 - **声明改动文件**：`docs/TASKS.md`、`pipeline/approvals.py`、`pipeline/webui/api/approvals.py`、`pipeline/webui/api/__init__.py`、`tests/test_approvals.py`、`tests/webui/test_approvals_api.py`、`frontend/src/stores/index.ts`、`frontend/src/views/Projects.vue`；`frontend/dist/` 仅由 `npm run build` 再生成，因当前构建会纳入用户未提交的前端源码而不暂存。
 - **红线**：不改 SQLite schema、`models.py`、Project/Variant/Visual sidecar 字段、Adapter 签名或既有 Content；不得调用 publisher、创建 Publication、写入发布队列或将批准表述为已发布；不触及 `CLAUDE.md`、`PublishCenter.vue`、`multipost_bridge.py`、备份文件及既有用户改动。
 - **参考**：[PRODUCT_RESET_PLAN.md §5.1、§10、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §1、§5、§10.5](./HARD_PARTS.md)。
+
+  ✅ 完成于 2026-08-09，commit 740d7b5，备注：审批快照、逐项备注/批准/撤回、历史和上游失效均项目侧落盘；浏览器已验证完整批准后上游变更使审批失效，且未生成 Publication 或发布动作。专项 11 passed，独立校验通过；构建产物为保护用户的 PublishCenter 改动而未暂存。
 
 ---
 
