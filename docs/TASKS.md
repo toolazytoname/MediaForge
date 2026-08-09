@@ -90,7 +90,7 @@
 
 ### R4｜新建项目与 Idea Inbox（TDD，不绑平台）
 
-- [ ] **目标**：让创作者能从一句想法、URL 或粘贴文本保存平台无关的灵感，并在准备好后明确地创建 Project；不再要求先进入选题状态机或选择发布平台。
+- [x] **目标**：让创作者能从一句想法、URL 或粘贴文本保存平台无关的灵感，并在准备好后明确地创建 Project；不再要求先进入选题状态机或选择发布平台。
 - **步骤**：
   1. 在 `output/ideas/<idea_id>/idea.json` 新增严格校验、原子写入的 immutable Idea sidecar 存储；Idea 至少保留原始输入类型与内容、标题、创建/更新时间、可选关联 project ID，未知字段和损坏 manifest 显式报错；
   2. 扩展只读 Project API 为显式 `POST /projects` 创建，且只接受 title、idea、audience、goal、voice、autonomy；不写 Topic/Content/Publication，不调用 LLM；新增 Idea 的 list/create/promote-to-project API，提升操作必须保留 Idea 并写回关联 project ID；

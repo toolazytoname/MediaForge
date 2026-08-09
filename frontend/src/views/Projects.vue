@@ -53,7 +53,7 @@ watch(projectId, loadPage)
     </template>
 
     <template v-else>
-      <header class="list-header"><div><p class="eyebrow">项目</p><h1>每一个主题，都有一张自己的工作台。</h1><p>项目把想法、资料、主稿、视觉与平台版本放在同一条创作路径上。</p></div><a-button type="primary" disabled>新建项目</a-button></header>
+      <header class="list-header"><div><p class="eyebrow">项目</p><h1>每一个主题，都有一张自己的工作台。</h1><p>项目把想法、资料、主稿、视觉与平台版本放在同一条创作路径上。</p></div><a-button type="primary" @click="router.push('/projects/new')">新建项目</a-button></header>
       <a-alert v-if="error" type="error" :message="error" show-icon class="notice" />
       <a-spin :spinning="loading">
         <div v-if="items.length" class="project-list"><button v-for="item in items" :key="item.id" class="project-row" @click="router.push(`/projects/${item.id}`)"><div><h2>{{ item.title }}</h2><p>{{ item.idea }}</p><span>{{ item.audience }} · {{ item.goal }}</span></div><div class="row-meta"><time>{{ formatDateTime(item.updated_at) }}</time><ArrowRightOutlined /></div></button></div>

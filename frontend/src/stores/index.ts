@@ -76,6 +76,25 @@ export interface ProjectItem {
   updated_at: string
 }
 
+export interface ProjectInput {
+  title: string
+  idea: string
+  audience: string
+  goal: string
+  voice: string
+  autonomy: ProjectItem['autonomy']
+}
+
+export interface IdeaItem {
+  id: string
+  input_type: 'thought' | 'url' | 'text'
+  content: string
+  title: string
+  project_id: string | null
+  created_at: string
+  updated_at: string
+}
+
 export const useProjectsStore = defineStore('projects', () => {
   const items = ref<ProjectItem[]>([])
   const total = ref(0)
@@ -101,7 +120,45 @@ export const useProjectsStore = defineStore('projects', () => {
     return response.data
   }
 
-  return { items, total, loading, error, load, getDetail }
+  async function create(input: ProjectInput): Promise<ProjectItem> {
+    const response = await apiPost<ProjectItem>('/projects', input)
+    return response.data
+  }
+
+  return { items, total, loading, error, load, getDetail, create }
+})
+
+export const useIdeasStore = defineStore('ideas', () => {
+  const items = ref<IdeaItem[]>([])
+  const total = ref(0)
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+
+  async function load() {
+    loading.value = true
+    error.value = null
+    try {
+      const response = await api.get<{ items: IdeaItem[]; total: number }>('/ideas')
+      items.value = response.data.items
+      total.value = response.data.total
+    } catch (e) {
+      error.value = unwrapError(e)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function create(input: Pick<IdeaItem, 'input_type' | 'content' | 'title'>): Promise<IdeaItem> {
+    const response = await apiPost<IdeaItem>('/ideas', input)
+    return response.data
+  }
+
+  async function promote(id: string, input: Omit<ProjectInput, 'idea'>): Promise<{ idea: IdeaItem; project: ProjectItem }> {
+    const response = await apiPost<{ idea: IdeaItem; project: ProjectItem }>(`/ideas/${id}/promote-to-project`, input)
+    return response.data
+  }
+
+  return { items, total, loading, error, load, create, promote }
 })
 
 // ── Topics ─────────────────────────────────────────────────

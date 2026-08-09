@@ -21,7 +21,7 @@ interface NavItem { path: string; label: string; icon: Component; exact?: boolea
 
 const primaryItems: ReadonlyArray<NavItem> = [
   { path: '/', label: '今天', icon: HomeOutlined, exact: true },
-  { path: '/roadmap/ideas', label: '灵感', icon: BulbOutlined },
+  { path: '/ideas', label: '灵感', icon: BulbOutlined },
   { path: '/projects', label: '项目', icon: FolderOpenOutlined },
   { path: '/roadmap/library', label: '资产', icon: FileTextOutlined },
   { path: '/publish', label: '发布', icon: SendOutlined },

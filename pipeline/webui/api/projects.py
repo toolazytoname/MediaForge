@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Body, HTTPException
 
 from pipeline import projects as project_store
 
@@ -43,6 +45,27 @@ def _manifest_error(project_id: str | None, error: Exception) -> HTTPException:
     }})
 
 
+def _invalid_input(code: str, error: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail={"error": {
+        "code": code,
+        "message": str(error),
+    }})
+
+
+def create_project_from_input(body: dict[str, Any]) -> project_store.Project:
+    """严格挑选公开字段，避免把请求体扩散进冻结的 Project v0。"""
+    allowed = {"title", "idea", "audience", "goal", "voice", "autonomy"}
+    if set(body) != allowed:
+        raise project_store.ProjectManifestError(
+            "project body must contain only title, idea, audience, goal, voice and autonomy"
+        )
+    return project_store.create_project(
+        title=body["title"], idea=body["idea"], audience=body["audience"],
+        goal=body["goal"], voice=body["voice"], autonomy=body["autonomy"],
+        now=datetime.now(timezone.utc).isoformat(), projects_root=_PROJECTS_ROOT,
+    )
+
+
 @router.get("/projects")
 def list_projects() -> dict[str, Any]:
     """List valid manifests newest first; malformed data is deliberately visible."""
@@ -60,4 +83,14 @@ def get_project(project_id: str) -> dict[str, Any]:
         project = project_store.load_project(project_id, projects_root=_PROJECTS_ROOT)
     except project_store.ProjectManifestError as error:
         raise _manifest_error(project_id, error) from error
+    return _project_dict(project)
+
+
+@router.post("/projects", status_code=201)
+def create_project(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """显式创建 sidecar Project；不写 SQLite、不调用 AI。"""
+    try:
+        project = create_project_from_input(body)
+    except project_store.ProjectManifestError as error:
+        raise _invalid_input("invalid_project_input", error) from error
     return _project_dict(project)

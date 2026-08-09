@@ -44,8 +44,8 @@ function openProject(id: string): void {
       <FolderOpenOutlined class="empty-icon" />
       <div>
         <h2>从一个值得表达的主题开始</h2>
-        <p>先保存想法，再设定受众、目标和自主程度。项目创建将在下一步开放。</p>
-        <a-button type="primary" disabled><PlusOutlined /> 新建创作项目</a-button>
+        <p>先保存想法，或直接设定受众、目标和自主程度来创建一个项目。</p>
+        <a-button type="primary" @click="router.push('/projects/new')"><PlusOutlined /> 新建创作项目</a-button>
       </div>
     </a-card>
 
