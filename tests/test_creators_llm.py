@@ -259,7 +259,7 @@ def test_anthropic_import_only_in_llm_module() -> None:
     import subprocess
 
     result = subprocess.run(
-        ["grep", "-rn", "import anthropic", "pipeline/"],
+        ["grep", "-rIn", "import anthropic", "pipeline/"],
         capture_output=True, text=True, check=False,
     )
     lines = [

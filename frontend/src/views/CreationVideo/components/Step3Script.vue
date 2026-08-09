@@ -10,7 +10,7 @@ const props = defineProps<{
 }>()
 
 const store = useVideoCreationStore()
-const { script, running, lastError } = storeToRefs(store)
+const { script, running } = storeToRefs(store)
 const localError = ref<string | null>(null)
 
 function splitError(err: string | null): { code: string; msg: string } {

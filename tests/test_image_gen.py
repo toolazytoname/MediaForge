@@ -78,8 +78,8 @@ class TestMiniMaxImageProviderInit:
     def test_default_values(self):
         p = MiniMaxImageProvider(api_key="k")
         assert p._base_url == "https://api.minimaxi.com/v1"
-        assert p._model == "image-01"
-        assert p._timeout_s == 90.0
+        assert p._model == "image-01-live"
+        assert p._timeout_s == 120.0
 
     def test_explicit_overrides(self):
         p = MiniMaxImageProvider(
@@ -191,7 +191,7 @@ class TestMiniMaxImageProviderCallHttp:
         assert captured["headers"]["content-type"] == "application/json"
         assert captured["method"] == "POST"
         assert captured["body"] == {
-            "model": "image-01",
+            "model": "image-01-live",
             "prompt": "a red circle on white background",
             "aspect_ratio": "16:9",
             "n": 1,
@@ -306,15 +306,11 @@ class TestGenerateImage:
         image_gen.set_provider(MiniMaxImageProvider(api_key="k"))
         from pipeline.creators import llm as llm_mod
         monkeypatch.setattr(llm_mod, "BUDGET_LIMIT_USD", 80.0)
-        # 用 monkeypatch.setitem 改 dict 不会自动回滚，但 monkeypatch 提供
-        # .setitem() 配合 del 兜底。这里用 dict.copy 隔离：
+        # 用替换后的价格表隔离默认模型的按张计费。
         original_prices = dict(llm_mod.MODEL_PRICES)
-        llm_mod.MODEL_PRICES["image-01"] = {
-            "input": 0.0, "output": 0.0, "per_image_usd": 0.003,
-        }
         monkeypatch.setattr(llm_mod, "MODEL_PRICES", {
             **original_prices,
-            "image-01": {"input": 0.0, "output": 0.0, "per_image_usd": 0.003},
+            "image-01-live": {"input": 0.0, "output": 0.0, "per_image_usd": 0.003},
         })
 
     def test_atomic_write_creates_png_file(self, tmp_path, monkeypatch):
@@ -333,7 +329,7 @@ class TestGenerateImage:
         assert isinstance(result, GeneratedImage)
         assert result.bytes_data == _VALID_PNG_BYTES
         assert result.aspect_ratio == "1:1"
-        assert result.model == "image-01"
+        assert result.model == "image-01-live"
 
     def test_no_tmp_residue_on_repeat(self, tmp_path, monkeypatch):
         self._setup(monkeypatch)
@@ -421,7 +417,7 @@ class TestGenerateImage:
         ).fetchone()
         assert row["stage"] == "create_cover"
         assert row["ref_id"] == "c_abc"
-        assert row["model"] == "image-01"
+        assert row["model"] == "image-01-live"
         assert row["output_tokens"] == 1
         # image 按 per_image_usd 计费（绕过 token 算式）
         assert row["cost_usd"] == pytest.approx(0.003)

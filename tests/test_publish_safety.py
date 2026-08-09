@@ -503,7 +503,7 @@ conn = sqlite3.connect('{db_path}')
 conn.row_factory = sqlite3.Row
 db.init_db(conn)
 
-now = '2026-07-06T12:00:00+00:00'
+now = datetime.now(timezone.utc).isoformat()
 past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
 t = Topic(id='t_conc0001', source='rss:test', title='T', url=None,
@@ -537,6 +537,7 @@ print('SETUP_OK')
         # 子进程脚本：safe_publish 同一条 publication
         child_code = f"""
 import sys, json
+from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, '{Path.cwd()}')
 from pipeline import db
@@ -561,7 +562,7 @@ cfg = PublishConfig(enabled=True, allowed_platforms=['x'],
 result = safe_publish(
     conn, pub, adapter, config=cfg,
     account=AccountConfig(id='main', credentials_path=Path('secrets/x.json')),
-    dry_run=False, now_iso='2026-07-06T12:00:00+00:00',
+    dry_run=False, now_iso=datetime.now(timezone.utc).isoformat(),
     log_dir='{log_dir}',
 )
 print(json.dumps({{'published': result.published, 'reason': result.reason}}))
@@ -582,6 +583,8 @@ print(json.dumps({{'published': result.published, 'reason': result.reason}}))
         out2, err2 = proc2.communicate(timeout=30)
 
         # 解析两边的结果
+        assert out1.strip(), f"first child produced no result: {err1}"
+        assert out2.strip(), f"second child produced no result: {err2}"
         r1 = json.loads(out1.strip().split("\n")[-1])
         r2 = json.loads(out2.strip().split("\n")[-1])
 
