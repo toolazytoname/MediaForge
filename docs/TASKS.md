@@ -38,7 +38,7 @@
 - **声明改动文件**：执行 R0 时仅允许新增/更新 `docs/product-validation/r0-real-theme-script.md` 与本任务的完成记录；本次将任务迁入清单仅修改 `docs/TASKS.md`。
 - **参考**：[PRODUCT_RESET_PLAN.md §10—§12](./PRODUCT_RESET_PLAN.md)；`TECH_SPEC.md`（仅作契约核对，不修改）。
 
-  ⚠️ BLOCKED（2026-08-09）：等待用户提供或确认真实主题、3—5 个来源、目标读者/独特观点、质量标准及安全导出方式；不得用历史实验内容或 AI 虚构素材代替。R1 可独立继续。
+  🟡 **代理黄金路径已通过，等待作者签字（2026-08-09）**：用户明确授权代理自选真实爆款主题并先走通流程。已完成项目 `prj_a63f79b2` 的 5 个真实来源、真实文本 AI 起稿、3 张真实图片、微信/头条独立 v3、浏览器双预览、可追责审批和审批版本化安全 ZIP；完整记录见 [r0-real-theme-script.md](./product-validation/r0-real-theme-script.md)。对抗审查发现的路径穿越、空白起稿、假双版本、图片 provider 恢复、Markdown/图文预览、主稿晚改死路、stale UI、审批归属、导出覆盖与 SQLite WAL 连接竞态问题均已补回归。R0 暂不勾选，因为用户明确要求“走通后再人工介入”，作者是否愿意署名发布尚未由代理代答。当前回归 `1700 passed, 13 skipped`，前端生产构建通过，未创建本轮 Publication 或真实发布。
 
 ### R1｜恢复可验证的工程基线（小修复）
 

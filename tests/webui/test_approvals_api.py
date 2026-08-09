@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from pipeline import master_documents, projects, variants, visuals
+from pipeline import master_documents, projects, research, variants, visuals
 from pipeline.webui import deps
 from pipeline.webui.api import projects as projects_api
 from pipeline.webui.app import create_app
@@ -10,11 +10,19 @@ from pipeline.webui.app import create_app
 
 def _ready(root):
     projects.create_project(title="API", idea="想法", audience="读者", goal="文章", voice="清晰", autonomy="collaborate", now="2026-08-09T00:00:00+00:00", project_id="prj_approval_api", projects_root=root)
-    master_documents.save_manual("prj_approval_api", title="主稿", body="正文", now="2026-08-09T00:01:00+00:00", projects_root=root)
-    visuals.save_plan("prj_approval_api", bible={"style": "plain"}, slots=[{"id": "vsl_cover", "purpose": "封面", "paragraph_anchor": None, "direction": "方向", "aspect_ratio": "16:9"}], projects_root=root)
-    asset = visuals.record_asset("prj_approval_api", slot_id="vsl_cover", prompt="cover", model="fake", size="16:9", cost_usd=0, now="2026-08-09T00:02:00+00:00", file_path="assets/vas_api.png", status="candidate", asset_id="vas_api", projects_root=root)
-    visuals.select_asset("prj_approval_api", asset.id, reason="fit", rating=4, projects_root=root)
-    for platform in ("wechat_mp", "toutiao"): variants.create_from_master("prj_approval_api", platform, now="2026-08-09T00:03:00+00:00", projects_root=root)
+    source_ids = [research.add_source("prj_approval_api", title=f"来源{i}", reference=f"https://example.com/{i}", summary="摘要", now="2026-08-09T00:00:30+00:00", projects_root=root).id for i in range(3)]
+    research.add_claim("prj_approval_api", text="已核查事实", kind="fact", source_ids=[source_ids[0]], status="verified", now="2026-08-09T00:00:40+00:00", projects_root=root)
+    research.add_claim("prj_approval_api", text="个人判断", kind="judgment", source_ids=[], status="verified", now="2026-08-09T00:00:50+00:00", projects_root=root)
+    master_documents.save_manual("prj_approval_api", title="主稿", body="足够长的真实正文。" * 120, now="2026-08-09T00:01:00+00:00", projects_root=root)
+    slots = [{"id": f"vsl_{name}", "purpose": purpose, "paragraph_anchor": None if name == "cover" else "正文", "direction": "方向", "aspect_ratio": "16:9"} for name, purpose in (("cover", "封面"), ("one", "正文插图一"), ("two", "正文插图二"))]
+    visuals.save_plan("prj_approval_api", bible={"style": "plain"}, slots=slots, projects_root=root)
+    for index, slot in enumerate(slots):
+        asset_id = f"vas_api_{index}"
+        asset = visuals.record_asset("prj_approval_api", slot_id=slot["id"], prompt="visual", model="fake", size="16:9", cost_usd=0, now="2026-08-09T00:02:00+00:00", file_path=f"assets/{asset_id}.png", status="candidate", asset_id=asset_id, projects_root=root)
+        visuals.select_asset("prj_approval_api", asset.id, reason="fit", rating=4, projects_root=root)
+    for platform in ("wechat_mp", "toutiao"):
+        variants.create_from_master("prj_approval_api", platform, now="2026-08-09T00:03:00+00:00", projects_root=root)
+        variants.set_locked("prj_approval_api", platform, locked=True, now="2026-08-09T00:03:30+00:00", projects_root=root)
 
 
 def test_approval_api_is_human_only_and_has_no_publication_side_effect(tmp_path, monkeypatch):

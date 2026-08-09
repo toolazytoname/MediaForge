@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from pipeline.utils.ids import new_id
+from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 
 DEFAULT_PROJECTS_ROOT = Path("output/projects")
@@ -140,7 +141,7 @@ def _manifest_path(projects_root: str | Path, project_id: str) -> Path:
 
 
 def _project_id(value: Any) -> str:
-    if not isinstance(value, str) or not value.startswith("prj_"):
+    if not valid_sidecar_id(value, "prj_"):
         raise ProjectManifestError(f"invalid project id: {value!r}")
     return value
 

@@ -192,7 +192,8 @@ def _check_image_key() -> CheckResult:
             ok=True,
             hint=(
                 "⚠️ 未设置 image provider key；AI 出图功能不可用（可选功能，不影响其余"
-                "流程）。如需使用请 export MINIMAX_IMAGE_API_KEY=<key>（或 MINIMAX_API_KEY）"
+                "流程）。GPT Image 2 请设置 OPENAI_API_KEY；也可使用 "
+                "MINIMAX_IMAGE_API_KEY（或 MINIMAX_API_KEY）"
             ),
         )
     return CheckResult(

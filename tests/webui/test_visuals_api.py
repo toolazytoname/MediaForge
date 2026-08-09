@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 from fastapi.testclient import TestClient
 
 from pipeline import projects as project_store
@@ -82,6 +84,37 @@ def test_visual_edit_retries_uses_existing_candidate_and_rejects_unknown_slot(cl
     unknown_reference = client.post("/api/v1/projects/prj_visual_api/visuals/assets/edit", json={"slot_id": "vsl_cover", "prompt": "x", "reference_asset_id": "vas_missing"})
     assert unknown_reference.status_code == 400
     assert unknown_reference.json()["detail"]["error"]["code"] == "invalid_visual_request"
+
+
+def test_provider_status_and_local_png_import_make_missing_key_recoverable(
+    client, tmp_path
+):
+    root = tmp_path / "projects"
+    _project(root)
+    client.put(
+        "/api/v1/projects/prj_visual_api/visuals",
+        json={"bible": {"style": "克制"}, "slots": [_slot()]},
+    )
+    status = client.get("/api/v1/projects/prj_visual_api/visuals/provider")
+    assert status.status_code == 200
+    assert status.json()["available"] is False
+    # A minimal valid 1x1 PNG. Import is local-only and records zero API cost.
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    imported = client.post(
+        "/api/v1/projects/prj_visual_api/visuals/assets/import",
+        json={
+            "slot_id": "vsl_cover",
+            "prompt": "由创作者导入的真实封面",
+            "file_name": "cover.png",
+            "data_base64": base64.b64encode(png).decode(),
+        },
+    )
+    assert imported.status_code == 201
+    assert imported.json()["model"] == "local-import"
+    assert imported.json()["cost_usd"] == 0
+    assert (root / "prj_visual_api" / imported.json()["file_path"]).read_bytes() == png
 
 
 import pytest

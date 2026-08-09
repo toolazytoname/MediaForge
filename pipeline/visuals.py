@@ -9,6 +9,7 @@ from typing import Any
 
 from pipeline import projects as project_store
 from pipeline.utils.ids import new_id
+from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 _NAME = "visuals.json"
 _RATIOS = frozenset({"1:1", "16:9", "9:16", "4:3", "3:4"})
@@ -118,7 +119,7 @@ def select_asset(project_id: str, asset_id: str, *, reason: str, rating: int | N
 
 
 def asset_path(project_id: str, asset_id: str, *, projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> Path:
-    return Path(projects_root) / project_id / "assets" / f"{asset_id}.png"
+    return Path(projects_root) / _id(project_id, "prj_") / "assets" / f"{_id(asset_id, 'vas_')}.png"
 
 
 def _slot(value: Any) -> VisualSlot:
@@ -156,11 +157,11 @@ def _ensure(project_id: str, root: str | Path) -> None:
     try: project_store.load_project(project_id, projects_root=root)
     except project_store.ProjectManifestError as exc: raise VisualsError(str(exc)) from exc
 
-def _path(root: str | Path, project_id: str) -> Path: return Path(root) / project_id / _NAME
+def _path(root: str | Path, project_id: str) -> Path: return Path(root) / _id(project_id, "prj_") / _NAME
 def _write(path: Path, plan: VisualPlan) -> None:
     path.parent.mkdir(parents=True, exist_ok=True); tmp = path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(asdict(plan), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"); tmp.replace(path)
 def _id(value: Any, prefix: str) -> str:
-    if not isinstance(value, str) or not value.startswith(prefix) or len(value) <= len(prefix): raise VisualsError(f"invalid id: {value!r}")
+    if not valid_sidecar_id(value, prefix): raise VisualsError(f"invalid id: {value!r}")
     return value
 def _text(name: str, value: Any) -> str:
     if not isinstance(value, str) or not value.strip(): raise VisualsError(f"{name} must be non-empty text")
@@ -172,8 +173,9 @@ def _asset_file_path(value: str) -> str:
     return value
 def _timestamp(value: Any) -> str:
     if not isinstance(value, str): raise VisualsError("created_at must be ISO timestamp")
-    try: datetime.fromisoformat(value)
+    try: parsed = datetime.fromisoformat(value)
     except ValueError as exc: raise VisualsError("created_at must be ISO timestamp") from exc
+    if parsed.tzinfo is None: raise VisualsError("created_at must include timezone")
     return value
 def _cost(value: Any) -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0: raise VisualsError("cost_usd must be non-negative")

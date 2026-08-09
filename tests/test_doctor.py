@@ -449,7 +449,7 @@ class TestImageKeyCheck:
         """env 无 image key → image_key 仍 ok=True，hint 带 ⚠️ 提示不可用。"""
         from pipeline.doctor import run_doctor
 
-        for k in ("MINIMAX_IMAGE_API_KEY", "MINIMAX_API_KEY"):
+        for k in ("OPENAI_API_KEY", "MINIMAX_IMAGE_API_KEY", "MINIMAX_API_KEY"):
             monkeypatch.delenv(k, raising=False)
 
         cfg = tmp_path / "config.yaml"

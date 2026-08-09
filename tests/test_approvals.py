@@ -3,17 +3,24 @@ from __future__ import annotations
 import json
 import pytest
 
-from pipeline import approvals, master_documents, projects, variants, visuals
+from pipeline import approvals, master_documents, projects, research, variants, visuals
 
 
 def _ready(root):
     projects.create_project(title="项目", idea="想法", audience="读者", goal="文章", voice="清晰", autonomy="collaborate", now="2026-08-09T00:00:00+00:00", project_id="prj_approval", projects_root=root)
-    master_documents.save_manual("prj_approval", title="主稿", body="正文", now="2026-08-09T00:01:00+00:00", projects_root=root)
-    visuals.save_plan("prj_approval", bible={"style": "plain"}, slots=[{"id": "vsl_cover", "purpose": "封面", "paragraph_anchor": None, "direction": "克制", "aspect_ratio": "16:9"}], projects_root=root)
-    asset = visuals.record_asset("prj_approval", slot_id="vsl_cover", prompt="cover", model="fake", size="16:9", cost_usd=0, now="2026-08-09T00:02:00+00:00", file_path="assets/vas_approval.png", status="candidate", asset_id="vas_approval", projects_root=root)
-    visuals.select_asset("prj_approval", asset.id, reason="合适", rating=4, projects_root=root)
+    source_ids = [research.add_source("prj_approval", title=f"来源{i}", reference=f"https://example.com/{i}", summary="摘要", now="2026-08-09T00:00:30+00:00", projects_root=root).id for i in range(3)]
+    research.add_claim("prj_approval", text="已核查事实", kind="fact", source_ids=[source_ids[0]], status="verified", now="2026-08-09T00:00:40+00:00", projects_root=root)
+    research.add_claim("prj_approval", text="个人判断", kind="judgment", source_ids=[], status="verified", now="2026-08-09T00:00:50+00:00", projects_root=root)
+    master_documents.save_manual("prj_approval", title="主稿", body="足够长的真实正文。" * 120, now="2026-08-09T00:01:00+00:00", projects_root=root)
+    slots = [{"id": f"vsl_{name}", "purpose": purpose, "paragraph_anchor": None if name == "cover" else "正文", "direction": "克制", "aspect_ratio": "16:9"} for name, purpose in (("cover", "封面"), ("one", "正文插图一"), ("two", "正文插图二"))]
+    visuals.save_plan("prj_approval", bible={"style": "plain"}, slots=slots, projects_root=root)
+    for index, slot in enumerate(slots):
+        asset_id = f"vas_approval_{index}"
+        asset = visuals.record_asset("prj_approval", slot_id=slot["id"], prompt="visual", model="fake", size="16:9", cost_usd=0, now="2026-08-09T00:02:00+00:00", file_path=f"assets/{asset_id}.png", status="candidate", asset_id=asset_id, projects_root=root)
+        visuals.select_asset("prj_approval", asset.id, reason="合适", rating=4, projects_root=root)
     for platform in ("wechat_mp", "toutiao"):
         variants.create_from_master("prj_approval", platform, now="2026-08-09T00:03:00+00:00", projects_root=root)
+        variants.set_locked("prj_approval", platform, locked=True, now="2026-08-09T00:03:30+00:00", projects_root=root)
     return "prj_approval"
 
 
@@ -42,7 +49,31 @@ def test_blockers_stale_upstream_and_recheck_resets_approval(tmp_path):
         approvals.decide(project_id, "master", approved=True, note=None, actor="lazy", now="2026-08-09T00:07:00+00:00", projects_root=root)
     variants.check_upstream(project_id, "wechat_mp", now="2026-08-09T00:07:00+00:00", projects_root=root)
     blocked = approvals.recheck(project_id, actor="lazy", now="2026-08-09T00:08:00+00:00", projects_root=root)
-    assert not blocked.ready and "未处理上游更新" in "".join(blocked.blockers) and not blocked.approval.checks
+    assert not blocked.ready and "旧主稿" in "".join(blocked.blockers) and not blocked.approval.checks
+
+
+def test_research_change_makes_completed_approval_stale(tmp_path):
+    root = tmp_path / "projects"; project_id = _ready(root)
+    state = approvals.recheck(project_id, actor="lazy", now="2026-08-09T00:04:00+00:00", projects_root=root)
+    for check in ("master", "visuals", "wechat_mp", "toutiao"):
+        state = approvals.decide(project_id, check, approved=True, note=None, actor="lazy", now="2026-08-09T00:05:00+00:00", projects_root=root)
+    assert state.complete
+    research.add_claim(project_id, text="新增判断", kind="judgment", source_ids=[], status="verified", now="2026-08-09T00:06:00+00:00", projects_root=root)
+    assert approvals.status(project_id, projects_root=root).stale
+
+
+def test_legacy_snapshot_without_research_fingerprint_loads_as_stale(tmp_path):
+    root = tmp_path / "projects"; project_id = _ready(root)
+    approvals.recheck(project_id, actor="lazy", now="2026-08-09T00:04:00+00:00", projects_root=root)
+    path = root / project_id / "approval.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    del raw["snapshot"]["research_fingerprint"]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    state = approvals.status(project_id, projects_root=root)
+    assert state.stale
+    assert state.approval.snapshot is not None
+    assert state.approval.snapshot.research_fingerprint == "0" * 64
 
 
 def test_rejects_bad_manifest_and_cannot_forge_complete(tmp_path):

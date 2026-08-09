@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import master_documents, projects as project_store, visuals
+from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 _NAME = "variants.json"
 _PLATFORMS = frozenset({"wechat_mp", "toutiao"})
@@ -80,6 +81,35 @@ def create_from_master(project_id: str, platform: str, *, now: str, projects_roo
     return variant
 
 
+def create_adapted(
+    project_id: str,
+    platform: str,
+    *,
+    title: str,
+    summary: str,
+    body: str,
+    now: str,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+) -> Variant:
+    """Create an explicit first platform draft without mutating the master."""
+    platform = _platform(platform)
+    current = load_variants(project_id, projects_root=projects_root)
+    existing = next((item for item in current.variants if item.platform == platform), None)
+    if existing is not None:
+        return existing
+    master = master_documents.load_master(project_id, projects_root=projects_root)
+    if master is None:
+        raise VariantsError(f"master not found: {project_id}")
+    timestamp = _timestamp(now)
+    variant = Variant(
+        platform, _text("title", title), _text("summary", summary), _text("body", body),
+        _selected_assets(project_id, projects_root), master.version, 1, False, False,
+        False, timestamp, timestamp, (),
+    )
+    _write(projects_root, VariantSet(project_id, (*current.variants, variant)))
+    return variant
+
+
 def save_manual(project_id: str, platform: str, *, title: str, summary: str, body: str, asset_ids: list[str], now: str, projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> Variant:
     current = _required(project_id, platform, projects_root)
     if current.locked: raise VariantsError("variant is locked; unlock it before editing")
@@ -103,6 +133,49 @@ def check_upstream(project_id: str, platform: str, *, now: str, projects_root: s
     return result
 
 
+def acknowledge_master_update(
+    project_id: str,
+    platform: str,
+    *,
+    now: str,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+) -> Variant:
+    """Record that the current independent draft has incorporated the latest master.
+
+    This is deliberately an acknowledgement, not a merge: none of the platform
+    copy or selected assets are overwritten.  Requiring an unlocked draft makes
+    the human review step explicit and the new version keeps an audit snapshot.
+    """
+    current = _required(project_id, platform, projects_root)
+    if current.locked:
+        raise VariantsError("variant is locked; unlock it before acknowledging the master update")
+    master = master_documents.load_master(project_id, projects_root=projects_root)
+    if master is None:
+        raise VariantsError(f"master not found: {project_id}")
+    if master.version < current.source_master_version:
+        raise VariantsError("variant source master version is newer than the current master")
+    if master.version == current.source_master_version:
+        if not current.upstream_updated:
+            return current
+        result = replace(current, upstream_updated=False, updated_at=_timestamp(now))
+        _replace_in_set(project_id, current.platform, result, projects_root)
+        return result
+    return _replace(
+        project_id,
+        current,
+        title=current.title,
+        summary=current.summary,
+        body=current.body,
+        asset_ids=list(current.asset_ids),
+        now=now,
+        reason=f"acknowledge-master:{current.source_master_version}->{master.version}",
+        manually_modified=True,
+        source_master_version=master.version,
+        upstream_updated=False,
+        projects_root=projects_root,
+    )
+
+
 def restore_version(project_id: str, platform: str, version: int, *, now: str, projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> Variant:
     current = _required(project_id, platform, projects_root)
     if current.locked: raise VariantsError("variant is locked; unlock it before restoring")
@@ -111,10 +184,38 @@ def restore_version(project_id: str, platform: str, version: int, *, now: str, p
     return _replace(project_id, current, title=snapshot.title, summary=snapshot.summary, body=snapshot.body, asset_ids=list(snapshot.asset_ids), now=now, reason=f"restore:{version}", manually_modified=True, projects_root=projects_root)
 
 
-def _replace(project_id: str, current: Variant, *, title: str, summary: str, body: str, asset_ids: list[str], now: str, reason: str, manually_modified: bool, projects_root: str | Path) -> Variant:
+def _replace(
+    project_id: str,
+    current: Variant,
+    *,
+    title: str,
+    summary: str,
+    body: str,
+    asset_ids: list[str],
+    now: str,
+    reason: str,
+    manually_modified: bool,
+    projects_root: str | Path,
+    source_master_version: int | None = None,
+    upstream_updated: bool | None = None,
+) -> Variant:
     _validate_assets(project_id, asset_ids, projects_root)
     snapshot = VariantSnapshot(current.version, current.title, current.summary, current.body, current.asset_ids, current.updated_at, reason)
-    result = Variant(current.platform, _text("title", title), _text("summary", summary), _text("body", body), tuple(asset_ids), current.source_master_version, current.version + 1, current.locked, manually_modified, current.upstream_updated, current.created_at, _timestamp(now), (*current.history, snapshot)[-_HISTORY_LIMIT:])
+    result = Variant(
+        current.platform,
+        _text("title", title),
+        _text("summary", summary),
+        _text("body", body),
+        tuple(asset_ids),
+        current.source_master_version if source_master_version is None else _positive("source_master_version", source_master_version),
+        current.version + 1,
+        current.locked,
+        manually_modified,
+        current.upstream_updated if upstream_updated is None else _boolean("upstream_updated", upstream_updated),
+        current.created_at,
+        _timestamp(now),
+        (*current.history, snapshot)[-_HISTORY_LIMIT:],
+    )
     _replace_in_set(project_id, current.platform, result, projects_root)
     return result
 
@@ -161,7 +262,7 @@ def _validate_assets(project_id: str, ids: list[str], root: str | Path) -> None:
     except visuals.VisualsError as exc: raise VariantsError(f"cannot read visuals: {exc}") from exc
     if not set(values) <= known: raise VariantsError("variant references an unknown or unselected visual asset")
 def _asset_ids(value: Any) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple)) or any(not isinstance(x, str) or not x.startswith("vas_") for x in value) or len(set(value)) != len(value): raise VariantsError("asset_ids must be distinct visual asset ids")
+    if not isinstance(value, (list, tuple)) or any(not valid_sidecar_id(x, "vas_") for x in value) or len(set(value)) != len(value): raise VariantsError("asset_ids must be distinct visual asset ids")
     return tuple(value)
 def _summary(body: str) -> str: return body.strip().replace("\n", " ")[:180] or "摘要待补充"
 def _ensure(project_id: str, root: str | Path) -> None:
@@ -171,7 +272,7 @@ def _path(root: str | Path, project_id: str) -> Path: return Path(root) / _proje
 def _write(root: str | Path, result: VariantSet) -> None:
     path = _path(root, result.project_id); path.parent.mkdir(parents=True, exist_ok=True); tmp = path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(asdict(result), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"); tmp.replace(path)
 def _project_id(value: Any) -> str:
-    if not isinstance(value, str) or not value.startswith("prj_") or len(value) <= 4: raise VariantsError("invalid project id")
+    if not valid_sidecar_id(value, "prj_"): raise VariantsError("invalid project id")
     return value
 def _platform(value: Any) -> str:
     if value not in _PLATFORMS: raise VariantsError("platform must be wechat_mp or toutiao")
@@ -187,6 +288,7 @@ def _boolean(name: str, value: Any) -> bool:
     return value
 def _timestamp(value: Any) -> str:
     if not isinstance(value, str): raise VariantsError("timestamp must be ISO timestamp")
-    try: datetime.fromisoformat(value)
+    try: parsed = datetime.fromisoformat(value)
     except ValueError as exc: raise VariantsError("timestamp must be ISO timestamp") from exc
+    if parsed.tzinfo is None: raise VariantsError("timestamp must include timezone")
     return value

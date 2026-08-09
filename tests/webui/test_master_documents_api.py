@@ -82,6 +82,31 @@ def test_master_api_errors_are_explicit(client):
     assert missing.json()["detail"]["error"]["code"] == "project_not_found"
 
 
+def test_ai_draft_is_a_reviewable_proposal_and_does_not_write_master(
+    client, tmp_path, monkeypatch
+):
+    root = tmp_path / "projects"
+    _project(root)
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    seen = {}
+    def fake_complete(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return {
+            "title": "测试全绿，产品为什么仍然不能用",
+            "body": "这是一份必须由人确认后才会进入编辑器的初稿。",
+        }
+    monkeypatch.setattr(master_api.llm, "complete_json", fake_complete)
+
+    response = client.post("/api/v1/projects/prj_master/master/draft")
+
+    assert response.status_code == 200
+    assert response.json()["title"].startswith("测试全绿")
+    assert response.json()["body"].startswith("这是一份")
+    assert "[来源标题](URL)" in seen["prompt"]
+    assert "不要为 local:" in seen["prompt"]
+    assert client.get("/api/v1/projects/prj_master/master").json() == {"master": None}
+
+
 import pytest
 
 @pytest.fixture

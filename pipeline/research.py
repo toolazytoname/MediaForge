@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 from pipeline import projects as project_store
 from pipeline.utils.ids import new_id
+from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 
 _MANIFEST_NAME = "research.json"
@@ -250,7 +251,7 @@ def _status(kind: str, value: Any) -> str:
 
 
 def _id(name: str, value: Any, prefix: str) -> str:
-    if not isinstance(value, str) or not value.startswith(prefix) or len(value) <= len(prefix):
+    if not valid_sidecar_id(value, prefix):
         raise ResearchManifestError(f"invalid {name}: {value!r}")
     return value
 

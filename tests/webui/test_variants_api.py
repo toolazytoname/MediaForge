@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from pipeline import master_documents, projects as project_store, visuals
 from pipeline.webui import deps
 from pipeline.webui.api import projects as projects_api
+from pipeline.webui.api import variants as variants_api
 from pipeline.webui.app import create_app
 
 
@@ -26,15 +27,18 @@ def test_api_variants_are_independent_and_preview_is_read_only(client, tmp_path)
     wechat = client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp")
     toutiao = client.post("/api/v1/projects/prj_variant_api/variants/toutiao")
     assert wechat.status_code == toutiao.status_code == 201
-    edited = client.put("/api/v1/projects/prj_variant_api/variants/wechat_mp", json={"title": "微信", "summary": "摘要", "body": "微信正文", "asset_ids": []})
+    edited = client.put("/api/v1/projects/prj_variant_api/variants/wechat_mp", json={"title": "微信", "summary": "**摘要**", "body": "微信**正文**\n\n---", "asset_ids": []})
     assert edited.status_code == 200 and edited.json()["manually_modified"]
     locked = client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp/lock", json={"locked": True})
     assert locked.status_code == 200 and locked.json()["locked"]
     master_documents.save_manual("prj_variant_api", title="更新", body="更新正文", now="2026-08-09T00:02:00+00:00", projects_root=tmp_path / "projects")
     upstream = client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp/check-upstream")
-    assert upstream.status_code == 200 and upstream.json()["upstream_updated"] and upstream.json()["body"] == "微信正文"
+    assert upstream.status_code == 200 and upstream.json()["upstream_updated"]
+    assert upstream.json()["body"] == "微信**正文**\n\n---"
     preview = client.get("/api/v1/projects/prj_variant_api/variants/wechat_mp/preview")
-    assert preview.status_code == 200 and "只读预览" in preview.text and "微信正文" in preview.text
+    assert preview.status_code == 200 and "只读预览" in preview.text
+    assert "微信<strong>正文</strong>" in preview.text and "<hr>" in preview.text
+    assert "<blockquote><p><strong>摘要</strong></p></blockquote>" in preview.text
     assert client.get("/api/v1/projects/prj_variant_api/variants").json()["variants"][1]["body"] == "主稿正文"
 
 
@@ -65,3 +69,62 @@ def test_preview_resolves_selected_asset_and_restore_and_bad_envelopes(client, t
     assert client.put("/api/v1/projects/prj_variant_api/variants/wechat_mp", json={"title": "bad"}).status_code == 400
     assert client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp/lock", json={"locked": "yes"}).status_code == 400
     assert client.get("/api/v1/projects/prj_variant_api/variants/x/preview").status_code == 400
+
+
+def test_ai_adaptation_is_explicit_and_only_creates_a_new_variant(
+    client, tmp_path, monkeypatch
+):
+    _project(tmp_path / "projects")
+    monkeypatch.setattr(variants_api, "_llm_is_configured", lambda: True)
+    seen = {}
+    def fake_complete(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return {
+            "title": "微信原生标题",
+            "summary": "面向微信读者的摘要",
+            "body": "这是经过平台重组、但没有覆盖主稿的正文。",
+        }
+    monkeypatch.setattr(variants_api.llm, "complete_json", fake_complete)
+
+    created = client.post(
+        "/api/v1/projects/prj_variant_api/variants/wechat_mp",
+        json={"adapt_with_ai": True},
+    )
+
+    assert created.status_code == 201
+    assert created.json()["title"] == "微信原生标题"
+    assert "[来源标题](URL)" in seen["prompt"]
+    assert "不得虚构 URL" in seen["prompt"]
+    assert master_documents.load_master(
+        "prj_variant_api", projects_root=tmp_path / "projects"
+    ).title == "主标题"
+    repeated = client.post(
+        "/api/v1/projects/prj_variant_api/variants/wechat_mp",
+        json={"adapt_with_ai": True},
+    )
+    assert repeated.status_code == 200
+
+
+def test_api_acknowledges_latest_master_without_overwriting_platform_copy(client, tmp_path):
+    root = tmp_path / "projects"; _project(root)
+    client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp")
+    edited = client.put(
+        "/api/v1/projects/prj_variant_api/variants/wechat_mp",
+        json={"title": "平台标题", "summary": "平台摘要", "body": "平台正文", "asset_ids": []},
+    ).json()
+    client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp/lock", json={"locked": True})
+    master_documents.save_manual(
+        "prj_variant_api", title="主稿 v2", body="主稿新版正文",
+        now="2026-08-09T00:03:00+00:00", projects_root=root,
+    )
+    client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp/check-upstream")
+    locked = client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp/acknowledge-master")
+    assert locked.status_code == 400 and "unlock" in locked.text
+
+    client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp/lock", json={"locked": False})
+    acknowledged = client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp/acknowledge-master")
+    assert acknowledged.status_code == 200
+    assert acknowledged.json()["version"] == edited["version"] + 1
+    assert acknowledged.json()["source_master_version"] == 2
+    assert acknowledged.json()["body"] == "平台正文"
+    assert not acknowledged.json()["upstream_updated"]

@@ -7,12 +7,14 @@ two supported platform variants have been inspected by a person.
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pipeline import master_documents, projects as project_store, variants, visuals
+from pipeline import master_documents, projects as project_store, research, variants, visuals
+from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 _NAME = "approval.json"
 _CHECK_IDS = ("master", "visuals", "wechat_mp", "toutiao")
@@ -28,6 +30,7 @@ class ApprovalSnapshot:
     master_version: int
     variant_versions: dict[str, int]
     visual_asset_ids: tuple[str, ...]
+    research_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -120,8 +123,8 @@ def decide(project_id: str, check_id: str, *, approved: bool, note: str | None, 
     if not isinstance(approved, bool): raise ApprovalError("approved must be boolean")
     _actor(actor); timestamp = _timestamp(now)
     state = status(project_id, projects_root=projects_root)
-    if not state.ready: raise ApprovalError("content package is not ready for approval: " + "; ".join(state.blockers))
     if state.approval.snapshot is None or state.stale: raise ApprovalError("approval requires recheck after upstream changes")
+    if not state.ready: raise ApprovalError("content package is not ready for approval: " + "; ".join(state.blockers))
     note_value = _optional_note(note)
     existing = next(item for item in state.approval.checks if item.id == check_id)
     updated = replace(existing, status="approved" if approved else "pending", note=note_value, approved_by=actor if approved else None, approved_at=timestamp if approved else None)
@@ -136,30 +139,63 @@ def _current_snapshot(project_id: str, root: str | Path) -> tuple[ApprovalSnapsh
     blockers: list[str] = []
     try: master = master_documents.load_master(project_id, projects_root=root)
     except master_documents.MasterDocumentError as exc: raise ApprovalError(f"cannot read master: {exc}") from exc
-    if master is None: blockers.append("缺少主稿")
+    if master is None:
+        blockers.append("缺少主稿")
+    elif len(master.body.strip()) < 800:
+        blockers.append("主稿不足 800 字，尚未达到双平台长文的最低检查线")
+    try: board = research.load_research(project_id, projects_root=root)
+    except research.ResearchManifestError as exc: raise ApprovalError(f"cannot read research: {exc}") from exc
+    if len(board.sources) < 3: blockers.append("可靠来源少于 3 个")
+    if not any(item.kind == "judgment" for item in board.claims): blockers.append("缺少明确的个人判断")
+    if any(item.kind == "fact" and item.status != "verified" for item in board.claims): blockers.append("仍有事实声明未核查")
+    if any(item.kind == "open_question" and item.status == "open" for item in board.claims): blockers.append("仍有待确认问题未解决")
     try: items = variants.load_variants(project_id, projects_root=root).variants
     except variants.VariantsError as exc: raise ApprovalError(f"cannot read variants: {exc}") from exc
     by_platform = {item.platform: item for item in items}
     for platform, label in (("wechat_mp", "缺少微信公众号版本"), ("toutiao", "缺少头条版本")):
         item = by_platform.get(platform)
         if item is None: blockers.append(label)
+        elif master is not None and item.source_master_version != master.version:
+            blockers.append(f"{platform} 仍基于旧主稿 v{item.source_master_version}")
         elif item.upstream_updated: blockers.append(f"{platform} 有未处理上游更新")
+        elif len(item.body.strip()) < 600: blockers.append(f"{platform} 正文不足 600 字")
+        elif not item.locked: blockers.append(f"{platform} 尚未锁定最终版本")
     try: plan = visuals.load_visuals(project_id, projects_root=root)
     except visuals.VisualsError as exc: raise ApprovalError(f"cannot read visuals: {exc}") from exc
     selected = tuple(sorted(item.id for item in plan.assets if item.status == "selected"))
+    if len(plan.slots) < 3: blockers.append("视觉计划需要至少 1 张封面和 2 张插图")
+    if not any("封面" in item.purpose for item in plan.slots): blockers.append("视觉计划缺少封面槽位")
+    selected_slots = {item.slot_id for item in plan.assets if item.status == "selected"}
+    missing_slots = [item.purpose for item in plan.slots if item.id not in selected_slots]
     if not selected: blockers.append("尚未选择视觉资产")
+    if missing_slots: blockers.append("仍有视觉槽位未选图：" + "、".join(missing_slots))
     selected_set = set(selected)
     for item in by_platform.values():
         if not set(item.asset_ids) <= selected_set: blockers.append(f"{item.platform} 引用了不可解析的视觉资产")
     if blockers or master is None or len(by_platform) < 2: return None, blockers
-    return ApprovalSnapshot(master.version, {"wechat_mp": by_platform["wechat_mp"].version, "toutiao": by_platform["toutiao"].version}, selected), blockers
+    return ApprovalSnapshot(
+        master.version,
+        {"wechat_mp": by_platform["wechat_mp"].version, "toutiao": by_platform["toutiao"].version},
+        selected,
+        _research_fingerprint(board),
+    ), blockers
 
 
 def _snapshot(value: Any) -> ApprovalSnapshot:
-    if not isinstance(value, dict) or set(value) != set(ApprovalSnapshot.__dataclass_fields__): raise ApprovalError("approval snapshot has missing or unknown fields")
+    if not isinstance(value, dict): raise ApprovalError("approval snapshot has missing or unknown fields")
+    fields = frozenset(value)
+    current_fields = set(ApprovalSnapshot.__dataclass_fields__)
+    legacy_fields = current_fields - {"research_fingerprint"}
+    if fields not in {frozenset(current_fields), frozenset(legacy_fields)}:
+        raise ApprovalError("approval snapshot has missing or unknown fields")
     versions = value["variant_versions"]
     if not isinstance(versions, dict) or set(versions) != {"wechat_mp", "toutiao"}: raise ApprovalError("approval snapshot needs two platform versions")
-    return ApprovalSnapshot(_positive("master_version", value["master_version"]), {key: _positive(key, versions[key]) for key in versions}, _assets(value["visual_asset_ids"]))
+    return ApprovalSnapshot(
+        _positive("master_version", value["master_version"]),
+        {key: _positive(key, versions[key]) for key in versions},
+        _assets(value["visual_asset_ids"]),
+        _fingerprint(value["research_fingerprint"]) if "research_fingerprint" in value else "0" * 64,
+    )
 def _check(value: Any) -> ApprovalCheck:
     if not isinstance(value, dict) or set(value) != set(ApprovalCheck.__dataclass_fields__): raise ApprovalError("approval check has missing or unknown fields")
     if value["id"] not in _CHECK_IDS or value["status"] not in {"pending", "approved"}: raise ApprovalError("invalid approval check")
@@ -184,14 +220,21 @@ def _path(root: str | Path, project_id: str) -> Path: return Path(root) / _proje
 def _write(root: str | Path, result: Approval) -> None:
     path = _path(root, result.project_id); path.parent.mkdir(parents=True, exist_ok=True); tmp = path.with_name(path.name + ".tmp"); tmp.write_text(json.dumps(asdict(result), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"); tmp.replace(path)
 def _project_id(value: Any) -> str:
-    if not isinstance(value, str) or not value.startswith("prj_") or len(value) <= 4: raise ApprovalError("invalid project id")
+    if not valid_sidecar_id(value, "prj_"): raise ApprovalError("invalid project id")
     return value
 def _positive(name: str, value: Any) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 1: raise ApprovalError(f"{name} must be positive")
     return value
 def _assets(value: Any) -> tuple[str, ...]:
-    if not isinstance(value, list) or not value or any(not isinstance(item, str) or not item.startswith("vas_") for item in value) or len(set(value)) != len(value): raise ApprovalError("visual_asset_ids must be distinct selected visual ids")
+    if not isinstance(value, list) or not value or any(not valid_sidecar_id(item, "vas_") for item in value) or len(set(value)) != len(value): raise ApprovalError("visual_asset_ids must be distinct selected visual ids")
     return tuple(value)
+def _research_fingerprint(board: research.ResearchBoard) -> str:
+    raw = json.dumps(asdict(board), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+def _fingerprint(value: Any) -> str:
+    if not isinstance(value, str) or len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+        raise ApprovalError("research_fingerprint must be sha256 hex")
+    return value
 def _optional_note(value: Any) -> str | None:
     if value is not None and (not isinstance(value, str) or not value.strip()): raise ApprovalError("note must be null or non-empty text")
     return value
@@ -200,6 +243,7 @@ def _actor(value: Any) -> str:
     return value
 def _timestamp(value: Any) -> str:
     if not isinstance(value, str): raise ApprovalError("timestamp must be ISO timestamp")
-    try: datetime.fromisoformat(value)
+    try: parsed = datetime.fromisoformat(value)
     except ValueError as exc: raise ApprovalError("timestamp must be ISO timestamp") from exc
+    if parsed.tzinfo is None: raise ApprovalError("timestamp must include timezone")
     return value

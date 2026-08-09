@@ -101,3 +101,14 @@ def test_list_orders_by_most_recent_update(tmp_path):
         first.id,
         second.id,
     ]
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ["prj_x/../../escaped", "prj_../escaped", "prj_back\\slash", "prj_dot.name"],
+)
+def test_project_id_cannot_escape_sidecar_root(tmp_path, project_id):
+    root = tmp_path / "projects"
+    with pytest.raises(ProjectManifestError, match="invalid project id"):
+        _create(root, project_id=project_id)
+    assert list(tmp_path.rglob("project.json")) == []

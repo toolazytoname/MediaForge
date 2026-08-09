@@ -287,7 +287,8 @@ class TestSettingsKeysGet:
         assert r.status_code == 200
         body = r.json()
         groups = {g["group"]: g for g in body["groups"]}
-        assert set(groups) == {"llm", "image"}
+        assert set(groups) == {"openai", "llm", "image"}
+        assert [k["name"] for k in groups["openai"]["keys"]] == ["OPENAI_API_KEY"]
         assert all(not k["set"] and k["masked"] is None for k in groups["llm"]["keys"])
 
     def test_reflects_process_env(self, client, keys_env, monkeypatch):

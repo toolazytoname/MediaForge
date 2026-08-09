@@ -35,6 +35,34 @@ def test_lock_upstream_and_restore_never_overwrite_variant(tmp_path):
     assert variants.restore_version("prj_variant", "wechat_mp", 1, now="2026-08-09T00:09:00+00:00", projects_root=root).body == "主稿正文"
 
 
+def test_acknowledge_master_update_is_explicit_versioned_and_never_overwrites(tmp_path):
+    root = tmp_path / "projects"; _project(root)
+    variants.create_from_master("prj_variant", "wechat_mp", now="2026-08-09T00:02:00+00:00", projects_root=root)
+    edited = variants.save_manual(
+        "prj_variant", "wechat_mp", title="人工标题", summary="人工摘要", body="人工平台正文",
+        asset_ids=[], now="2026-08-09T00:03:00+00:00", projects_root=root,
+    )
+    variants.set_locked("prj_variant", "wechat_mp", locked=True, now="2026-08-09T00:04:00+00:00", projects_root=root)
+    master_documents.save_manual("prj_variant", title="主稿 v2", body="主稿更新正文", now="2026-08-09T00:05:00+00:00", projects_root=root)
+    changed = variants.check_upstream("prj_variant", "wechat_mp", now="2026-08-09T00:06:00+00:00", projects_root=root)
+    assert changed.upstream_updated
+    with pytest.raises(variants.VariantsError, match="unlock"):
+        variants.acknowledge_master_update("prj_variant", "wechat_mp", now="2026-08-09T00:07:00+00:00", projects_root=root)
+
+    variants.set_locked("prj_variant", "wechat_mp", locked=False, now="2026-08-09T00:08:00+00:00", projects_root=root)
+    acknowledged = variants.acknowledge_master_update(
+        "prj_variant", "wechat_mp", now="2026-08-09T00:09:00+00:00", projects_root=root,
+    )
+    assert acknowledged.version == edited.version + 1
+    assert acknowledged.source_master_version == 2
+    assert acknowledged.body == edited.body and acknowledged.title == edited.title
+    assert acknowledged.manually_modified and not acknowledged.upstream_updated and not acknowledged.locked
+    assert acknowledged.history[-1].reason == "acknowledge-master:1->2"
+    assert variants.acknowledge_master_update(
+        "prj_variant", "wechat_mp", now="2026-08-09T00:10:00+00:00", projects_root=root,
+    ) == acknowledged
+
+
 def test_rejects_unknown_fields_platform_and_bad_asset_reference(tmp_path):
     root = tmp_path / "projects"; _project(root)
     with pytest.raises(variants.VariantsError, match="platform"):

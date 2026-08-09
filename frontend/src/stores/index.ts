@@ -153,6 +153,8 @@ export interface MasterSuggestion {
   decided_at: string | null
 }
 
+export interface MasterDraftProposal { title: string; body: string }
+
 export interface VisualSlot {
   id: string
   purpose: string
@@ -183,6 +185,13 @@ export interface VisualPlan {
   bible: Record<string, string>
   slots: VisualSlot[]
   assets: VisualAsset[]
+}
+
+export interface VisualProviderStatus {
+  available: boolean
+  provider: 'openai' | null
+  model: string
+  reason: string | null
 }
 
 export const useProjectsStore = defineStore('projects', () => {
@@ -304,6 +313,12 @@ export const useMasterStore = defineStore('master', () => {
     return response.data
   }
 
+  async function proposeDraft(projectId: string): Promise<MasterDraftProposal> {
+    return (await api.post<MasterDraftProposal>(
+      `/projects/${projectId}/master/draft`, {}, { timeout: GENERATION_TIMEOUT_MS },
+    )).data
+  }
+
   async function request(projectId: string, input: Pick<MasterSuggestion, 'action' | 'selection'>): Promise<MasterSuggestion> {
     const response = await apiPost<MasterSuggestion>(`/projects/${projectId}/master/suggestions`, input.selection ? input : { action: input.action })
     suggestions.value = [...suggestions.value, response.data]
@@ -329,17 +344,25 @@ export const useMasterStore = defineStore('master', () => {
     return response.data
   }
 
-  return { master, suggestions, loading, error, load, save, request, accept, reject, restore }
+  return { master, suggestions, loading, error, load, save, proposeDraft, request, accept, reject, restore }
 })
 
 export const useVisualsStore = defineStore('visuals', () => {
   const plan = ref<VisualPlan | null>(null)
+  const provider = ref<VisualProviderStatus | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
   async function load(projectId: string): Promise<void> {
     loading.value = true; error.value = null
-    try { plan.value = (await api.get<VisualPlan>(`/projects/${projectId}/visuals`)).data }
+    try {
+      const [planResponse, providerResponse] = await Promise.all([
+        api.get<VisualPlan>(`/projects/${projectId}/visuals`),
+        api.get<VisualProviderStatus>(`/projects/${projectId}/visuals/provider`),
+      ])
+      plan.value = planResponse.data
+      provider.value = providerResponse.data
+    }
     catch (e) { error.value = unwrapError(e) } finally { loading.value = false }
   }
   async function save(projectId: string, input: Pick<VisualPlan, 'bible' | 'slots'>): Promise<VisualPlan> {
@@ -357,12 +380,27 @@ export const useVisualsStore = defineStore('visuals', () => {
     if (plan.value?.project_id === projectId) plan.value = { ...plan.value, assets: [...plan.value.assets, response.data] }
     return response.data
   }
+  async function importPng(projectId: string, slotId: string, prompt: string, file: File): Promise<VisualAsset> {
+    const dataBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = () => reject(reader.error ?? new Error('读取 PNG 失败'))
+      reader.onload = () => resolve(String(reader.result).split(',', 2)[1] ?? '')
+      reader.readAsDataURL(file)
+    })
+    const response = await api.post<VisualAsset>(
+      `/projects/${projectId}/visuals/assets/import`,
+      { slot_id: slotId, prompt, file_name: file.name, data_base64: dataBase64 },
+      { timeout: GENERATION_TIMEOUT_MS },
+    )
+    if (plan.value?.project_id === projectId) plan.value = { ...plan.value, assets: [...plan.value.assets, response.data] }
+    return response.data
+  }
   async function select(projectId: string, assetId: string, reason: string, rating?: number): Promise<VisualAsset> {
     const response = await apiPost<VisualAsset>(`/projects/${projectId}/visuals/assets/${assetId}/select`, rating ? { reason, rating } : { reason })
     if (plan.value?.project_id === projectId) plan.value = { ...plan.value, assets: plan.value.assets.map(item => item.id === assetId ? response.data : item.slot_id === response.data.slot_id && item.status === 'selected' ? { ...item, status: 'candidate' } : item) }
     return response.data
   }
-  return { plan, loading, error, load, save, generate, edit, select }
+  return { plan, provider, loading, error, load, save, generate, edit, importPng, select }
 })
 
 // ── Topics ─────────────────────────────────────────────────
@@ -1539,21 +1577,24 @@ export const useVariantsStore = defineStore('variants', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
   async function load(projectId: string) { loading.value = true; error.value = null; try { variants.value = (await api.get<VariantSet>(`/projects/${projectId}/variants`)).data.variants } catch (e) { error.value = unwrapError(e) } finally { loading.value = false } }
-  async function create(projectId: string, platform: PlatformVariant['platform']) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}`, {})).data; variants.value = variants.value.some(x => x.platform === platform) ? variants.value : [...variants.value, item]; return item }
+  async function create(projectId: string, platform: PlatformVariant['platform'], adaptWithAi = false) { const item = (await api.post<PlatformVariant>(`/projects/${projectId}/variants/${platform}`, adaptWithAi ? { adapt_with_ai: true } : undefined, { timeout: GENERATION_TIMEOUT_MS })).data; variants.value = variants.value.some(x => x.platform === platform) ? variants.value.map(x => x.platform === platform ? item : x) : [...variants.value, item]; return item }
   async function save(projectId: string, platform: PlatformVariant['platform'], input: Pick<PlatformVariant, 'title' | 'summary' | 'body' | 'asset_ids'>) { const item = (await api.put<PlatformVariant>(`/projects/${projectId}/variants/${platform}`, input)).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   async function lock(projectId: string, platform: PlatformVariant['platform'], locked: boolean) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/lock`, { locked })).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   async function checkUpstream(projectId: string, platform: PlatformVariant['platform']) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/check-upstream`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
+  async function acknowledgeMaster(projectId: string, platform: PlatformVariant['platform']) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/acknowledge-master`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   async function restore(projectId: string, platform: PlatformVariant['platform'], version: number) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/versions/${version}/restore`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
-  return { variants, loading, error, load, create, save, lock, checkUpstream, restore }
+  return { variants, loading, error, load, create, save, lock, checkUpstream, acknowledgeMaster, restore }
 })
 
 export interface ApprovalCheck { id: 'master' | 'visuals' | 'wechat_mp' | 'toutiao'; status: 'pending' | 'approved'; note: string | null; approved_by: string | null; approved_at: string | null }
 export interface ApprovalEvent { action: 'rechecked' | 'approved' | 'revoked'; check_id: ApprovalCheck['id'] | null; note: string | null; actor: string; at: string }
 export interface ApprovalStatus { approval: { project_id: string; snapshot: unknown | null; checks: ApprovalCheck[]; history: ApprovalEvent[] }; ready: boolean; stale: boolean; blockers: string[]; complete: boolean }
+export interface ProjectExportResult { project_id: string; file_name: string; path: string; url: string }
 export const useApprovalsStore = defineStore('approvals', () => {
   const status = ref<ApprovalStatus | null>(null); const loading = ref(false); const error = ref<string | null>(null)
   async function load(projectId: string) { loading.value = true; error.value = null; try { status.value = (await api.get<ApprovalStatus>(`/projects/${projectId}/approval`)).data } catch (e) { error.value = unwrapError(e) } finally { loading.value = false } }
   async function recheck(projectId: string, actor: string) { status.value = (await apiPost<ApprovalStatus>(`/projects/${projectId}/approval/recheck`, { actor })).data; return status.value }
   async function decide(projectId: string, checkId: ApprovalCheck['id'], approved: boolean, actor: string, note?: string) { status.value = (await apiPost<ApprovalStatus>(`/projects/${projectId}/approval/checks/${checkId}`, { approved, actor, ...(note ? { note } : {}) })).data; return status.value }
-  return { status, loading, error, load, recheck, decide }
+  async function exportPackage(projectId: string) { return (await apiPost<ProjectExportResult>(`/projects/${projectId}/export`, {})).data }
+  return { status, loading, error, load, recheck, decide, exportPackage }
 })

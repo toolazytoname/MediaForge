@@ -27,6 +27,7 @@ from pipeline.webui.api import (
     visuals,
     variants,
     approvals,
+    project_exports,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -48,5 +49,6 @@ api_router.include_router(video.router)
 api_router.include_router(visuals.router)
 api_router.include_router(variants.router)
 api_router.include_router(approvals.router)
+api_router.include_router(project_exports.router)
 
 __all__ = ["api_router"]

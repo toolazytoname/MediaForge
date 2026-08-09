@@ -1,12 +1,15 @@
 """Explicit project visual-plan and GPT Image candidate endpoints."""
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 import time
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
+from PIL import Image, UnidentifiedImageError
 
 from pipeline import visuals
 from pipeline.creators import image_gen
@@ -40,6 +43,71 @@ def _provider() -> image_gen.OpenAIImageProvider:
     if not isinstance(provider, image_gen.OpenAIImageProvider):
         raise _err(503, "image_provider_unavailable", "GPT Image 2 is unavailable. Configure OPENAI_API_KEY in Settings.")
     return provider
+
+
+@router.get("/projects/{project_id}/visuals/provider")
+def provider_status(project_id: str) -> dict[str, Any]:
+    """Expose capability state without leaking credentials or making a request."""
+    try:
+        visuals.load_visuals(project_id, projects_root=_root())
+    except visuals.VisualsError as error:
+        raise _visual_error(project_id, error) from error
+    provider = image_gen._PROVIDER
+    available = isinstance(provider, image_gen.OpenAIImageProvider)
+    return {
+        "available": available,
+        "provider": "openai" if available else None,
+        "model": provider._model if available else image_gen.OpenAIImageProvider.DEFAULT_MODEL,
+        "reason": None if available else "未配置 OPENAI_API_KEY；可到设置配置，或导入本地 PNG 继续完成内容包。",
+    }
+
+
+@router.post("/projects/{project_id}/visuals/assets/import", status_code=201)
+def import_asset(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Import a creator-owned PNG as an auditable zero-cost candidate."""
+    required = {"slot_id", "prompt", "file_name", "data_base64"}
+    if set(body) != required:
+        raise _err(400, "invalid_visual_request", "local import requires slot_id, prompt, file_name and data_base64")
+    if not all(isinstance(body[key], str) and body[key].strip() for key in required):
+        raise _err(400, "invalid_visual_request", "local import fields must be non-empty text")
+    file_name = body["file_name"].strip()
+    if Path(file_name).name != file_name or not file_name.lower().endswith(".png"):
+        raise _err(400, "invalid_visual_request", "local import must be a plain .png file name")
+    try:
+        raw = base64.b64decode(body["data_base64"], validate=True)
+    except (ValueError, TypeError) as error:
+        raise _err(400, "invalid_visual_request", "data_base64 is not valid base64") from error
+    if not raw or len(raw) > 15 * 1024 * 1024:
+        raise _err(400, "invalid_visual_request", "PNG must be between 1 byte and 15 MB")
+    try:
+        image = Image.open(BytesIO(raw))
+        if image.format != "PNG":
+            raise ValueError("not PNG")
+        image.verify()
+    except (UnidentifiedImageError, OSError, ValueError) as error:
+        raise _err(400, "invalid_visual_request", "uploaded content is not a valid PNG") from error
+    try:
+        plan = visuals.load_visuals(project_id, projects_root=_root())
+        slot = next(item for item in plan.slots if item.id == body["slot_id"])
+    except StopIteration:
+        raise _err(400, "invalid_visual_request", "visual slot not found")
+    except visuals.VisualsError as error:
+        raise _visual_error(project_id, error) from error
+    from pipeline.utils.ids import new_id
+    asset_id = new_id("vas")
+    path = visuals.asset_path(project_id, asset_id, projects_root=_root())
+    image_gen._write_atomic(path, raw)
+    try:
+        from dataclasses import asdict
+        return asdict(visuals.record_asset(
+            project_id, slot_id=slot.id, prompt=body["prompt"], model="local-import",
+            size=slot.aspect_ratio, cost_usd=0.0, now=_now(),
+            file_path=f"assets/{asset_id}.png", status="candidate",
+            projects_root=_root(), asset_id=asset_id,
+        ))
+    except visuals.VisualsError as error:
+        path.unlink(missing_ok=True)
+        raise _visual_error(project_id, error) from error
 
 
 def _record_unavailable(project_id: str, *, slot: visuals.VisualSlot, prompt: str, reference_asset_id: str | None) -> None:

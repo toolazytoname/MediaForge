@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -122,10 +123,29 @@ def connect(path: str | Path = "state.db") -> sqlite3.Connection:
     # 并发安全由下游 publications 的乐观锁决定，而不是在连接期随机失败。
     conn = sqlite3.connect(str(path), timeout=10.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=10000")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        conn.execute("PRAGMA busy_timeout=10000")
+        _enable_wal_with_retry(conn)
+        conn.execute("PRAGMA foreign_keys=ON")
+    except Exception:
+        conn.close()
+        raise
     return conn
+
+
+def _enable_wal_with_retry(conn: sqlite3.Connection) -> None:
+    """Retry SQLite's journal-mode lock, which may ignore busy_timeout in a race."""
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as error:
+            message = str(error).lower()
+            remaining = deadline - time.monotonic()
+            if ("locked" not in message and "busy" not in message) or remaining <= 0:
+                raise
+            time.sleep(min(0.05, remaining))
 
 
 def init_db(conn: sqlite3.Connection) -> None:

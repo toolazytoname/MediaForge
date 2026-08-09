@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from pipeline.utils.ids import new_id
+from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 
 DEFAULT_IDEAS_ROOT = Path("output/ideas")
@@ -104,13 +105,13 @@ def _manifest_path(ideas_root: str | Path, idea_id: str) -> Path:
 
 
 def _idea_id(value: Any) -> str:
-    if not isinstance(value, str) or not value.startswith("idea_"):
+    if not valid_sidecar_id(value, "idea_"):
         raise IdeaManifestError(f"invalid idea id: {value!r}")
     return value
 
 
 def _project_id(value: Any) -> str:
-    if not isinstance(value, str) or not value.startswith("prj_"):
+    if not valid_sidecar_id(value, "prj_"):
         raise IdeaManifestError(f"invalid project id: {value!r}")
     return value
 

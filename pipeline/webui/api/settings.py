@@ -47,8 +47,9 @@ _ENV_SECRETS_PATH = DEFAULT_ENV_SECRETS_PATH
 # 白名单：只有这些 env var 名允许被 /settings/keys 端点写入/删除
 # （防止端点被滥用成任意写文件）。
 _KEY_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
-    ("llm", "文本 LLM", LLM_ENV_VARS),
-    ("image", "AI 出图", IMAGE_ENV_VARS),
+    ("openai", "OpenAI（文本 / GPT Image 2）", ("OPENAI_API_KEY",)),
+    ("llm", "其他文本 LLM", tuple(name for name in LLM_ENV_VARS if name != "OPENAI_API_KEY")),
+    ("image", "其他 AI 出图", tuple(name for name in IMAGE_ENV_VARS if name != "OPENAI_API_KEY")),
 ]
 _ALLOWED_KEY_NAMES = frozenset(LLM_ENV_VARS) | frozenset(IMAGE_ENV_VARS)
 

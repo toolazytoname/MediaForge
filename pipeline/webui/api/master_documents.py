@@ -1,6 +1,7 @@
 """Project-scoped MasterDocument and explicit AI proposal API."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -71,6 +72,78 @@ def _suggestion_input(body: dict[str, Any]) -> tuple[str, str | None]:
     if set(body) not in ({"action"}, {"action", "selection"}):
         raise master_store.MasterDocumentError("suggestion body must contain action and optional selection")
     return body["action"], body.get("selection")
+
+
+def _parse_article(text: str) -> dict[str, str]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        cleaned = "\n".join(lines[1:-1]).strip()
+    payload = json.loads(cleaned)
+    if not isinstance(payload, dict) or set(payload) != {"title", "body"}:
+        raise ValueError("draft must contain only title and body")
+    if any(not isinstance(payload[key], str) or not payload[key].strip() for key in payload):
+        raise ValueError("draft title and body must be non-empty text")
+    return {key: payload[key].strip() for key in ("title", "body")}
+
+
+def _draft_prompt(project_id: str) -> str:
+    project = projects_api.project_store.load_project(project_id, projects_root=_root())
+    board = research_store.load_research(project_id, projects_root=_root())
+    sources = "\n".join(
+        f"[{item.id}] {item.title} | {item.reference} | {item.summary}"
+        for item in board.sources
+    ) or "（无来源）"
+    claims = "\n".join(
+        f"- {item.kind}/{item.status} sources={','.join(item.source_ids) or 'none'}: {item.text}"
+        f" | limitation={item.limitation or 'none'} | counterpoint={item.counterpoint or 'none'}"
+        for item in board.claims
+    ) or "（无声明）"
+    return f"""你是中文资深编辑。为下面的真实创作项目提出一份可审阅初稿，不要发布，也不要声称已替作者确认。
+项目想法：{project.idea}
+目标读者：{project.audience}
+发布目的：{project.goal}
+声音：{project.voice}
+自主程度：{project.autonomy}
+
+来源：
+{sources}
+
+声明：
+{claims}
+
+规则：
+1. 只把 status=verified 且有来源的 fact 当作确定事实；judgment 必须写成作者判断；open_question 不得伪装成结论。
+2. 不虚构数字、引语、案例或个人经历；保留限制与有力反方观点。
+3. 外部事实首次出现时使用来源区提供的 Markdown 链接 `[来源标题](URL)`，文末附精简参考资料；不得虚构 URL，也不要为 local: 引用创建链接。
+4. 写成 1500—2500 字、结构清楚、有真实问题和明确主张的中文长文，使用 Markdown 二级标题。
+5. 只返回严格 JSON：{{"title":"...","body":"..."}}，不要代码围栏或额外文字。"""
+
+
+@router.post("/projects/{project_id}/master/draft")
+def propose_draft(project_id: str) -> dict[str, str]:
+    """Generate a review-only first draft; never persist or overwrite the master."""
+    try:
+        prompt = _draft_prompt(project_id)
+    except (master_store.MasterDocumentError, research_store.ResearchManifestError,
+            projects_api.project_store.ProjectManifestError) as error:
+        if str(error) == f"project not found: {project_id}":
+            raise _error(404, "project_not_found", error) from error
+        raise _error(400, "invalid_draft_context", error) from error
+    if not _llm_is_configured():
+        raise _error(503, "llm_provider_unavailable", "AI provider is not configured; write the first draft manually or configure a text provider")
+    try:
+        conn = deps.get_conn()
+        try:
+            return llm.complete_json(
+                prompt, stage="project_master_draft", ref_id=project_id,
+                model_tier="creative", max_tokens=6000, conn=conn,
+                parse=_parse_article,
+            )
+        finally:
+            conn.close()
+    except Exception as error:
+        raise _error(502, "llm_draft_failed", f"AI draft failed: {error}") from error
 
 
 @router.get("/projects/{project_id}/master")

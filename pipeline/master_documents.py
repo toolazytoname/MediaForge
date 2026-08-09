@@ -15,6 +15,7 @@ from typing import Any
 
 from pipeline import projects as project_store
 from pipeline.utils.ids import new_id
+from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 
 _MASTER_NAME = "master.json"
@@ -296,13 +297,13 @@ def _find_suggestion(items: tuple[MasterSuggestion, ...], suggestion_id: str) ->
 
 
 def _project_id(value: Any) -> str:
-    if not isinstance(value, str) or not value.startswith("prj_") or len(value) <= 4:
+    if not valid_sidecar_id(value, "prj_"):
         raise MasterDocumentError(f"invalid project id: {value!r}")
     return value
 
 
 def _id(name: str, value: Any, prefix: str) -> str:
-    if not isinstance(value, str) or not value.startswith(prefix) or len(value) <= len(prefix):
+    if not valid_sidecar_id(value, prefix):
         raise MasterDocumentError(f"invalid {name}: {value!r}")
     return value
 

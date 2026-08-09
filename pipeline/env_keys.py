@@ -20,8 +20,9 @@ from pathlib import Path
 # 与 llm.py::setup_provider_from_env 优先级链同源
 LLM_ENV_VARS = ("AGNES_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 
-# 与 image_gen.py::MiniMaxImageProvider.from_env 优先级链同源
-IMAGE_ENV_VARS = ("MINIMAX_IMAGE_API_KEY", "MINIMAX_API_KEY")
+# 与 image_gen.py::setup_provider_from_env 优先级链同源。OPENAI_API_KEY 是
+# 文本与 GPT Image 2 的共享凭据，必须同时出现在两个能力集合里。
+IMAGE_ENV_VARS = ("OPENAI_API_KEY", "MINIMAX_IMAGE_API_KEY", "MINIMAX_API_KEY")
 
 DEFAULT_ENV_SECRETS_PATH = "secrets/env.json"
 

@@ -56,6 +56,24 @@ class TestMdToHtmlParagraphs:
     def test_escapes_html_in_paragraph(self):
         assert md_to_html("a < b") == "<p>a &lt; b</p>"
 
+    def test_safe_inline_formatting_for_platform_preview(self):
+        out = md_to_html(
+            '> **摘要**\n\n正文含有 **重点** 和 [来源](https://example.com/a?x=1&y=2)。\n\n---'
+        )
+        assert "<blockquote><p><strong>摘要</strong></p></blockquote>" in out
+        assert "正文含有 <strong>重点</strong>" in out
+        assert (
+            '<a href="https://example.com/a?x=1&amp;y=2" target="_blank" '
+            'rel="noreferrer">来源</a>'
+        ) in out
+        assert out.endswith("<hr>")
+
+    def test_unsafe_link_and_raw_html_are_not_activated(self):
+        out = md_to_html('[点我](javascript:alert(1)) <script>alert(2)</script>')
+        assert "href=" not in out
+        assert "javascript:alert" in out
+        assert "&lt;script&gt;" in out
+
 
 class TestMdToHtmlLists:
     def test_single_item(self):

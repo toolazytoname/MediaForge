@@ -200,6 +200,35 @@ def test_connect_enables_foreign_keys(tmp_path):
     c.close()
 
 
+def test_connect_retries_transient_wal_lock(monkeypatch):
+    class FlakyConnection:
+        row_factory = None
+
+        def __init__(self):
+            self.wal_attempts = 0
+            self.closed = False
+
+        def execute(self, statement):
+            if statement == "PRAGMA journal_mode=WAL":
+                self.wal_attempts += 1
+                if self.wal_attempts < 3:
+                    raise sqlite3.OperationalError("database is locked")
+            return self
+
+        def close(self):
+            self.closed = True
+
+    connection = FlakyConnection()
+    monkeypatch.setattr(db.sqlite3, "connect", lambda *args, **kwargs: connection)
+    monkeypatch.setattr(db.time, "sleep", lambda _seconds: None)
+
+    result = db.connect("ignored.db")
+
+    assert result is connection
+    assert connection.wal_attempts == 3
+    assert not connection.closed
+
+
 def test_init_db_is_idempotent(tmp_path):
     """三次 init_db 不报错、不丢数据（TECH_SPEC §3 契约）。"""
     p = tmp_path / "idem.db"
