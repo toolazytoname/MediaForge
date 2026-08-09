@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
-import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type VisualSlot, type PlatformVariant } from '../stores'
+import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type VisualSlot, type PlatformVariant, type ApprovalCheck } from '../stores'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 
@@ -14,11 +14,13 @@ const researchStore = useResearchStore()
 const masterStore = useMasterStore()
 const visualsStore = useVisualsStore()
 const variantsStore = useVariantsStore()
+const approvalsStore = useApprovalsStore()
 const { items, total, loading, error } = storeToRefs(store)
 const { board, loading: researchLoading, error: researchError } = storeToRefs(researchStore)
 const { master, suggestions, loading: masterLoading, error: masterError } = storeToRefs(masterStore)
 const { plan: visualPlan, loading: visualsLoading, error: visualsError } = storeToRefs(visualsStore)
 const { variants, loading: variantsLoading, error: variantsError } = storeToRefs(variantsStore)
+const { status: approvalStatus, loading: approvalsLoading, error: approvalsError } = storeToRefs(approvalsStore)
 const project = ref<ProjectItem | null>(null)
 const detailError = ref<string | null>(null)
 const projectId = computed(() => typeof route.params.id === 'string' ? route.params.id : null)
@@ -38,6 +40,7 @@ const visualBible = ref('')
 const visualSlots = ref<VisualSlot[]>([])
 const visualPrompts = ref<Record<string, string>>({})
 const variantForms = ref<Record<string, { title: string; summary: string; body: string }>>({})
+const approvalNotes = ref<Record<string, string>>({})
 
 const unverifiedFacts = computed(() => board.value?.claims.filter(item => item.kind === 'fact' && (item.status === 'unverified' || !item.source_ids.length)) ?? [])
 const openQuestions = computed(() => board.value?.claims.filter(item => item.kind === 'open_question' && item.status === 'open') ?? [])
@@ -58,6 +61,7 @@ async function loadPage(): Promise<void> {
     await masterStore.load(projectId.value)
     await visualsStore.load(projectId.value)
     await variantsStore.load(projectId.value)
+    await approvalsStore.load(projectId.value)
     if (master.value) masterForm.value = { title: master.value.title, body: master.value.body }
     visualBible.value = Object.entries(visualPlan.value?.bible ?? {}).map(([key, value]) => `${key}: ${value}`).join('\n')
     visualSlots.value = visualPlan.value?.slots.map(slot => ({ ...slot })) ?? []
@@ -135,6 +139,9 @@ async function toggleLock(item: PlatformVariant): Promise<void> { if (!projectId
 async function checkVariantUpstream(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { await variantsStore.checkUpstream(projectId.value, item.platform) } catch (e) { detailError.value = unwrapError(e) } }
 async function restoreVariant(item: PlatformVariant, version: number): Promise<void> { if (!projectId.value) return; try { const updated = await variantsStore.restore(projectId.value, item.platform, version); variantForms.value[item.platform] = { title: updated.title, summary: updated.summary, body: updated.body } } catch (e) { detailError.value = unwrapError(e) } }
 function previewVariant(item: PlatformVariant): void { if (!projectId.value) return; window.open(`/api/v1/projects/${projectId.value}/variants/${item.platform}/preview`, '_blank', 'noopener') }
+const approvalLabel: Record<ApprovalCheck['id'], string> = { master: '主稿内容与事实边界', visuals: '已选封面与插图', wechat_mp: '微信公众号版本', toutiao: '头条版本' }
+async function recheckApproval(): Promise<void> { if (!projectId.value) return; try { await approvalsStore.recheck(projectId.value, 'local-user') } catch (e) { detailError.value = unwrapError(e) } }
+async function decideApproval(check: ApprovalCheck, approved: boolean): Promise<void> { if (!projectId.value) return; try { await approvalsStore.decide(projectId.value, check.id, approved, 'local-user', approvalNotes.value[check.id]?.trim() || undefined); approvalNotes.value[check.id] = '' } catch (e) { detailError.value = unwrapError(e) } }
 
 function updateStatusForKind(): void {
   claimForm.value.status = claimForm.value.kind === 'open_question' ? 'open' : 'unverified'
@@ -218,6 +225,11 @@ watch(projectId, loadPage)
           <a-alert v-if="variantsError" type="error" :message="variantsError" show-icon class="notice" />
           <a-spin :spinning="variantsLoading"><div class="variant-create"><a-button v-for="platform in ['wechat_mp', 'toutiao']" :key="platform" :disabled="variants.some(item => item.platform === platform) || !master" @click="createVariant(platform as PlatformVariant['platform'])">创建{{ platform === 'wechat_mp' ? '微信公众号' : '今日头条' }}初稿</a-button></div><p v-if="!master" class="muted">先保存主稿，才能创建平台版本。</p><div class="variant-list"><a-card v-for="item in variants" :key="item.platform" :title="platformName(item.platform)" :bordered="false"><template #extra><a-tag v-if="item.locked" color="gold">已锁定</a-tag><a-tag v-if="item.upstream_updated" color="orange">主稿有更新</a-tag></template><a-alert v-if="item.upstream_updated" type="warning" show-icon message="主稿有更新。此版本不会自动覆盖你的修改。" class="notice"/><a-form layout="vertical"><a-form-item label="标题"><a-input v-model:value="variantForm(item.platform).title" :disabled="item.locked" /></a-form-item><a-form-item label="摘要"><a-textarea v-model:value="variantForm(item.platform).summary" :rows="2" :disabled="item.locked" /></a-form-item><a-form-item label="正文"><a-textarea v-model:value="variantForm(item.platform).body" :rows="8" :disabled="item.locked" /></a-form-item><div class="variant-actions"><a-button type="primary" :disabled="item.locked" @click="saveVariant(item)">保存独立版本</a-button><a-button @click="toggleLock(item)">{{ item.locked ? '解锁编辑' : '锁定版本' }}</a-button><a-button @click="checkVariantUpstream(item)">检查主稿更新</a-button><a-button @click="previewVariant(item)">打开只读预览</a-button></div><p class="muted">源主稿 v{{ item.source_master_version }} · 平台版本 v{{ item.version }} · {{ item.manually_modified ? '已人工修改' : '尚未人工修改' }}</p><div v-if="item.history.length" class="variant-history"><span>历史版本：</span><a-button v-for="version in item.history" :key="version.version" size="small" :disabled="item.locked" @click="restoreVariant(item, version.version)">恢复 v{{ version.version }}</a-button></div></a-form></a-card></div></a-spin>
         </section>
+        <section class="approval-workbench">
+          <header class="section-heading"><div><p class="eyebrow">内容包审批</p><h2>逐项确认，再进入安全交付。</h2><p>批准只记录你的人工判断，不会发布、创建平台草稿或调用任何发布器。</p></div><a-tag v-if="approvalStatus?.complete" color="green">已完成审批</a-tag></header>
+          <a-alert v-if="approvalsError" type="error" :message="approvalsError" show-icon class="notice" />
+          <a-spin :spinning="approvalsLoading"><a-card :bordered="false" class="approval-card"><a-alert v-if="approvalStatus?.blockers.length" type="warning" show-icon :message="`尚不可审批：${approvalStatus?.blockers.join('；')}`" class="notice"/><a-alert v-else-if="approvalStatus?.stale" type="warning" show-icon message="上游内容已改变，请重新检查。历史批准不会被静默沿用；所有批准与撤回动作已暂停。" class="notice"/><div class="approval-actions"><a-button type="primary" @click="recheckApproval">重新检查内容包</a-button></div><div v-if="approvalStatus?.approval.checks.length" class="approval-list"><article v-for="check in approvalStatus.approval.checks" :key="check.id"><div><strong>{{ approvalLabel[check.id] }}</strong><p>{{ check.status === 'approved' ? `已由 ${check.approved_by} 批准` : '待人工检查' }}</p><small v-if="check.note">当前备注：{{ check.note }}</small></div><div class="approval-decision"><a-input v-model:value="approvalNotes[check.id]" :disabled="!approvalStatus.ready || approvalStatus.stale" placeholder="可选审批备注" size="small"/><a-button v-if="check.status !== 'approved'" type="primary" size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, true)">批准</a-button><a-button v-else size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, false)">撤回批准</a-button></div></article></div><a-empty v-else description="先重新检查，生成当前内容包的审批清单。" :image-style="{ height: '40px' }"/><p v-if="approvalStatus?.complete" class="approval-complete">所有项目已批准。下一步仅可进入草稿箱或安全导出，仍不等于真实发布。</p><div v-if="approvalStatus?.approval.history.length" class="approval-history"><strong>审批历史</strong><p v-for="event in approvalStatus.approval.history.slice().reverse().slice(0, 8)" :key="`${event.at}-${event.action}-${event.check_id}`">{{ event.at }} · {{ event.actor }} · {{ event.action }}{{ event.check_id ? ` (${approvalLabel[event.check_id]})` : '' }}{{ event.note ? ` · ${event.note}` : '' }}</p></div></a-card></a-spin>
+        </section>
       </article>
     </template>
 
@@ -242,5 +254,6 @@ h1, h2 { color: #292522; font-family: Georgia, 'Songti SC', serif; } h1 { margin
 .master-workbench { margin-top: 34px; }.master-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 16px; }.master-grid :deep(.ant-card), .version-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.suggestion-actions, .proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; }.proposal-list { display: grid; gap: 10px; margin-top: 16px; }.proposal-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.proposal-meta { display: flex; justify-content: space-between; gap: 8px; color: #948d84; font-size: 12px; }.proposal-copy { max-height: 160px; overflow: auto; white-space: pre-wrap; color: #4e4943; }.version-card { margin-top: 16px; }.version-list { display: grid; gap: 8px; }.version-list article { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #e8e1d5; }.version-list span { margin-left: 8px; color: #948d84; font-size: 12px; }.version-list p { margin: 4px 0 0; color: #706b65; }.selection-note { color: #7a6650; font-size: 13px; }
 .visual-workbench { margin-top: 34px; }.visual-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.visual-slot-list { display: grid; gap: 14px; }.visual-slot { padding: 14px; border: 1px solid #e8e1d5; background: #faf7f1; }.slot-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }.visual-actions, .visual-plan-actions, .asset-actions { display: flex; flex-wrap: wrap; gap: 8px; }.visual-plan-actions { margin-top: 16px; }.asset-list { display: grid; gap: 8px; margin-top: 12px; }.visual-asset { padding: 10px; border-left: 3px solid #9db7cc; background: #fffdf8; }.visual-asset.selected { border-left-color: #52a36b; }.visual-asset.failed { border-left-color: #cf5d50; }.visual-asset span { margin-left: 8px; color: #897f75; font-size: 12px; }.visual-asset p { margin: 7px 0; color: #5e5851; white-space: pre-wrap; }.failure { color: #b44336 !important; }
 .variants-workbench { margin-top: 34px; }.variant-create, .variant-actions { display: flex; flex-wrap: wrap; gap: 8px; }.variant-create { margin-bottom: 12px; }.variant-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.variant-list :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }
+.approval-workbench { margin-top: 34px; }.approval-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.approval-actions { margin-bottom: 14px; }.approval-list { display: grid; gap: 8px; }.approval-list article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid #e8e1d5; }.approval-list p, .approval-list small { margin: 4px 0 0; color: #706b65; }.approval-decision { display: grid; grid-template-columns: minmax(130px, 220px) auto; gap: 8px; align-items: center; }.approval-complete { margin-top: 16px; color: #39704b !important; }.approval-history { margin-top: 18px; padding-top: 14px; border-top: 1px solid #e8e1d5; }.approval-history p { margin: 5px 0; color: #897f75; font-size: 12px; }
 @media (max-width: 640px) { .list-header, .project-row { align-items: flex-start; flex-direction: column; }.project-grid, .research-grid, .form-pair, .variant-list { grid-template-columns: 1fr; }.row-meta { width: 100%; justify-content: space-between; } }
 </style>

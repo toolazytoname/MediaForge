@@ -1546,3 +1546,14 @@ export const useVariantsStore = defineStore('variants', () => {
   async function restore(projectId: string, platform: PlatformVariant['platform'], version: number) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/versions/${version}/restore`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   return { variants, loading, error, load, create, save, lock, checkUpstream, restore }
 })
+
+export interface ApprovalCheck { id: 'master' | 'visuals' | 'wechat_mp' | 'toutiao'; status: 'pending' | 'approved'; note: string | null; approved_by: string | null; approved_at: string | null }
+export interface ApprovalEvent { action: 'rechecked' | 'approved' | 'revoked'; check_id: ApprovalCheck['id'] | null; note: string | null; actor: string; at: string }
+export interface ApprovalStatus { approval: { project_id: string; snapshot: unknown | null; checks: ApprovalCheck[]; history: ApprovalEvent[] }; ready: boolean; stale: boolean; blockers: string[]; complete: boolean }
+export const useApprovalsStore = defineStore('approvals', () => {
+  const status = ref<ApprovalStatus | null>(null); const loading = ref(false); const error = ref<string | null>(null)
+  async function load(projectId: string) { loading.value = true; error.value = null; try { status.value = (await api.get<ApprovalStatus>(`/projects/${projectId}/approval`)).data } catch (e) { error.value = unwrapError(e) } finally { loading.value = false } }
+  async function recheck(projectId: string, actor: string) { status.value = (await apiPost<ApprovalStatus>(`/projects/${projectId}/approval/recheck`, { actor })).data; return status.value }
+  async function decide(projectId: string, checkId: ApprovalCheck['id'], approved: boolean, actor: string, note?: string) { status.value = (await apiPost<ApprovalStatus>(`/projects/${projectId}/approval/checks/${checkId}`, { approved, actor, ...(note ? { note } : {}) })).data; return status.value }
+  return { status, loading, error, load, recheck, decide }
+})
