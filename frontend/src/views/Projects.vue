@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
-import { useProjectsStore, useResearchStore, type ProjectItem, type ResearchClaim } from '../stores'
+import { useProjectsStore, useResearchStore, useMasterStore, type ProjectItem, type ResearchClaim, type MasterSuggestion } from '../stores'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 
@@ -11,8 +11,10 @@ const route = useRoute()
 const router = useRouter()
 const store = useProjectsStore()
 const researchStore = useResearchStore()
+const masterStore = useMasterStore()
 const { items, total, loading, error } = storeToRefs(store)
 const { board, loading: researchLoading, error: researchError } = storeToRefs(researchStore)
+const { master, suggestions, loading: masterLoading, error: masterError } = storeToRefs(masterStore)
 const project = ref<ProjectItem | null>(null)
 const detailError = ref<string | null>(null)
 const projectId = computed(() => typeof route.params.id === 'string' ? route.params.id : null)
@@ -22,6 +24,10 @@ const claimForm = ref<{ text: string; kind: ResearchClaim['kind']; status: Resea
 })
 const sourceSaving = ref(false)
 const claimSaving = ref(false)
+const masterSaving = ref(false)
+const suggestionSaving = ref(false)
+const masterForm = ref({ title: '', body: '' })
+const selectedText = ref('')
 
 const unverifiedFacts = computed(() => board.value?.claims.filter(item => item.kind === 'fact' && (item.status === 'unverified' || !item.source_ids.length)) ?? [])
 const openQuestions = computed(() => board.value?.claims.filter(item => item.kind === 'open_question' && item.status === 'open') ?? [])
@@ -39,9 +45,35 @@ async function loadPage(): Promise<void> {
   try {
     project.value = await store.getDetail(projectId.value)
     await researchStore.load(projectId.value)
+    await masterStore.load(projectId.value)
+    if (master.value) masterForm.value = { title: master.value.title, body: master.value.body }
   } catch (e) {
     detailError.value = unwrapError(e)
   }
+}
+
+async function saveMaster(): Promise<void> {
+  if (!projectId.value) return
+  masterSaving.value = true
+  try { await masterStore.save(projectId.value, masterForm.value) } catch (e) { detailError.value = unwrapError(e) } finally { masterSaving.value = false }
+}
+function captureSelection(): void { selectedText.value = document.getSelection()?.toString().trim() ?? '' }
+async function requestSuggestion(action: MasterSuggestion['action']): Promise<void> {
+  if (!projectId.value || !master.value) return
+  suggestionSaving.value = true
+  try { await masterStore.request(projectId.value, { action, selection: selectedText.value || null }) } catch (e) { detailError.value = unwrapError(e) } finally { suggestionSaving.value = false }
+}
+async function acceptSuggestion(suggestion: MasterSuggestion): Promise<void> {
+  if (!projectId.value) return
+  try { const updated = await masterStore.accept(projectId.value, suggestion.id); masterForm.value = { title: updated.title, body: updated.body } } catch (e) { detailError.value = unwrapError(e) }
+}
+async function rejectSuggestion(suggestion: MasterSuggestion): Promise<void> {
+  if (!projectId.value) return
+  try { await masterStore.reject(projectId.value, suggestion.id) } catch (e) { detailError.value = unwrapError(e) }
+}
+async function restoreVersion(version: number): Promise<void> {
+  if (!projectId.value) return
+  try { const updated = await masterStore.restore(projectId.value, version); masterForm.value = { title: updated.title, body: updated.body } } catch (e) { detailError.value = unwrapError(e) }
 }
 
 function updateStatusForKind(): void {
@@ -111,6 +143,11 @@ watch(projectId, loadPage)
             </div>
           </a-spin>
         </section>
+        <section class="master-workbench">
+          <header class="section-heading"><div><p class="eyebrow">主稿</p><h2>在这里写作，AI 只提出可审阅的修改。</h2><p>保存会创建新版本。AI 只有在你点击后才会生成建议，接受前不会改动正文。</p></div><a-tag v-if="master" color="blue">版本 {{ master.version }}</a-tag></header>
+          <a-alert v-if="masterError" type="error" :message="masterError" show-icon class="notice" />
+          <a-spin :spinning="masterLoading"><div class="master-grid"><a-card title="主稿编辑器" :bordered="false"><a-form layout="vertical"><a-form-item label="标题" required><a-input v-model:value="masterForm.title" placeholder="给主稿一个清晰标题" /></a-form-item><a-form-item label="正文" required><a-textarea v-model:value="masterForm.body" :rows="16" placeholder="从空白开始，或把已有的想法写下来。" @mouseup="captureSelection" /></a-form-item><p v-if="selectedText" class="selection-note">已选中 {{ selectedText.length }} 个字，建议只会替换这一段。</p><a-button type="primary" :loading="masterSaving" @click="saveMaster">保存为新版本</a-button></a-form></a-card><a-card title="AI 建议" :bordered="false"><p class="muted">{{ selectedText ? '建议将基于当前选区；未选文字时会针对全文。' : '先选中一段文字，或直接对全文提出建议。' }}</p><div class="suggestion-actions"><a-button :disabled="!master" :loading="suggestionSaving" @click="requestSuggestion('clarify')">改清楚</a-button><a-button :disabled="!master" :loading="suggestionSaving" @click="requestSuggestion('shorten')">压缩</a-button><a-button :disabled="!master" :loading="suggestionSaving" @click="requestSuggestion('change_voice')">换口吻</a-button><a-button :disabled="!master" :loading="suggestionSaving" @click="requestSuggestion('add_counterpoint')">补反方观点</a-button></div><div v-if="suggestions.length" class="proposal-list"><article v-for="suggestion in suggestions.slice().reverse()" :key="suggestion.id"><div class="proposal-meta"><a-tag>{{ suggestion.action }}</a-tag><span>{{ suggestion.status === 'pending' ? '待决定' : suggestion.status === 'accepted' ? '已接受' : '已拒绝' }}</span></div><p class="proposal-copy">{{ suggestion.proposed_body }}</p><div v-if="suggestion.status === 'pending'" class="proposal-actions"><a-button type="primary" size="small" @click="acceptSuggestion(suggestion)">接受为新版本</a-button><a-button size="small" @click="rejectSuggestion(suggestion)">拒绝</a-button></div></article></div><a-empty v-else description="还没有 AI 建议" :image-style="{ height: '40px' }" /></a-card></div><a-card v-if="master" title="版本与恢复" :bordered="false" class="version-card"><p class="muted">恢复并不会覆盖历史，而是用所选版本创建新的当前版本。</p><div class="version-list"><article v-for="version in [...master.history, { version: master.version, title: master.title, body: master.body, saved_at: master.updated_at, reason: 'current' }]" :key="version.version"><div><strong>版本 {{ version.version }}</strong><span>{{ version.reason === 'current' ? '当前版本' : version.reason }}</span><p>{{ version.body.slice(0, 100) }}{{ version.body.length > 100 ? '…' : '' }}</p></div><a-button v-if="version.version !== master.version" size="small" @click="restoreVersion(version.version)">恢复为新版本</a-button></article></div></a-card></a-spin>
+        </section>
       </article>
     </template>
 
@@ -132,5 +169,6 @@ watch(projectId, loadPage)
 h1, h2 { color: #292522; font-family: Georgia, 'Songti SC', serif; } h1 { margin: 0 0 12px; font-size: clamp(30px, 4vw, 44px); line-height: 1.2; } h2 { margin: 0 0 8px; font-size: 22px; }
 .list-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-bottom: 28px; }.list-header > div { max-width: 720px; }.list-header p, .idea, .project-row p, .project-row span, .project-workspace p { color: #706b65; line-height: 1.7; }.notice { margin-bottom: 16px; }
 .project-list { border-top: 1px solid #ded7cd; }.project-row { width: 100%; display: flex; justify-content: space-between; gap: 24px; padding: 22px 4px; text-align: left; border: 0; border-bottom: 1px solid #ded7cd; background: transparent; cursor: pointer; }.project-row:hover h2 { color: #886d4b; }.project-row p { max-width: 700px; margin: 0 0 6px; }.project-row span, .row-meta { color: #948d84; font-size: 13px; }.row-meta { display: flex; align-items: center; gap: 16px; white-space: nowrap; }.empty-icon { color: #b39b79; font-size: 44px; }.count { color: #948d84; font-size: 13px; }.back { margin-bottom: 12px; padding-left: 0; }.project-workspace > header { max-width: 760px; margin-bottom: 28px; }.idea { font-size: 18px; }.project-grid, .research-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.project-grid :deep(.ant-card), .research-grid :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.project-grid dd { margin: 4px 0 16px; color: #4e4943; }.project-grid dt { color: #948d84; font-size: 12px; }.muted { color: #948d84 !important; }.research-board { margin-top: 34px; max-width: 1000px; }.section-heading { margin-bottom: 18px; }.section-heading p { max-width: 680px; }.research-alerts { display: grid; gap: 8px; margin-bottom: 16px; }.record-list { display: grid; gap: 10px; margin-bottom: 20px; }.record-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.record-list p { margin: 6px 0; color: #5e5851; }.record-list small { color: #897f75; word-break: break-word; }.claim-meta { display: flex; gap: 6px; }.claim-list .unverified { border-left-color: #d89614; }.claim-list .unresolved { border-left-color: #7f59b0; }.caveat { color: #7a5d3d !important; }.research-form { padding-top: 12px; border-top: 1px solid #e8e1d5; }.form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.master-workbench { margin-top: 34px; }.master-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 16px; }.master-grid :deep(.ant-card), .version-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.suggestion-actions, .proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; }.proposal-list { display: grid; gap: 10px; margin-top: 16px; }.proposal-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.proposal-meta { display: flex; justify-content: space-between; gap: 8px; color: #948d84; font-size: 12px; }.proposal-copy { max-height: 160px; overflow: auto; white-space: pre-wrap; color: #4e4943; }.version-card { margin-top: 16px; }.version-list { display: grid; gap: 8px; }.version-list article { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #e8e1d5; }.version-list span { margin-left: 8px; color: #948d84; font-size: 12px; }.version-list p { margin: 4px 0 0; color: #706b65; }.selection-note { color: #7a6650; font-size: 13px; }
 @media (max-width: 640px) { .list-header, .project-row { align-items: flex-start; flex-direction: column; }.project-grid, .research-grid, .form-pair { grid-template-columns: 1fr; }.row-meta { width: 100%; justify-content: space-between; } }
 </style>

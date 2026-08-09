@@ -122,6 +122,37 @@ export interface ResearchBoard {
   claims: ResearchClaim[]
 }
 
+export interface MasterVersion {
+  version: number
+  title: string
+  body: string
+  saved_at: string
+  reason: string
+}
+
+export interface MasterDocument {
+  project_id: string
+  title: string
+  body: string
+  version: number
+  created_at: string
+  updated_at: string
+  history: MasterVersion[]
+}
+
+export interface MasterSuggestion {
+  id: string
+  project_id: string
+  action: 'clarify' | 'shorten' | 'change_voice' | 'add_counterpoint'
+  selection: string | null
+  base_version: number
+  proposed_title: string
+  proposed_body: string
+  status: 'pending' | 'accepted' | 'rejected'
+  created_at: string
+  decided_at: string | null
+}
+
 export const useProjectsStore = defineStore('projects', () => {
   const items = ref<ProjectItem[]>([])
   const total = ref(0)
@@ -218,6 +249,55 @@ export const useResearchStore = defineStore('research', () => {
   }
 
   return { board, loading, error, load, addSource, addClaim }
+})
+
+export const useMasterStore = defineStore('master', () => {
+  const master = ref<MasterDocument | null>(null)
+  const suggestions = ref<MasterSuggestion[]>([])
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+
+  async function load(projectId: string): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      master.value = (await api.get<{ master: MasterDocument | null }>(`/projects/${projectId}/master`)).data.master
+      suggestions.value = (await api.get<{ items: MasterSuggestion[] }>(`/projects/${projectId}/master/suggestions`)).data.items
+    } catch (e) { error.value = unwrapError(e) } finally { loading.value = false }
+  }
+
+  async function save(projectId: string, input: Pick<MasterDocument, 'title' | 'body'>): Promise<MasterDocument> {
+    const response = await api.put<MasterDocument>(`/projects/${projectId}/master`, input)
+    master.value = response.data
+    return response.data
+  }
+
+  async function request(projectId: string, input: Pick<MasterSuggestion, 'action' | 'selection'>): Promise<MasterSuggestion> {
+    const response = await apiPost<MasterSuggestion>(`/projects/${projectId}/master/suggestions`, input.selection ? input : { action: input.action })
+    suggestions.value = [...suggestions.value, response.data]
+    return response.data
+  }
+
+  async function accept(projectId: string, suggestionId: string): Promise<MasterDocument> {
+    const response = await apiPost<MasterDocument>(`/projects/${projectId}/master/suggestions/${suggestionId}/accept`, {})
+    master.value = response.data
+    suggestions.value = suggestions.value.map(item => item.id === suggestionId ? { ...item, status: 'accepted', decided_at: response.data.updated_at } : item)
+    return response.data
+  }
+
+  async function reject(projectId: string, suggestionId: string): Promise<MasterSuggestion> {
+    const response = await apiPost<MasterSuggestion>(`/projects/${projectId}/master/suggestions/${suggestionId}/reject`, {})
+    suggestions.value = suggestions.value.map(item => item.id === suggestionId ? response.data : item)
+    return response.data
+  }
+
+  async function restore(projectId: string, version: number): Promise<MasterDocument> {
+    const response = await apiPost<MasterDocument>(`/projects/${projectId}/master/versions/${version}/restore`, {})
+    master.value = response.data
+    return response.data
+  }
+
+  return { master, suggestions, loading, error, load, save, request, accept, reject, restore }
 })
 
 // ── Topics ─────────────────────────────────────────────────
