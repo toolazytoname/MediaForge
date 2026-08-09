@@ -42,7 +42,7 @@
 
 ### R1｜恢复可验证的工程基线（小修复）
 
-- [ ] **目标**：恢复 Python 全量测试与前端生产构建的绿色基线，消除已确认的测试漂移和 TypeScript 未使用变量。
+- [x] **目标**：恢复 Python 全量测试与前端生产构建的绿色基线，消除已确认的测试漂移和 TypeScript 未使用变量。
 - **声明改动文件**：`docs/TASKS.md`、`frontend/src/views/CreationVideo/components/Step3Script.vue`、`frontend/dist/`（由生产构建生成）、`tests/test_creators_llm.py`、`tests/test_image_gen.py`、`tests/test_publish_safety.py`。
 - **验收**：`.venv/bin/python -m pytest tests/ -q` 全绿；`frontend/npm run build` 成功；Anthropic 源码导入护栏仍只允许 `pipeline/creators/llm.py`；MiniMax 默认 `image-01-live` 的预算测试可通过；跨进程发布锁测试使用运行时有效的 due 时间。
 - **红线**：不改 `pipeline/` 运行时行为、SQLite schema、`models.py` 字段、Adapter 签名或 TECH_SPEC 契约；不触及 `PublishCenter.vue`、`multipost_bridge.py` 和其他既有脏文件；不进行真实发布。
@@ -51,7 +51,7 @@
 
 ### R1.1｜SQLite 并发连接稳定性（回归修复）
 
-- [ ] **目标**：修复跨进程发布锁测试揭示的连接期 `PRAGMA journal_mode=WAL` 竞争，确保第二个进程等待短暂数据库锁后进入既有乐观锁逻辑，而不是在连接阶段崩溃。
+- [x] **目标**：修复跨进程发布锁测试揭示的连接期 `PRAGMA journal_mode=WAL` 竞争，确保第二个进程等待短暂数据库锁后进入既有乐观锁逻辑，而不是在连接阶段崩溃。
 - **步骤**：在 `db.connect()` 建连后、启用 WAL 前设置有限的 SQLite busy timeout；保留 WAL、外键、Row factory 语义不变。
 - **测试 / 验收**：`TestCrossProcessLock.test_two_processes_only_one_wins` 连续运行稳定；全量 Python 测试绿色。
 - **声明改动文件**：`docs/TASKS.md`、`pipeline/db.py`、`tests/test_publish_safety.py`。
@@ -61,7 +61,7 @@
 
 ### R2｜Project sidecar manifest v0（TDD，低风险）
 
-- [ ] **目标**：在不触碰 SQLite 既有契约的前提下，建立 `output/projects/<project_id>/project.json` 作为主题项目的持久化边界，可聚合已有 content ID 与项目级创作信息。
+- [x] **目标**：在不触碰 SQLite 既有契约的前提下，建立 `output/projects/<project_id>/project.json` 作为主题项目的持久化边界，可聚合已有 content ID 与项目级创作信息。
 - **步骤**：实现冻结 `Project` 值对象和纯存储层；支持创建、读取、按更新时间列出、替换式更新项目元数据及 content/asset 引用；所有写入采用 `.tmp → rename` 原子提交；损坏或未知字段 manifest 必须显式报错。
 - **测试 / 验收**：覆盖创建/读取 round-trip、非法 JSON/字段/时间戳拒绝、原子写不留 `.tmp`、不可变更新、按 `updated_at` 降序列出；全量 Python 测试保持绿色。
 - **声明改动文件**：`docs/TASKS.md`、`pipeline/projects.py`、`tests/test_projects.py`。
