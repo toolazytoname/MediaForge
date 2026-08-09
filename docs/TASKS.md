@@ -86,6 +86,8 @@
 - **红线**：不改 `pipeline/models.py`、SQLite schema、Topic/Content/Publication 关系、Adapter 签名和 `TECH_SPEC.md`；不接入项目创建、Idea Inbox、AI 写作、图像、Variant 或真实发布；不静默改动用户正文；不触及现有 `PublishCenter.vue` 与 `multipost_bridge.py`。Anthropic 护栏只扫描文本源码，排除 `__pycache__` 生成文件，且只允许 `pipeline/creators/llm.py` 命中。
 - **参考**：[PRODUCT_RESET_PLAN.md §4、§5、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §1、§4、§10.5](./HARD_PARTS.md)。
 
+  ✅ 完成于 2026-08-09，commit 2a29063，备注：普通导航已收敛为六个创作入口，sidecar Project 可只读浏览，旧流水线留在开发者抽屉；浏览器空态与抽屉路径已人工验证。
+
 ---
 
 ## M0 — 项目地基（预计 1-2 天）
