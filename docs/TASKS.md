@@ -182,6 +182,23 @@
 
   ✅ 完成于 2026-08-09，commit 03cbf05，备注：微信与头条版本可独立编辑、锁定、恢复和只读预览；浏览器已验证上游主稿更新只提示、不覆盖平台稿。专项 9 passed，独立校验通过；构建产物为保护用户的 PublishCenter 改动而未暂存。
 
+### R9｜内容包审批（TDD，发布前人工关口）
+
+- [ ] **目标**：在不触发真实发布或创建 Publication 的前提下，汇总项目主稿、已选视觉资产、微信公众号和头条版本及其检查项，让用户逐项人工批准或撤回批准，形成可审计的内容包审批记录。
+- **步骤**：
+  1. 在 `output/projects/<project_id>/approval.json` 建立严格、原子 sidecar，固定关联当前主稿版本、双平台版本、已选择视觉资产和检查项；保存每一项的状态、人工备注、批准人（本地用户标识即可）、时间与不可变历史；不改 Project/Variant/Visual/SQLite；
+  2. 新增内容包读取、重新检查、逐项批准/撤回、备注和完成度 API。只有微信与头条版本均存在、没有未处理上游更新、视觉引用可解析时才可获得“可审批”状态；批准不生成平台草稿、不调用 publisher；
+  3. 项目工作台新增“内容包审批”区域，清楚展示阻塞项、主稿/视觉/双平台检查清单、进度与批准历史；提供查看只读预览的入口，并明确“批准不等于发布”；
+  4. 上游主稿、版本或选择资产变更后，审批必须变为需重新检查，历史保留且不能被静默沿用。
+- **测试 / 验收**：
+  - 覆盖 approval sidecar round-trip、严格字段、原子写、检查阻塞、逐项批准/撤回/备注、上游变更失效和历史；
+  - API 覆盖错误 envelope、不可审批项目、批准零发布副作用、无法伪造完成状态；
+  - 浏览器真人路径：创建主稿、双版本和视觉选择后，逐项批准，确认完成；再修改主稿或版本，确认审批失效并需要复查，且无 Publication/发布动作；
+  - 全量 Python 测试、前端生产构建、文本源码 Anthropic 护栏通过。
+- **声明改动文件**：`docs/TASKS.md`、`pipeline/approvals.py`、`pipeline/webui/api/approvals.py`、`pipeline/webui/api/__init__.py`、`tests/test_approvals.py`、`tests/webui/test_approvals_api.py`、`frontend/src/stores/index.ts`、`frontend/src/views/Projects.vue`；`frontend/dist/` 仅由 `npm run build` 再生成，因当前构建会纳入用户未提交的前端源码而不暂存。
+- **红线**：不改 SQLite schema、`models.py`、Project/Variant/Visual sidecar 字段、Adapter 签名或既有 Content；不得调用 publisher、创建 Publication、写入发布队列或将批准表述为已发布；不触及 `CLAUDE.md`、`PublishCenter.vue`、`multipost_bridge.py`、备份文件及既有用户改动。
+- **参考**：[PRODUCT_RESET_PLAN.md §5.1、§10、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §1、§5、§10.5](./HARD_PARTS.md)。
+
 ---
 
 ## M0 — 项目地基（预计 1-2 天）
