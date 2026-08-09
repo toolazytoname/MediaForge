@@ -123,6 +123,8 @@
 - **红线**：不改 `pipeline/models.py`、SQLite schema、Project v0 manifest 字段、Adapter 签名、已有 Content 正文或发布行为；不抓取 URL、不调用 LLM、不把来源内容伪装为已核查事实；用户必须能保留个人判断与未确认项。
 - **参考**：[PRODUCT_RESET_PLAN.md §1.4、§5.1、§5.3、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §4、§10.5](./HARD_PARTS.md)。
 
+  ✅ 完成于 2026-08-09，commit fff33e1，备注：Project 研究板支持显式来源与声明录入，未核查事实、待确认项、限制和反方观点均在写作前可见；浏览器路径已验证。
+
 ---
 
 ## M0 — 项目地基（预计 1-2 天）
