@@ -117,8 +117,12 @@ def connect(path: str | Path = "state.db") -> sqlite3.Connection:
 
     数据库文件不存在会自动创建。要让表存在，调用 init_db()。
     """
-    conn = sqlite3.connect(str(path))
+    # 两个发布 worker 同时启动时，第二个 worker 可能正好撞上第一个
+    # worker 切换 journal_mode=WAL。显式等待一个有限窗口后再继续，保证
+    # 并发安全由下游 publications 的乐观锁决定，而不是在连接期随机失败。
+    conn = sqlite3.connect(str(path), timeout=10.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
