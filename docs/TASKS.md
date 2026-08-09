@@ -144,6 +144,25 @@
 
   ✅ 完成于 2026-08-09，commit 3ecd6dc，备注：主稿 sidecar、可接受或拒绝的 AI 建议和版本恢复已落地；全量测试 1652 passed、14 skipped，浏览器路径已验证。构建产物因会包含用户未提交的 PublishCenter 源码而保留在本地、不暂存。
 
+### R7｜项目视觉计划与 GPT Image 2（TDD，用户批准的视觉资产）
+
+- [x] **目标**：让 Project 为主稿明确保存视觉圣经、封面/插图槽位和可追溯图片资产；用户在项目工作台显式点击后，使用独立的 `OpenAIImageProvider` 通过 `gpt-image-2` 生成或基于现有资产编辑图片。生成结果不是平台发布，也不得静默进入平台 Variant。
+- **步骤**：
+  1. 在 `output/projects/<project_id>/visuals.json` 和 `assets/` 建立严格、原子 sidecar：视觉圣经、可编辑槽位、图片资产和审计事件必须记录用途/段落、prompt、模型、尺寸、版本、参考资产、成本、选择理由、用户评分及成功或失败；不改 Project v0/SQLite；
+  2. 在既有 `pipeline.creators.image_gen.ImageProvider.call()` 公共调用契约不变的前提下新增 `OpenAIImageProvider`：从 `OPENAI_API_KEY` 读取密钥，默认模型固定 `gpt-image-2`，实现 generation endpoint；编辑能力作为 provider 的明确方法，使用 edit endpoint 和本地参考图，网络/429/5xx 可重试、其余响应错误明确失败；
+  3. 提供项目作用域视觉读取、视觉计划替换、显式生成与显式编辑 API。生成或编辑之前必须已有槽位；结果先作为候选资产保存，绝不改主稿、Content、Variant 或发布状态；未配置 provider 返回明确 503 和设置入口，失败也落审计但不伪造图片；
+  4. 在项目工作台新增“视觉计划”区域：用户能编辑视觉规则和槽位、选择候选、点击生成/基于候选编辑，并看到 prompt、成本、版本、失败信息和不可用修复提示。
+- **测试 / 验收**：
+  - 覆盖 visual sidecar round-trip、未知字段/损坏 JSON/槽位和资产引用非法、原子写、成功与失败审计、版本递增与选择语义；
+  - fake network 覆盖 OpenAI generation/edit 的请求、base64 响应、429/5xx retry、4xx/残缺响应失败、环境变量、现有 ImageProvider `call` 契约不变；API 覆盖无 provider 503、不写正文/SQLite、生成/编辑成功和失败均可审计；
+  - 浏览器真人路径：在一个主稿项目编辑至少封面和两张插图槽位，未配置 provider 时看见明确不可用与修复入口；以 fake provider 走一次候选生成、编辑和选择，确认资产元数据和失败记录可见；
+  - 全量 Python 测试、前端生产构建、文本源码 Anthropic 护栏通过。真实主题完成图片并经人工给出“可直接发布”结论属于 R0 真人剧本，不能以 API 200 取代。
+- **声明改动文件**：`docs/TASKS.md`、`pipeline/visuals.py`、`pipeline/creators/image_gen.py`、`pipeline/webui/api/visuals.py`、`pipeline/webui/api/__init__.py`、`tests/test_visuals.py`、`tests/test_image_gen.py`、`tests/webui/test_visuals_api.py`、`frontend/src/stores/index.ts`、`frontend/src/views/Projects.vue`；`frontend/dist/` 仅由 `npm run build` 再生成，因当前构建会纳入用户未提交的前端源码而不暂存。
+- **红线**：不改 SQLite schema、`models.py`、Project v0 字段、Adapter 签名、已有 Content/主稿正文或发布行为；不得硬编码或回传密钥；无用户点击不得调用图片 provider；不得进行真实发布、自动裁切、平台 Variant 或假装已人工批准；不触及 `CLAUDE.md`、`PublishCenter.vue`、`multipost_bridge.py`、备份文件及既有用户改动。
+- **参考**：[PRODUCT_RESET_PLAN.md §7、§11](./PRODUCT_RESET_PLAN.md)；[OpenAI GPT Image 2 官方文档](https://developers.openai.com/api/docs/models/gpt-image-2)；[TECH_SPEC.md §5.4](./TECH_SPEC.md)；[HARD_PARTS.md §4、§5、§10.5](./HARD_PARTS.md)。
+
+  ✅ 完成于 2026-08-09，commit 661c458，备注：视觉圣经、封面/插图槽位、候选与失败审计均项目侧落盘；GPT Image 2 只在用户点击时调用。专项 55 passed、全量分组 1660 passed/13 skipped，fake provider 浏览器路径已验证生成、编辑与选择；构建产物为保护用户的 PublishCenter 改动而未暂存。
+
 ---
 
 ## M0 — 项目地基（预计 1-2 天）
