@@ -105,6 +105,8 @@
 - **红线**：不得改 SQLite schema、`models.py`、Adapter 签名、冻结 Project manifest 字段或已有 Content 正文；不得调用 LLM、抓取 URL、生成图片、派生平台稿或真实发布；不得自动把 Idea 提升为 Project；既有用户脏文件保持不动。
 - **参考**：[PRODUCT_RESET_PLAN.md §5.4、§6.1、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §1、§4、§10.5](./HARD_PARTS.md)。
 
+  ✅ 完成于 2026-08-09，commit 0a5cd78，备注：灵感可由想法、URL 或粘贴文本保存，并在填写创作意图后显式提升为 Project；浏览器路径与全量分批回归已验证。
+
 ---
 
 ## M0 — 项目地基（预计 1-2 天）
