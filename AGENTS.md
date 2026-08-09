@@ -1,4 +1,4 @@
-# CLAUDE.md — MediaForge (self0704)
+# AGENTS.md — MediaForge (self0704)
 
 ## 这个项目是什么
 
@@ -8,29 +8,30 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 
 ## 产品重启指令（当前最高优先级）
 
-开始实现前，完整阅读 [docs/PRODUCT_RESET_PLAN.md](docs/PRODUCT_RESET_PLAN.md)。不要绕过它继续做遗留 M* 功能。
+在开始任何实现前，先完整阅读 [docs/PRODUCT_RESET_PLAN.md](docs/PRODUCT_RESET_PLAN.md)。它定义了当前产品方向和 R0–R14 的建设顺序。
 
-- 第一条闭环：一个主题 → 主稿 → 微信公众号和头条两个独立可编辑草稿（含封面和插图），目标 30–60 分钟完成。
-- 图文优先；小红书、视频号、Bilibili、数字人、更多平台、多账号、无人值守真发布均后置。
-- 体验中心是统一的 Project 工作台；“手写 / AI 协作 / AI 起草”是一个自主程度控制，不是分离的产品入口。
-- 一级导航收敛为“今天 / 灵感 / 项目 / 资产 / 发布 / 复盘”；状态机页面归入开发者抽屉。
-- 冻结的 `topics → contents` 1:1 契约先不改；Project v0 使用 `output/projects/<project_id>/project.json` sidecar manifest。若需要 schema 迁移，先写 RFC 并等待用户确认。
+- 北极星：单人创作者能在 30–60 分钟完成“一个主题 → 一篇主稿 → 微信公众号和头条两个可编辑草稿（含封面与插图）”。
+- 先做图文创作闭环；小红书、视频号、Bilibili、数字人、更多平台、多账号和无人值守真发布全部后置。
+- 产品入口应围绕“今天 / 灵感 / 项目 / 资产 / 发布 / 复盘”，不能把 ingest、score、gate、run 等内部状态机直接当普通用户导航。
+- 手工写作和自动创作必须收敛到同一项目工作台，通过“自主程度”控制 AI 参与度；AI 改动必须可审阅、可撤销，不能静默覆盖正文。
+- 现有 `topics → contents` 的冻结 1:1 契约暂不改。Project v0 先用 `output/projects/<project_id>/project.json` sidecar manifest 聚合已有内容与资产；需要迁移 schema 时先写 RFC 并等待用户确认。
+- 在 R11 的四周真人使用实验达标以前，禁止把“支持的平台数、生成篇数、后台卡片数”当成功指标。
 
 ### 当前交接基线（2026-08-09）
 
-- **R1–R9 已完成并提交**：创作者导航、Idea Inbox、Project 研究板、可撤销主稿共创、GPT Image 2 视觉资产、微信/头条独立版本和内容包审批均已落地；精确证据见 `docs/TASKS.md` 与 git 历史。
-- **R0 仍待真人验收**：必须由用户提供一个本周真实发布的主题、3–5 个可靠来源、目标读者、发布目的和个人观点；不得用 mock 或演示内容勾选 R0。
-- 下一安全动作是跑 R0 的 60 分钟真人路径并记录耗时、人工修改比例和摩擦点。**不得自行进入 R10**；真实交付、schema 迁移、真实发布和删除/覆盖用户数据仍需单独确认。
-- GPT Image 2 provider 已实现生成与编辑，真实调用仍需用户通过环境变量提供 `OPENAI_API_KEY`；未配置时 UI 明确显示不可用并记录失败审计。
-- 当前交付基线：完整 Python 回归 **1685 passed、13 skipped**；前端生产构建通过（仅有既知的大 chunk 警告）。
-- `frontend/dist/` 是生成物；源码变化后用 `cd frontend && npm run build` 更新。不要把旧 hash 文件当业务源码维护。
+- **R1–R9 已完成并提交**：六入口导航、Idea Inbox、Project 研究板、可撤销主稿共创、GPT Image 2 视觉资产、微信/头条独立版本与内容包审批均已落地。以 `docs/TASKS.md` 的完成记录和 git 历史为准。
+- **R0 仍待真人验收**：必须使用用户真正准备发布的主题、3–5 个来源、目标读者、发布目的和个人观点；不得用 mock、占位或演示内容代替。
+- 下一安全动作是执行 R0 的 60 分钟真人路径并落盘真实耗时、人工修改比例和摩擦点。R10 的真实交付、任何 schema 迁移、真实发布、删除/覆盖用户数据仍需单独确认。
+- GPT Image 2 provider 已支持生成与编辑；真实调用的 `OPENAI_API_KEY` 只从环境变量读取。未配置时 UI 会明确提示不可用并保留失败审计。
+- 当前交付基线：完整 Python 回归 **1685 passed, 13 skipped**；前端生产构建通过（仅有既知的大 chunk 警告）。
+- `frontend/dist/` 是 Vite 生成物；源码变化后重建即可，不要手工维护旧 hash 资源。
 
 ## 会话重启指引（READ THIS FIRST）
 
 每次会话开始，按顺序读这四个文件再开工，**不要通读整个 codebase**：
 
-1. `docs/PRODUCT_RESET_PLAN.md` — 当前产品目标、边界和 R0–R14 顺序
-2. `docs/TASKS.md` — 已实现能力、旧任务和恢复记录；当前以 R0 真人验收为唯一未完成的产品重启任务
+1. `docs/PRODUCT_RESET_PLAN.md` — 当前产品目标、边界和 R0–R14 建设顺序
+2. `docs/TASKS.md` — 已实现能力、旧任务和恢复记录；当前以 R0 真人验收为唯一未完成的产品重启任务，不得机械认领遗留的第一个 `[ ]`
 3. `docs/TECH_SPEC.md` — 数据模型与接口契约（实现必须严格遵守，不得擅自改 schema）
 4. `docs/HARD_PARTS.md` — 你要做的任务如果在这里有对应条目，先读完再动手
 
@@ -46,7 +47,7 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 6. **凭据安全**：所有密钥/cookie 只放 `secrets/`（已 gitignore）和环境变量，代码里出现硬编码密钥 = 任务不合格
 7. **不要越权发布**：`publish` 相关代码在 M4 之前只做 dry-run，真实发布需要 config 里 `publish.enabled: true` 且该平台在 `publish.allowed_platforms` 白名单中
 8. **遇到卡点**：先查 `docs/HARD_PARTS.md` 对应章节；解决不了就在 TASKS.md 该任务下记录 `⚠️ BLOCKED: <原因>`，跳到下一个不依赖它的任务。
-9. **工作区保护**：先识别并保留共享工作区的已有改动。没有用户明确授权，绝不执行 `git reset --hard`、`git clean -fd`、覆盖或删除任何已有文件。长程任务优先新建 git worktree；只在专用 worktree 内处理自己明确归属的未提交尝试。
+9. **工作区保护**：共享工作区出现脏文件时，先识别归属并保留。没有用户明确授权，绝不执行 `git reset --hard`、`git clean -fd`、覆盖或删除任何已有文件。长程任务优先新建 git worktree；只能在该 worktree 内清理自己尚未提交的尝试。
 
 ## 自治连续执行（长程模式）
 
@@ -54,8 +55,8 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 
 **单个任务的执行回路（每个 `[ ]` 任务都走一遍）：**
 
-1. **崩溃检测**：`git status`。共享工作区或归属不清的改动必须保留并记录；禁止把破坏性 reset/clean 当默认恢复手段。仅在专用 worktree 内、且用户明确允许时才恢复本任务的未提交尝试。
-2. **认领**：先确认 `PRODUCT_RESET_PLAN.md` 的当前 R 阶段；再读 `TASKS.md` 中已明确迁入的对应任务及其 TECH_SPEC / HARD_PARTS 引用。
+1. **崩溃检测**：`git status`。识别改动归属：共享工作区或归属不清时停止清理，记录并保留；仅在专用 worktree、且明确是本任务未提交尝试时，才可按用户授权恢复。禁止用破坏性 reset/clean 作为默认恢复手段。
+2. **认领**：先读 `docs/PRODUCT_RESET_PLAN.md`，确认当前 R 阶段；再读 `docs/TASKS.md` 中已被明确迁入的对应任务及其 TECH_SPEC / HARD_PARTS 引用。
 3. **实现**：派**实现 subagent**（全新上下文，只喂「本任务规格 + 契约红线」），照 TDD 改代码。主会话自己不写实现，只当协调器保持精简。
 4. **校验**：派**校验 subagent**（全新上下文，只喂「本任务验收标准 + `git diff`」），先过客观闸再上评审：
    - 客观闸（任一不过即失败，不需 LLM 判断）：
@@ -92,7 +93,7 @@ pipeline/
   db.py             # SQLite 封装 + 状态机迁移
   sources/          # 选题数据源适配器（SourceAdapter 子类）
   topics/           # 选题评分与去重
-  creators/         # 创作管道（调用 LLM / 图像与视频生成）
+  creators/         # 创作管道（调用 Codex / 视频生成）
   gate/             # 质量门禁（多轮批判+评分）
   review/           # 人审交互（生成审核清单/读取审核结果）
   publishers/       # 发布适配器（PublisherAdapter 子类）
