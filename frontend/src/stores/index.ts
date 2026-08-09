@@ -153,6 +153,38 @@ export interface MasterSuggestion {
   decided_at: string | null
 }
 
+export interface VisualSlot {
+  id: string
+  purpose: string
+  paragraph_anchor: string | null
+  direction: string
+  aspect_ratio: '1:1' | '16:9' | '9:16' | '4:3' | '3:4'
+}
+
+export interface VisualAsset {
+  id: string
+  slot_id: string
+  prompt: string
+  model: string
+  size: string
+  version: number
+  reference_asset_id: string | null
+  cost_usd: number
+  file_path: string | null
+  status: 'candidate' | 'failed' | 'selected'
+  failure: string | null
+  selection_reason: string | null
+  user_rating: number | null
+  created_at: string
+}
+
+export interface VisualPlan {
+  project_id: string
+  bible: Record<string, string>
+  slots: VisualSlot[]
+  assets: VisualAsset[]
+}
+
 export const useProjectsStore = defineStore('projects', () => {
   const items = ref<ProjectItem[]>([])
   const total = ref(0)
@@ -298,6 +330,39 @@ export const useMasterStore = defineStore('master', () => {
   }
 
   return { master, suggestions, loading, error, load, save, request, accept, reject, restore }
+})
+
+export const useVisualsStore = defineStore('visuals', () => {
+  const plan = ref<VisualPlan | null>(null)
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+
+  async function load(projectId: string): Promise<void> {
+    loading.value = true; error.value = null
+    try { plan.value = (await api.get<VisualPlan>(`/projects/${projectId}/visuals`)).data }
+    catch (e) { error.value = unwrapError(e) } finally { loading.value = false }
+  }
+  async function save(projectId: string, input: Pick<VisualPlan, 'bible' | 'slots'>): Promise<VisualPlan> {
+    const response = await api.put<VisualPlan>(`/projects/${projectId}/visuals`, input)
+    plan.value = response.data
+    return response.data
+  }
+  async function generate(projectId: string, slotId: string, prompt: string): Promise<VisualAsset> {
+    const response = await apiPost<VisualAsset>(`/projects/${projectId}/visuals/assets`, { slot_id: slotId, prompt })
+    if (plan.value?.project_id === projectId) plan.value = { ...plan.value, assets: [...plan.value.assets, response.data] }
+    return response.data
+  }
+  async function edit(projectId: string, slotId: string, prompt: string, referenceAssetId: string): Promise<VisualAsset> {
+    const response = await apiPost<VisualAsset>(`/projects/${projectId}/visuals/assets/edit`, { slot_id: slotId, prompt, reference_asset_id: referenceAssetId })
+    if (plan.value?.project_id === projectId) plan.value = { ...plan.value, assets: [...plan.value.assets, response.data] }
+    return response.data
+  }
+  async function select(projectId: string, assetId: string, reason: string, rating?: number): Promise<VisualAsset> {
+    const response = await apiPost<VisualAsset>(`/projects/${projectId}/visuals/assets/${assetId}/select`, rating ? { reason, rating } : { reason })
+    if (plan.value?.project_id === projectId) plan.value = { ...plan.value, assets: plan.value.assets.map(item => item.id === assetId ? response.data : item.slot_id === response.data.slot_id && item.status === 'selected' ? { ...item, status: 'candidate' } : item) }
+    return response.data
+  }
+  return { plan, loading, error, load, save, generate, edit, select }
 })
 
 // ── Topics ─────────────────────────────────────────────────

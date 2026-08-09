@@ -44,6 +44,40 @@ _VALID_PNG_B64 = (
 _VALID_PNG_BYTES = base64.b64decode(_VALID_PNG_B64)
 
 
+class TestOpenAIImageProvider:
+    def test_generation_request_and_cost_estimate(self):
+        provider = image_gen.OpenAIImageProvider("openai-secret")
+        with patch("pipeline.creators.image_gen.request.urlopen") as mock:
+            mock.return_value = _mock_urlopen_response(json_body={"data": [{"b64_json": _VALID_PNG_B64}]})
+            assert provider.call("editorial cover", aspect_ratio="16:9", n=1) == [_VALID_PNG_BYTES]
+        request_data = mock.call_args.args[0]
+        assert request_data.full_url == "https://api.openai.com/v1/images/generations"
+        assert json.loads(request_data.data) == {"model": "gpt-image-2", "prompt": "editorial cover", "n": 1, "size": "1536x1024", "response_format": "b64_json"}
+        assert provider.estimated_cost_usd(aspect_ratio="16:9") > 0
+
+    def test_edit_uses_multipart_and_retries_are_retryable(self, tmp_path):
+        image = tmp_path / "reference.png"; image.write_bytes(_VALID_PNG_BYTES)
+        provider = image_gen.OpenAIImageProvider("openai-secret")
+        with patch("pipeline.creators.image_gen.request.urlopen") as mock:
+            mock.return_value = _mock_urlopen_response(json_body={"data": [{"b64_json": _VALID_PNG_B64}]})
+            assert provider.edit("make it quieter", image_path=image, aspect_ratio="1:1") == [_VALID_PNG_BYTES]
+        request_data = mock.call_args.args[0]
+        assert request_data.full_url == "https://api.openai.com/v1/images/edits"
+        assert b'name="image"' in request_data.data
+        with patch("pipeline.creators.image_gen.request.urlopen", side_effect=_mock_http_error(429)):
+            with pytest.raises(RetryableError):
+                provider.call("x", aspect_ratio="1:1", n=1)
+
+    def test_from_env_and_malformed_response(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "key")
+        assert image_gen.OpenAIImageProvider.from_env()._model == "gpt-image-2"
+        provider = image_gen.OpenAIImageProvider("key")
+        with patch("pipeline.creators.image_gen.request.urlopen") as mock:
+            mock.return_value = _mock_urlopen_response(json_body={"data": [{}]})
+            with pytest.raises(ValueError, match="lacks b64_json"):
+                provider.call("x", aspect_ratio="1:1", n=1)
+
+
 # ── helper：构造 mock urlopen 响应 ──────────────────────
 
 def _mock_urlopen_response(status: int = 200, json_body: dict | None = None) -> MagicMock:

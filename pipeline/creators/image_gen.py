@@ -217,6 +217,104 @@ class MiniMaxImageProvider(ImageProvider):
         return out
 
 
+# ── OpenAI GPT Image 2 provider ──────────────────────────
+
+class OpenAIImageProvider(ImageProvider):
+    """GPT Image 2 provider, kept independent from text LLM providers.
+
+    ``call`` deliberately preserves :class:`ImageProvider`'s existing public
+    contract so existing image generation callers need no migration.  Editing
+    is an explicit extra operation because it needs a local reference image.
+    """
+
+    DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    DEFAULT_MODEL = "gpt-image-2"
+    DEFAULT_TIMEOUT_S = 120.0
+    _SIZES = {"1:1": "1024x1024", "16:9": "1536x1024", "9:16": "1024x1536", "4:3": "1536x1024", "3:4": "1024x1536"}
+    # The Images API response does not provide an invoice amount.  We therefore
+    # store a visible *estimate* for the requested output size, rather than
+    # pretending a locally-known number is a post-hoc billed total.  Keep this
+    # table beside the provider so an update to the vendor price is auditable.
+    # USD estimates, checked against the GPT Image 2 pricing page on 2026-08-09.
+    _ESTIMATED_COST_USD = {"1024x1024": 0.08, "1536x1024": 0.12, "1024x1536": 0.12}
+
+    def __init__(self, api_key: str, *, base_url: str | None = None,
+                 model: str | None = None, timeout_s: float | None = None) -> None:
+        if not api_key:
+            raise ValueError("OpenAIImageProvider: api_key is required (set OPENAI_API_KEY)")
+        self._api_key = api_key
+        self._base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        self._model = model or self.DEFAULT_MODEL
+        self._timeout_s = timeout_s if timeout_s is not None else self.DEFAULT_TIMEOUT_S
+
+    @classmethod
+    def from_env(cls) -> "OpenAIImageProvider":
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("OpenAIImageProvider.from_env: OPENAI_API_KEY env var not set")
+        return cls(key, base_url=os.environ.get("OPENAI_IMAGE_BASE_URL"),
+                   model=os.environ.get("OPENAI_IMAGE_MODEL"),
+                   timeout_s=float(os.environ.get("OPENAI_IMAGE_TIMEOUT_S", cls.DEFAULT_TIMEOUT_S)))
+
+    def call(self, prompt: str, *, aspect_ratio: str, n: int, response_format: str = "base64") -> list[bytes]:
+        if aspect_ratio not in self._SIZES:
+            raise ValueError(f"OpenAIImageProvider: invalid aspect_ratio={aspect_ratio!r}")
+        if not (1 <= n <= 4):
+            raise ValueError(f"OpenAIImageProvider: n must be 1..4, got {n}")
+        payload = {"model": self._model, "prompt": prompt, "n": n, "size": self._SIZES[aspect_ratio], "response_format": "b64_json"}
+        return self._json_call("/images/generations", payload)
+
+    def estimated_cost_usd(self, *, aspect_ratio: str, n: int = 1) -> float:
+        """Return the pre-request, displayed estimate for this image request."""
+        if aspect_ratio not in self._SIZES or not (1 <= n <= 4):
+            raise ValueError("OpenAIImageProvider: invalid image cost request")
+        return self._ESTIMATED_COST_USD[self._SIZES[aspect_ratio]] * n
+
+    def edit(self, prompt: str, *, image_path: Path, aspect_ratio: str = "1:1", n: int = 1) -> list[bytes]:
+        """Create edited candidates from an existing local asset via `/images/edits`."""
+        if aspect_ratio not in self._SIZES:
+            raise ValueError(f"OpenAIImageProvider: invalid aspect_ratio={aspect_ratio!r}")
+        if not (1 <= n <= 4):
+            raise ValueError(f"OpenAIImageProvider: n must be 1..4, got {n}")
+        image_path = Path(image_path)
+        if not image_path.is_file():
+            raise ValueError(f"OpenAIImageProvider: reference image not found: {image_path}")
+        boundary = "----MediaForgeImageBoundary"
+        fields = {"model": self._model, "prompt": prompt, "n": str(n), "size": self._SIZES[aspect_ratio], "response_format": "b64_json"}
+        chunks: list[bytes] = []
+        for name, value in fields.items():
+            chunks.extend([f"--{boundary}\r\n".encode(), f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(), value.encode(), b"\r\n"])
+        chunks.extend([f"--{boundary}\r\n".encode(), f'Content-Disposition: form-data; name="image"; filename="{image_path.name}"\r\n'.encode(), b"Content-Type: image/png\r\n\r\n", image_path.read_bytes(), b"\r\n", f"--{boundary}--\r\n".encode()])
+        return self._request_json("/images/edits", b"".join(chunks), f"multipart/form-data; boundary={boundary}")
+
+    def _json_call(self, endpoint: str, payload: dict[str, Any]) -> list[bytes]:
+        return self._request_json(endpoint, json.dumps(payload).encode("utf-8"), "application/json")
+
+    def _request_json(self, endpoint: str, body: bytes, content_type: str) -> list[bytes]:
+        req = request.Request(f"{self._base_url}{endpoint}", data=body, headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": content_type}, method="POST")
+        try:
+            with request.urlopen(req, timeout=self._timeout_s) as response:
+                payload = json.loads(response.read())
+        except error.HTTPError as exc:
+            detail = exc.read()[:300].decode("utf-8", "replace") if exc.fp else ""
+            if exc.code == 429 or 500 <= exc.code < 600:
+                raise RetryableError(f"OpenAIImageProvider HTTP {exc.code}: {detail[:200]}") from exc
+            raise ValueError(f"OpenAIImageProvider HTTP {exc.code}: {detail}") from exc
+        except (TimeoutError, OSError) as exc:
+            raise RetryableError(f"OpenAIImageProvider network: {type(exc).__name__}: {exc}") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list) or not payload["data"]:
+            raise ValueError("OpenAIImageProvider: response.data missing/empty")
+        result: list[bytes] = []
+        for item in payload["data"]:
+            if not isinstance(item, dict) or not isinstance(item.get("b64_json"), str):
+                raise ValueError("OpenAIImageProvider: response data item lacks b64_json")
+            try:
+                result.append(base64.b64decode(item["b64_json"], validate=True))
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"OpenAIImageProvider: image decode failed: {exc}") from exc
+        return result
+
+
 # ── 顶层 Provider 管理（单例 + env 自动注入）────────────
 
 _PROVIDER: ImageProvider | None = None
@@ -229,8 +327,12 @@ def set_provider(provider: ImageProvider) -> None:
 
 
 def setup_provider_from_env() -> ImageProvider:
-    """CLI 启动调用：从 env 选 provider（现在只支持 MiniMaxImageProvider）。"""
-    provider = MiniMaxImageProvider.from_env()
+    """Initialize OpenAI when configured, otherwise retain the MiniMax fallback."""
+    provider: ImageProvider
+    if os.environ.get("OPENAI_API_KEY"):
+        provider = OpenAIImageProvider.from_env()
+    else:
+        provider = MiniMaxImageProvider.from_env()
     set_provider(provider)
     return provider
 
