@@ -127,7 +127,7 @@
 
 ### R6｜统一共创编辑器与可撤销建议（TDD，主稿优先）
 
-- [ ] **目标**：在同一项目工作台中让用户从空白写作或请求 AI 辅助，形成一份项目主稿；任何 AI 改动均以建议和 diff 先呈现，只有用户接受后才写入主稿，且可恢复到历史版本。
+- [x] **目标**：在同一项目工作台中让用户从空白写作或请求 AI 辅助，形成一份项目主稿；任何 AI 改动均以建议和 diff 先呈现，只有用户接受后才写入主稿，且可恢复到历史版本。
 - **步骤**：
   1. 在 `output/projects/<project_id>/master.json` 与 `master.md` 新增严格、原子、不可变的 MasterDocument sidecar，保存标题、正文、版本号、创建/更新时间和有限历史快照；不改变 Project v0 或 SQLite；
   2. 新增 Project 作用域的主稿读取、手工替换保存、建议创建、建议接受、建议拒绝、版本列表与版本恢复 API。接受或恢复每次新建版本，拒绝绝不改正文；
@@ -138,9 +138,11 @@
   - API 使用 fake LLM 覆盖请求上下文、provider 失败不写入、选区建议、错误 envelope；
   - 浏览器真人路径：在已有项目写一段主稿，生成一条建议，对比后拒绝一条、接受一条、再恢复一个版本，确认每次正文和版本历史符合预期；
   - 全量测试、前端构建、文本源码 Anthropic 护栏通过。
-- **声明改动文件**：`docs/TASKS.md`、`pipeline/master_document.py`、`pipeline/webui/api/master_documents.py`、`pipeline/webui/api/__init__.py`、`tests/test_master_document.py`、`tests/webui/test_master_document_api.py`、`frontend/src/stores/index.ts`、`frontend/src/views/Projects.vue`、`frontend/dist/`（仅由 `npm run build` 再生成）。
+- **声明改动文件**：`docs/TASKS.md`、`pipeline/master_documents.py`、`pipeline/webui/api/master_documents.py`、`pipeline/webui/api/__init__.py`、`tests/test_master_documents.py`、`tests/webui/test_master_documents_api.py`、`frontend/src/stores/index.ts`、`frontend/src/views/Projects.vue`、`frontend/dist/`（仅由 `npm run build` 再生成；若构建会纳入用户未提交的前端源码，则不暂存，交由使用方构建）。
 - **红线**：不改 SQLite schema、`models.py`、Project v0 字段、Adapter 签名或既有 Content 正文；无用户点击不得调用 LLM；不得静默覆盖主稿，建议失败或拒绝不得产生任何正文变更；不得生成平台 Variant、图像或真实发布。
 - **参考**：[PRODUCT_RESET_PLAN.md §5.2、§5.3、§9、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §4、§5、§10.5](./HARD_PARTS.md)。
+
+  ✅ 完成于 2026-08-09，commit 3ecd6dc，备注：主稿 sidecar、可接受或拒绝的 AI 建议和版本恢复已落地；全量测试 1652 passed、14 skipped，浏览器路径已验证。构建产物因会包含用户未提交的 PublishCenter 源码而保留在本地、不暂存。
 
 ---
 
