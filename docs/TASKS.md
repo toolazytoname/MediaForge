@@ -125,6 +125,23 @@
 
   ✅ 完成于 2026-08-09，commit fff33e1，备注：Project 研究板支持显式来源与声明录入，未核查事实、待确认项、限制和反方观点均在写作前可见；浏览器路径已验证。
 
+### R6｜统一共创编辑器与可撤销建议（TDD，主稿优先）
+
+- [ ] **目标**：在同一项目工作台中让用户从空白写作或请求 AI 辅助，形成一份项目主稿；任何 AI 改动均以建议和 diff 先呈现，只有用户接受后才写入主稿，且可恢复到历史版本。
+- **步骤**：
+  1. 在 `output/projects/<project_id>/master.json` 与 `master.md` 新增严格、原子、不可变的 MasterDocument sidecar，保存标题、正文、版本号、创建/更新时间和有限历史快照；不改变 Project v0 或 SQLite；
+  2. 新增 Project 作用域的主稿读取、手工替换保存、建议创建、建议接受、建议拒绝、版本列表与版本恢复 API。接受或恢复每次新建版本，拒绝绝不改正文；
+  3. AI 建议接口只在用户显式点击时调用现有 LLM 抽象，带项目受众、目标、声音和研究板上下文；provider 未配置或失败时返回可见错误，不得写入主稿或吞错；支持全文和选区的“改清楚、压缩、换口吻、补反方观点”建议动作；
+  4. 项目详情新增主稿编辑器和建议面板：显示保存状态、版本列表、diff/替换预览、接受/拒绝/恢复；手写内容和 AI 起草都进入同一份 MasterDocument，不再跳转旧手动编辑器。
+- **测试 / 验收**：
+  - 覆盖 master 创建/读取、原子写、手写保存、快照上限、建议不改正文、接受/拒绝/恢复语义、坏 manifest 和非法版本；
+  - API 使用 fake LLM 覆盖请求上下文、provider 失败不写入、选区建议、错误 envelope；
+  - 浏览器真人路径：在已有项目写一段主稿，生成一条建议，对比后拒绝一条、接受一条、再恢复一个版本，确认每次正文和版本历史符合预期；
+  - 全量测试、前端构建、文本源码 Anthropic 护栏通过。
+- **声明改动文件**：`docs/TASKS.md`、`pipeline/master_document.py`、`pipeline/webui/api/master_documents.py`、`pipeline/webui/api/__init__.py`、`tests/test_master_document.py`、`tests/webui/test_master_document_api.py`、`frontend/src/stores/index.ts`、`frontend/src/views/Projects.vue`、`frontend/dist/`（仅由 `npm run build` 再生成）。
+- **红线**：不改 SQLite schema、`models.py`、Project v0 字段、Adapter 签名或既有 Content 正文；无用户点击不得调用 LLM；不得静默覆盖主稿，建议失败或拒绝不得产生任何正文变更；不得生成平台 Variant、图像或真实发布。
+- **参考**：[PRODUCT_RESET_PLAN.md §5.2、§5.3、§9、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §4、§5、§10.5](./HARD_PARTS.md)。
+
 ---
 
 ## M0 — 项目地基（预计 1-2 天）
