@@ -88,6 +88,23 @@
 
   ✅ 完成于 2026-08-09，commit 2a29063，备注：普通导航已收敛为六个创作入口，sidecar Project 可只读浏览，旧流水线留在开发者抽屉；浏览器空态与抽屉路径已人工验证。
 
+### R4｜新建项目与 Idea Inbox（TDD，不绑平台）
+
+- [ ] **目标**：让创作者能从一句想法、URL 或粘贴文本保存平台无关的灵感，并在准备好后明确地创建 Project；不再要求先进入选题状态机或选择发布平台。
+- **步骤**：
+  1. 在 `output/ideas/<idea_id>/idea.json` 新增严格校验、原子写入的 immutable Idea sidecar 存储；Idea 至少保留原始输入类型与内容、标题、创建/更新时间、可选关联 project ID，未知字段和损坏 manifest 显式报错；
+  2. 扩展只读 Project API 为显式 `POST /projects` 创建，且只接受 title、idea、audience、goal、voice、autonomy；不写 Topic/Content/Publication，不调用 LLM；新增 Idea 的 list/create/promote-to-project API，提升操作必须保留 Idea 并写回关联 project ID；
+  3. 实现 `/ideas` 灵感收集页与 `/projects/new` 项目创建页。输入类型可切换想法、URL、粘贴文本；只有转为项目时才要求受众、目标、声音和自主程度；创建成功进入项目详情；
+  4. 将 R3 中禁用的“新建创作项目”改为可用入口，且空灵感、项目创建失败、URL 格式错误都在表单内明确说明。
+- **测试 / 验收**：
+  - Idea 存储覆盖创建/读取/排序、未知字段/非法类型/损坏 JSON 拒绝、原子写和不可变 update；
+  - API 覆盖 Project 创建、Idea 创建/列表/提升、提升幂等性、输入校验与错误 envelope；确保所有写入都仅在 `output/ideas` 或 `output/projects`；
+  - 浏览器真人路径：用户能在 3 分钟内保存一句想法，稍后把它升级为项目并进入项目详情；URL 或粘贴文本不要求选择平台；
+  - 全量测试、前端构建、文本源码 Anthropic 护栏通过。
+- **声明改动文件**：`docs/TASKS.md`、`pipeline/ideas.py`、`pipeline/projects.py`（仅在不改 v0 字段契约的前提下增加必要 helper）、`pipeline/webui/api/__init__.py`、`pipeline/webui/api/projects.py`、`pipeline/webui/api/ideas.py`、`tests/test_ideas.py`、`tests/webui/test_projects_api.py`、`tests/webui/test_ideas_api.py`、`frontend/src/router/index.ts`、`frontend/src/layouts/AppShell.vue`、`frontend/src/views/Today.vue`、`frontend/src/views/Projects.vue`、`frontend/src/views/Ideas.vue`、`frontend/src/views/ProjectCreate.vue`、`frontend/src/stores/index.ts`、`frontend/dist/`（仅由 `npm run build` 再生成）。
+- **红线**：不得改 SQLite schema、`models.py`、Adapter 签名、冻结 Project manifest 字段或已有 Content 正文；不得调用 LLM、抓取 URL、生成图片、派生平台稿或真实发布；不得自动把 Idea 提升为 Project；既有用户脏文件保持不动。
+- **参考**：[PRODUCT_RESET_PLAN.md §5.4、§6.1、§11](./PRODUCT_RESET_PLAN.md)；[TECH_SPEC.md](./TECH_SPEC.md)；[HARD_PARTS.md §1、§4、§10.5](./HARD_PARTS.md)。
+
 ---
 
 ## M0 — 项目地基（预计 1-2 天）
