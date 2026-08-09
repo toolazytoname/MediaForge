@@ -107,6 +107,10 @@ function loadRecords() {
   if (f.account_id) params.account_id = f.account_id
   if (f.mode === 'pending') params.pending_only = true
   publishStore.loadRecords(params)
+  // 记录里的 content_id 可能不是 approved 状态（如已发布/discarded），
+  // 草稿箱 tab 只加载 approved 内容——不加载全量会导致 contentTitleById
+  // 拿不到标题、fallback 成裸 id（看起来像乱码）。这里补拉全量。
+  contentsStore.load({ limit: 200 })
 }
 
 function loadDrafts() {
