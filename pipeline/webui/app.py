@@ -32,7 +32,7 @@ import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from pipeline import db
@@ -42,6 +42,16 @@ from pipeline.webui import deps
 from pipeline.webui.api import api_router
 
 _LOGGER = get_logger("pipeline.webui.app", "logs")
+
+
+class ImmutableStaticFiles(StaticFiles):
+    """Vite 以内容 hash 命名的资源可以安全长期缓存。"""
+
+    async def get_response(self, path: str, scope: dict) -> Response:
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
 
 # ── 工具 ────────────────────────────────────────────────────
@@ -98,7 +108,7 @@ def create_app() -> FastAPI:
     if assets_dir.is_dir():
         app.mount(
             "/assets",
-            StaticFiles(directory=str(assets_dir)),
+            ImmutableStaticFiles(directory=str(assets_dir)),
             name="spa-assets",
         )
 
@@ -244,6 +254,7 @@ def create_app() -> FastAPI:
             return HTMLResponse(
                 spa_index.read_text(encoding="utf-8"),
                 status_code=200,
+                headers={"Cache-Control": "no-cache"},
             )
         # dist 缺失（罕见,正常 clone 后默认提交）
         return HTMLResponse(

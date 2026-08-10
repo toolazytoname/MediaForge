@@ -202,6 +202,29 @@ class TestStaticFilesUnchanged:
         # SPA 不再用 Pico
         assert "pico" not in r.text.lower()
 
+    def test_spa_index_is_revalidated_but_hashed_assets_are_immutable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        pre_init_db: Path,
+        minimal_config: AppConfig,
+    ) -> None:
+        """旧页面应重新取得 index，带 hash 的构建资源才可长期缓存。"""
+        import re
+        import pipeline.webui.deps as deps
+        monkeypatch.setattr(deps, "_DB_PATH", str(pre_init_db))
+        monkeypatch.setattr(deps, "load_config", lambda *a, **k: minimal_config)
+
+        client = TestClient(create_app_safe(monkeypatch))
+        index = client.get("/")
+        assert index.status_code == 200
+        assert index.headers["cache-control"] == "no-cache"
+
+        match = re.search(r'(?:src|href)="(/assets/[^"]+)"', index.text)
+        assert match, "生产 index 应引用一个 hash 静态资源"
+        asset = client.get(match.group(1))
+        assert asset.status_code == 200
+        assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
+
     def test_api_status_still_renders(
         self,
         monkeypatch: pytest.MonkeyPatch,
