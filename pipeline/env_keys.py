@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
 # 与 llm.py::setup_provider_from_env 优先级链同源
@@ -40,7 +41,21 @@ def _read(path: str | Path) -> dict[str, str]:
 def _write(path: str | Path, data: dict[str, str]) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{p.name}.", suffix=".tmp", dir=p.parent,
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, p)
+        p.chmod(0o600)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def load_env_secrets(path: str | Path = DEFAULT_ENV_SECRETS_PATH) -> None:

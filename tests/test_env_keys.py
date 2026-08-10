@@ -68,6 +68,25 @@ class TestWriteDeleteEnvSecret:
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data == {"MINIMAX_API_KEY": "sk-123", "OPENAI_API_KEY": "sk-456"}
 
+    def test_write_uses_private_file_permissions(self, tmp_path: Path) -> None:
+        path = tmp_path / "env.json"
+
+        write_env_secret("OPENAI_API_KEY", "sk-private", path)
+
+        assert path.stat().st_mode & 0o777 == 0o600
+
+    def test_rewrite_tightens_existing_file_permissions(self, tmp_path: Path) -> None:
+        path = tmp_path / "env.json"
+        path.write_text('{"OPENAI_API_KEY": "old"}', encoding="utf-8")
+        path.chmod(0o644)
+
+        write_env_secret("OPENAI_API_KEY", "new", path)
+
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert json.loads(path.read_text(encoding="utf-8")) == {
+            "OPENAI_API_KEY": "new",
+        }
+
     def test_delete_existing_key_returns_true(self, tmp_path: Path) -> None:
         path = tmp_path / "env.json"
         write_env_secret("MINIMAX_API_KEY", "sk-123", path)
