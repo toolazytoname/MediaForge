@@ -38,7 +38,7 @@
 - **声明改动文件**：执行 R0 时仅允许新增/更新 `docs/product-validation/r0-real-theme-script.md` 与本任务的完成记录；本次将任务迁入清单仅修改 `docs/TASKS.md`。
 - **参考**：[PRODUCT_RESET_PLAN.md §10—§12](./PRODUCT_RESET_PLAN.md)；`TECH_SPEC.md`（仅作契约核对，不修改）。
 
-  🟡 **代理黄金路径已通过，等待作者签字（2026-08-10）**：用户明确授权代理自选真实爆款主题并先走通流程。已完成项目 `prj_a63f79b2` 的 5 个真实来源、真实文本 AI 起稿、GPT Image 2 经用户设置的 OpenAI-compatible relay 真实生成与编辑、微信/头条独立 v4、浏览器双预览、可追责审批和审批版本化安全 ZIP；完整记录见 [r0-real-theme-script.md](./product-validation/r0-real-theme-script.md)。中转站地址采用仅 HTTPS `/v1` 的本地设置项，密钥/地址只落在权限 `0600` 的 gitignored `secrets/env.json`。对抗审查发现的路径穿越、空白起稿、假双版本、图片 provider 恢复、换图导致的版本卡死、Markdown/图文预览、主稿晚改死路、stale UI、审批归属、导出覆盖与 SQLite WAL 连接竞态问题均已补回归。R0 暂不勾选，因为用户明确要求“走通后再人工介入”，作者是否愿意署名发布尚未由代理代答。当前回归 `1711 passed, 13 skipped`，前端生产构建通过，未创建本轮 Publication 或真实发布。
+  🔴 **创作者真人路径未通过，停止进入 R10（2026-08-10）**：工程代理项目 `prj_a63f79b2` 证明了底层能力能够组合出内容包，但用户随后明确反馈“不会用、从灵感产出文章的流程不通、ZIP 不是文章”。本轮完全通过页面创建体验项目 `prj_d91c6f6a`，复现了旧前端 chunk 让关键按钮静默失效、“AI 先起草”仍落到手工研究板、初稿按钮被未解释的 3 来源硬门槛禁用、视觉校验错误清空整张工作台、完成稿以 disabled textarea 和 ZIP 呈现、应用内文章阅读态缺失等 P0 问题。完整证据、整改任务和浏览器验收剧本见 [2026-08-10-creator-workflow-remediation.md](./product-validation/2026-08-10-creator-workflow-remediation.md)。R0 继续保持未勾选；当前最高优先级是报告 P0-A 至 P0-G，不得把代理内容包通过误写为产品通过，不得进入 R10。
 
 ### R1｜恢复可验证的工程基线（小修复）
 

@@ -16,10 +16,10 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 - 一级导航收敛为“今天 / 灵感 / 项目 / 资产 / 发布 / 复盘”；状态机页面归入开发者抽屉。
 - 冻结的 `topics → contents` 1:1 契约先不改；Project v0 使用 `output/projects/<project_id>/project.json` sidecar manifest。若需要 schema 迁移，先写 RFC 并等待用户确认。
 
-### 当前交接基线（2026-08-10）
+### 当前交接基线（2026-08-10，创作者验收后修订）
 
-- **R1–R9 已完成并提交；R0 代理黄金路径已走通**：真实项目 `prj_a63f79b2` 已完成 5 个来源 → AI 可审阅主稿 → GPT Image 2 真实生成与编辑 → 微信/头条独立 v4 → 可追责审批 → 本地 ZIP。证据见 `docs/product-validation/r0-real-theme-script.md`。
-- **当前人工关口**：R0 不勾选，直到用户阅读真实稿件并决定是否愿意署名。下一安全动作是打开项目完成作者审阅；**不得自行进入 R10**，平台草稿箱交付、真实发布、schema 迁移和删除/覆盖用户数据仍需单独确认。
+- **R1–R9 的底层能力已完成，但 R0 创作者验收失败**：代理项目 `prj_a63f79b2` 能组合出主稿、真实图片、双平台稿、审批和 ZIP，只证明能力存在。用户随后明确反馈不会使用，要求以普通创作者视角推翻旧流水线交互。
+- **当前唯一优先级**：执行 `docs/product-validation/2026-08-10-creator-workflow-remediation.md` 的 P0-A 至 P0-G，并严格运行其中的浏览器真人剧本。R0 不勾选；**不得自行进入 R10**，平台草稿箱交付、真实发布、schema 迁移和删除/覆盖用户数据仍需单独确认。
 - GPT Image 2 已通过用户在设置页配置的 OpenAI-compatible relay 完成真实生成与编辑。Settings 可保存可选 `OPENAI_IMAGE_BASE_URL`（仅 HTTPS `/v1`）；密钥与中转配置只保存在权限 `0600` 的 gitignored `secrets/env.json`，不得写入 Git。
 - 当前交付基线：完整 Python 回归 **1711 passed、13 skipped**；前端生产构建通过（仅有既知的大 chunk 警告）。跨进程发布锁连续 10 次通过；`config.yaml` 的 `publish.enabled` 保持 `false`。
 - 对抗审查已补：sidecar 路径穿越、可审阅 AI 初稿、真实平台适配、本地视觉恢复、安全 Markdown/图文预览、主稿晚改确认、审批 stale 刷新、真实审批角色和审批版本化无覆盖导出。
@@ -30,7 +30,7 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 每次会话开始，按顺序读这四个文件再开工，**不要通读整个 codebase**：
 
 1. `docs/PRODUCT_RESET_PLAN.md` — 当前产品目标、边界和 R0–R14 顺序
-2. `docs/TASKS.md` — 已实现能力、旧任务和恢复记录；当前只等待 R0 作者最终审阅，不得机械认领遗留 `[ ]`
+2. `docs/TASKS.md` — 已实现能力、旧任务和恢复记录；当前先完成创作者整改报告 P0，不得机械认领遗留 `[ ]`
 3. `docs/TECH_SPEC.md` — 数据模型与接口契约（实现必须严格遵守，不得擅自改 schema）
 4. `docs/HARD_PARTS.md` — 你要做的任务如果在这里有对应条目，先读完再动手
 
@@ -38,7 +38,7 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 
 ## 工作约定（强制）
 
-1. **产品重启优先于遗留任务顺序**：R1–R9 已完成，R0 代理路径已通过，当前只等待作者最终审阅；不要机械领取旧 M* 清单中的未完成项，也不要未经确认进入 R10。完成任务后勾选并追加 `✅ 完成于 <日期>，commit <sha>，备注 <一句话>`。
+1. **产品重启优先于遗留任务顺序**：R1–R9 的能力已实现，但 R0 创作者真人路径未通过。先完成整改报告 P0-A 至 P0-G，并按报告浏览器剧本重验；不要机械领取旧 M* 清单，也不要进入 R10。完成任务后勾选并追加 `✅ 完成于 <日期>，commit <sha>，备注 <一句话>`。
 2. **接口契约不可变**：`pipeline/models.py` 的字段、`SourceAdapter`/`PublisherAdapter` 的方法签名、SQLite 表结构，都在 TECH_SPEC.md 里定死了。如果实现中发现契约有问题，**停下来在 TASKS.md 里记录问题**，不要擅自修改契约。
 3. **TDD**：每个任务先写测试（TASKS.md 里已给出测试要点），RED → GREEN → 重构
 4. **不可变数据**：函数返回新对象，不原地修改传入参数（遵守全局 coding-style 规则）
