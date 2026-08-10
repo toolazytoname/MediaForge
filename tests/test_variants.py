@@ -75,6 +75,43 @@ def test_rejects_unknown_fields_platform_and_bad_asset_reference(tmp_path):
         variants.load_variants("prj_variant", projects_root=root)
 
 
+def test_replacing_selected_visual_keeps_old_variant_readable_until_explicit_update(tmp_path):
+    root = tmp_path / "projects"; _project(root)
+    visuals.save_plan(
+        "prj_variant", bible={}, slots=[{
+            "id": "vsl_cover", "purpose": "封面", "paragraph_anchor": None,
+            "direction": "编辑插画", "aspect_ratio": "16:9",
+        }], projects_root=root,
+    )
+    old = visuals.record_asset(
+        "prj_variant", slot_id="vsl_cover", prompt="旧封面", model="test",
+        size="16:9", cost_usd=0, now="2026-08-09T00:02:00+00:00",
+        file_path="assets/vas_old.png", status="candidate", asset_id="vas_old",
+        projects_root=root,
+    )
+    visuals.select_asset("prj_variant", old.id, reason="旧图", rating=4, projects_root=root)
+    created = variants.create_from_master(
+        "prj_variant", "wechat_mp", now="2026-08-09T00:03:00+00:00", projects_root=root,
+    )
+    replacement = visuals.record_asset(
+        "prj_variant", slot_id="vsl_cover", prompt="新封面", model="test",
+        size="16:9", cost_usd=0, now="2026-08-09T00:04:00+00:00",
+        file_path="assets/vas_new.png", status="candidate", asset_id="vas_new",
+        projects_root=root,
+    )
+    visuals.select_asset("prj_variant", replacement.id, reason="新图", rating=5, projects_root=root)
+
+    readable = variants.load_variants("prj_variant", projects_root=root).variants[0]
+    assert readable.asset_ids == ("vas_old",)
+    updated = variants.save_manual(
+        "prj_variant", "wechat_mp", title=created.title, summary=created.summary,
+        body=created.body, asset_ids=[replacement.id],
+        now="2026-08-09T00:05:00+00:00", projects_root=root,
+    )
+    assert updated.asset_ids == ("vas_new",)
+    assert updated.history[-1].asset_ids == ("vas_old",)
+
+
 @pytest.mark.parametrize("mutate", [
     lambda raw: raw["variants"][0]["history"].extend([dict(raw["variants"][0]["history"][0]), dict(raw["variants"][0]["history"][0])]),
     lambda raw: raw["variants"][0]["history"].reverse(),

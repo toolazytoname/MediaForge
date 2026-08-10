@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, HTTPException
 
@@ -40,6 +41,12 @@ from pipeline.webui.sanitize import sanitize_config
 
 router = APIRouter(tags=["settings"])
 
+
+def _err(status: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status, detail={"error": {
+        "code": code, "message": message,
+    }})
+
 # 落盘路径存成模块级变量（而非直接用函数默认参数），方便测试
 # monkeypatch 到 tmp_path，不污染真实的 secrets/env.json。
 _ENV_SECRETS_PATH = DEFAULT_ENV_SECRETS_PATH
@@ -52,6 +59,7 @@ _KEY_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
     ("image", "其他 AI 出图", tuple(name for name in IMAGE_ENV_VARS if name != "OPENAI_API_KEY")),
 ]
 _ALLOWED_KEY_NAMES = frozenset(LLM_ENV_VARS) | frozenset(IMAGE_ENV_VARS)
+_OPENAI_IMAGE_BASE_URL = "OPENAI_IMAGE_BASE_URL"
 
 
 def _reload_providers() -> str | None:
@@ -168,6 +176,59 @@ def clear_key(name: str) -> dict[str, Any]:
     os.environ.pop(name, None)
     reload_error = _reload_providers()
     return {"name": name, "set": False, "reload_error": reload_error}
+
+
+# ── GPT Image 2 中转站地址 ─────────────────────────────────
+
+
+def _normalize_openai_image_base_url(value: Any) -> str:
+    """Accept only an HTTPS OpenAI-compatible `/v1` API base URL."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("base_url must be non-empty text")
+    try:
+        parsed = urlsplit(value.strip())
+    except ValueError as error:
+        raise ValueError("base_url must be a valid HTTPS URL") from error
+    path = parsed.path.rstrip("/")
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or path != "/v1"
+    ):
+        raise ValueError("base_url must be an HTTPS OpenAI-compatible /v1 URL")
+    return f"https://{parsed.netloc}/v1"
+
+
+@router.get("/settings/openai-image-base-url")
+def get_openai_image_base_url() -> dict[str, str | None]:
+    """Return the configured relay endpoint; it is not a credential."""
+    return {"base_url": os.environ.get(_OPENAI_IMAGE_BASE_URL) or None}
+
+
+@router.post("/settings/openai-image-base-url")
+def save_openai_image_base_url(body: dict[str, Any] = Body(...)) -> dict[str, str | None]:
+    """Persist and hot-reload a GPT Image 2 OpenAI-compatible relay endpoint."""
+    if set(body) != {"base_url"}:
+        raise _err(400, "invalid_openai_image_base_url", "request requires only base_url")
+    try:
+        base_url = _normalize_openai_image_base_url(body["base_url"])
+    except ValueError as error:
+        raise _err(400, "invalid_openai_image_base_url", str(error)) from error
+    write_env_secret(_OPENAI_IMAGE_BASE_URL, base_url, _ENV_SECRETS_PATH)
+    os.environ[_OPENAI_IMAGE_BASE_URL] = base_url
+    return {"base_url": base_url, "reload_error": _reload_providers()}
+
+
+@router.delete("/settings/openai-image-base-url")
+def clear_openai_image_base_url() -> dict[str, str | None]:
+    """Clear the persisted relay endpoint and return GPT Image 2 to its default."""
+    delete_env_secret(_OPENAI_IMAGE_BASE_URL, _ENV_SECRETS_PATH)
+    os.environ.pop(_OPENAI_IMAGE_BASE_URL, None)
+    return {"base_url": None, "reload_error": _reload_providers()}
 
 
 # ── publish.enabled / allowed_platforms（发布总开关，用户明确要求

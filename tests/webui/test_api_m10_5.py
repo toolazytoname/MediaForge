@@ -278,6 +278,7 @@ def keys_env(client, tmp_path, monkeypatch):
     monkeypatch.setattr(settings_mod, "_ENV_SECRETS_PATH", str(tmp_path / "env.json"))
     for name in set(LLM_ENV_VARS) | set(IMAGE_ENV_VARS):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("OPENAI_IMAGE_BASE_URL", raising=False)
     return tmp_path
 
 
@@ -357,6 +358,57 @@ class TestSettingsKeysDelete:
         import json as _json
         data = _json.loads((keys_env / "env.json").read_text(encoding="utf-8"))
         assert data == {}
+
+
+class TestOpenAIImageEndpoint:
+    def test_get_reports_unconfigured_endpoint(self, client, keys_env):
+        r = client.get("/api/v1/settings/openai-image-base-url")
+        assert r.status_code == 200
+        assert r.json() == {"base_url": None}
+
+    @pytest.mark.parametrize("base_url", [
+        "http://relay.example/v1",
+        "https://relay.example/not-v1",
+        "https://user:pass@relay.example/v1",
+        "https://relay.example/v1?debug=true",
+    ])
+    def test_rejects_unsafe_or_incompatible_endpoint(self, client, keys_env, base_url):
+        r = client.post("/api/v1/settings/openai-image-base-url", json={"base_url": base_url})
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"]["code"] == "invalid_openai_image_base_url"
+
+    def test_saves_normalized_endpoint_and_reloads_image_provider(self, client, keys_env, monkeypatch):
+        from pipeline.webui.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "_reload_providers", lambda: None)
+
+        r = client.post(
+            "/api/v1/settings/openai-image-base-url",
+            json={"base_url": "https://relay.example/v1/"},
+        )
+
+        assert r.status_code == 200
+        assert r.json() == {
+            "base_url": "https://relay.example/v1", "reload_error": None,
+        }
+        assert os.environ["OPENAI_IMAGE_BASE_URL"] == "https://relay.example/v1"
+        import json as _json
+        assert _json.loads((keys_env / "env.json").read_text(encoding="utf-8")) == {
+            "OPENAI_IMAGE_BASE_URL": "https://relay.example/v1",
+        }
+
+    def test_clear_removes_persisted_endpoint(self, client, keys_env, monkeypatch):
+        from pipeline.webui.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "_reload_providers", lambda: None)
+        client.post(
+            "/api/v1/settings/openai-image-base-url",
+            json={"base_url": "https://relay.example/v1"},
+        )
+
+        r = client.delete("/api/v1/settings/openai-image-base-url")
+
+        assert r.status_code == 200
+        assert r.json() == {"base_url": None, "reload_error": None}
+        assert "OPENAI_IMAGE_BASE_URL" not in os.environ
 
 
 # ── settings/publish-enabled / publish-allowed-platforms（发布总

@@ -10,15 +10,18 @@ import { useSettingsStore } from '../stores'
 import { storeToRefs } from 'pinia'
 
 const store = useSettingsStore()
-const { config, doctor, keyGroups, loading } = storeToRefs(store)
+const { config, doctor, keyGroups, openaiImageBaseUrl, loading } = storeToRefs(store)
 
 // 每个 key 名对应的输入框暂存值（不回填已保存的明文，只在提交时读取）
 const pendingValues = reactive<Record<string, string>>({})
 const saving = reactive<Record<string, boolean>>({})
+const openaiImageBaseUrlInput = ref('')
+const openaiImageBaseUrlSaving = ref(false)
 
 onMounted(() => {
   store.load()
   store.loadKeys()
+  store.loadOpenAIImageBaseUrl()
 })
 
 async function onSave(name: string) {
@@ -39,6 +42,27 @@ async function onClear(name: string) {
     await store.clearKey(name)
   } finally {
     saving[name] = false
+  }
+}
+
+async function onSaveOpenAIImageBaseUrl() {
+  const value = openaiImageBaseUrlInput.value.trim()
+  if (!value) return
+  openaiImageBaseUrlSaving.value = true
+  try {
+    const ok = await store.saveOpenAIImageBaseUrl(value)
+    if (ok) openaiImageBaseUrlInput.value = ''
+  } finally {
+    openaiImageBaseUrlSaving.value = false
+  }
+}
+
+async function onClearOpenAIImageBaseUrl() {
+  openaiImageBaseUrlSaving.value = true
+  try {
+    await store.clearOpenAIImageBaseUrl()
+  } finally {
+    openaiImageBaseUrlSaving.value = false
   }
 }
 
@@ -158,6 +182,41 @@ async function onSavePlatforms() {
         </a-space>
       </div>
       <a-empty v-if="keyGroups.length === 0" description="无 key 分组" />
+    </a-card>
+
+    <a-card title="GPT Image 2 中转站" style="margin-bottom: 16px">
+      <a-alert
+        type="info"
+        show-icon
+        style="margin-bottom: 16px"
+        message="可选。只影响 GPT Image 2 的生成与编辑；文本模型和真实发布开关不会改变。地址必须是 HTTPS 且以 /v1 结尾。"
+      />
+      <a-space align="baseline" wrap>
+        <a-input
+          v-model:value="openaiImageBaseUrlInput"
+          placeholder="https://your-relay.example/v1"
+          style="width: 360px"
+        />
+        <a-button
+          type="primary"
+          :loading="openaiImageBaseUrlSaving"
+          :disabled="!openaiImageBaseUrlInput.trim()"
+          @click="onSaveOpenAIImageBaseUrl"
+        >
+          保存中转站
+        </a-button>
+        <a-button
+          v-if="openaiImageBaseUrl"
+          danger
+          :loading="openaiImageBaseUrlSaving"
+          @click="onClearOpenAIImageBaseUrl"
+        >
+          恢复默认接口
+        </a-button>
+      </a-space>
+      <p style="margin: 12px 0 0; color: #666">
+        当前：{{ openaiImageBaseUrl || 'OpenAI 官方默认接口' }}
+      </p>
     </a-card>
 
     <a-card title="Doctor 体检" style="margin-bottom: 16px">

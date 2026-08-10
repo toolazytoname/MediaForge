@@ -16,12 +16,12 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 - 一级导航收敛为“今天 / 灵感 / 项目 / 资产 / 发布 / 复盘”；状态机页面归入开发者抽屉。
 - 冻结的 `topics → contents` 1:1 契约先不改；Project v0 使用 `output/projects/<project_id>/project.json` sidecar manifest。若需要 schema 迁移，先写 RFC 并等待用户确认。
 
-### 当前交接基线（2026-08-09）
+### 当前交接基线（2026-08-10）
 
-- **R1–R9 已完成并提交；R0 代理黄金路径已走通**：真实项目 `prj_a63f79b2` 已完成 5 个来源 → AI 可审阅主稿 → 3 张真实图片 → 微信/头条独立 v3 → 可追责审批 → 本地 ZIP。证据见 `docs/product-validation/r0-real-theme-script.md`。
+- **R1–R9 已完成并提交；R0 代理黄金路径已走通**：真实项目 `prj_a63f79b2` 已完成 5 个来源 → AI 可审阅主稿 → GPT Image 2 真实生成与编辑 → 微信/头条独立 v4 → 可追责审批 → 本地 ZIP。证据见 `docs/product-validation/r0-real-theme-script.md`。
 - **当前人工关口**：R0 不勾选，直到用户阅读真实稿件并决定是否愿意署名。下一安全动作是打开项目完成作者审阅；**不得自行进入 R10**，平台草稿箱交付、真实发布、schema 迁移和删除/覆盖用户数据仍需单独确认。
-- GPT Image 2 provider 已实现生成与编辑，但本轮没有 `OPENAI_API_KEY`，实际走的是明确提示后的真实 PNG 本地导入；不得声称 GPT Image 2 API 已实测。
-- 当前交付基线：完整 Python 回归 **1700 passed、13 skipped**；前端生产构建通过（仅有既知的大 chunk 警告）。跨进程发布锁连续 10 次通过；`config.yaml` 的 `publish.enabled` 保持 `false`。
+- GPT Image 2 已通过用户在设置页配置的 OpenAI-compatible relay 完成真实生成与编辑。Settings 可保存可选 `OPENAI_IMAGE_BASE_URL`（仅 HTTPS `/v1`）；密钥与中转配置只保存在权限 `0600` 的 gitignored `secrets/env.json`，不得写入 Git。
+- 当前交付基线：完整 Python 回归 **1711 passed、13 skipped**；前端生产构建通过（仅有既知的大 chunk 警告）。跨进程发布锁连续 10 次通过；`config.yaml` 的 `publish.enabled` 保持 `false`。
 - 对抗审查已补：sidecar 路径穿越、可审阅 AI 初稿、真实平台适配、本地视觉恢复、安全 Markdown/图文预览、主稿晚改确认、审批 stale 刷新、真实审批角色和审批版本化无覆盖导出。
 - `frontend/dist/` 是生成物；源码变化后用 `cd frontend && npm run build` 更新。不要把旧 hash 文件当业务源码维护。
 

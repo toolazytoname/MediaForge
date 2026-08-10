@@ -881,6 +881,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const config = ref<Record<string, any> | null>(null)
   const doctor = ref<DoctorItem[]>([])
   const keyGroups = ref<SettingsKeyGroup[]>([])
+  const openaiImageBaseUrl = ref<string | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
   async function load() {
@@ -926,6 +927,36 @@ export const useSettingsStore = defineStore('settings', () => {
       return false
     }
   }
+  async function loadOpenAIImageBaseUrl() {
+    try {
+      const r = await api.get<{ base_url: string | null }>('/settings/openai-image-base-url')
+      openaiImageBaseUrl.value = r.data.base_url
+    } catch (e) {
+      message.error(`加载 GPT Image 2 中转站失败：${unwrapError(e)}`)
+    }
+  }
+  async function saveOpenAIImageBaseUrl(baseUrl: string): Promise<boolean> {
+    try {
+      const r = await api.post<{ base_url: string | null }>('/settings/openai-image-base-url', { base_url: baseUrl })
+      openaiImageBaseUrl.value = r.data.base_url
+      message.success('已保存 GPT Image 2 中转站地址')
+      return true
+    } catch (e) {
+      message.error(`保存失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  async function clearOpenAIImageBaseUrl(): Promise<boolean> {
+    try {
+      const r = await api.delete<{ base_url: string | null }>('/settings/openai-image-base-url')
+      openaiImageBaseUrl.value = r.data.base_url
+      message.success('已恢复为 OpenAI 默认图片接口')
+      return true
+    } catch (e) {
+      message.error(`清除失败：${unwrapError(e)}`)
+      return false
+    }
+  }
   // 发布总开关（用户明确要求可从 UI 操作，不必手改 config.yaml）
   async function setPublishEnabled(enabled: boolean): Promise<boolean> {
     try {
@@ -950,8 +981,9 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
   return {
-    config, doctor, keyGroups, loading, error,
+    config, doctor, keyGroups, openaiImageBaseUrl, loading, error,
     load, loadKeys, saveKey, clearKey,
+    loadOpenAIImageBaseUrl, saveOpenAIImageBaseUrl, clearOpenAIImageBaseUrl,
     setPublishEnabled, setPublishAllowedPlatforms,
   }
 })
