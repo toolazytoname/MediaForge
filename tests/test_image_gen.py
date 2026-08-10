@@ -77,6 +77,28 @@ class TestOpenAIImageProvider:
             with pytest.raises(ValueError, match="lacks b64_json"):
                 provider.call("x", aspect_ratio="1:1", n=1)
 
+    def test_http_error_never_exposes_credential_fragments(self):
+        provider = image_gen.OpenAIImageProvider("sk-private-value")
+        upstream = json.dumps({
+            "error": {
+                "message": "Incorrect API key provided: sk-private-value",
+                "type": "invalid_request_error",
+                "code": "invalid_api_key",
+            },
+        })
+        with patch(
+            "pipeline.creators.image_gen.request.urlopen",
+            side_effect=_mock_http_error(401, upstream),
+        ):
+            with pytest.raises(ValueError) as caught:
+                provider.call("x", aspect_ratio="1:1", n=1)
+
+        message = str(caught.value)
+        assert "HTTP 401" in message
+        assert "invalid_api_key" in message
+        assert "sk-private-value" not in message
+        assert "Incorrect API key provided" not in message
+
 
 # ── helper：构造 mock urlopen 响应 ──────────────────────
 

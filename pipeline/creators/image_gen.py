@@ -296,10 +296,11 @@ class OpenAIImageProvider(ImageProvider):
             with request.urlopen(req, timeout=self._timeout_s) as response:
                 payload = json.loads(response.read())
         except error.HTTPError as exc:
-            detail = exc.read()[:300].decode("utf-8", "replace") if exc.fp else ""
+            detail = exc.read()[:4096] if exc.fp else b""
+            label = self._safe_error_label(detail)
             if exc.code == 429 or 500 <= exc.code < 600:
-                raise RetryableError(f"OpenAIImageProvider HTTP {exc.code}: {detail[:200]}") from exc
-            raise ValueError(f"OpenAIImageProvider HTTP {exc.code}: {detail}") from exc
+                raise RetryableError(f"OpenAIImageProvider HTTP {exc.code}{label}") from exc
+            raise ValueError(f"OpenAIImageProvider HTTP {exc.code}{label}") from exc
         except (TimeoutError, OSError) as exc:
             raise RetryableError(f"OpenAIImageProvider network: {type(exc).__name__}: {exc}") from exc
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), list) or not payload["data"]:
@@ -313,6 +314,26 @@ class OpenAIImageProvider(ImageProvider):
             except (ValueError, TypeError) as exc:
                 raise ValueError(f"OpenAIImageProvider: image decode failed: {exc}") from exc
         return result
+
+    @staticmethod
+    def _safe_error_label(raw: bytes) -> str:
+        """Keep a machine-readable error code without echoing vendor text.
+
+        OpenAI error messages may repeat a partially masked credential.  Those
+        messages can otherwise reach API responses and persistent visual audit
+        records, so only a conservative code/type token is retained.
+        """
+        try:
+            payload = json.loads(raw)
+            item = payload.get("error") if isinstance(payload, dict) else None
+            value = item.get("code") or item.get("type") if isinstance(item, dict) else None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            value = None
+        if not isinstance(value, str) or not 1 <= len(value) <= 64:
+            return ""
+        if not value.replace("_", "").replace("-", "").replace(".", "").isalnum():
+            return ""
+        return f" ({value})"
 
 
 # ── 顶层 Provider 管理（单例 + env 自动注入）────────────
