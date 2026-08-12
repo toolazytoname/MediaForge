@@ -22,6 +22,9 @@ def test_article_first_prototype_covers_required_creator_states() -> None:
         "生成文章",
         "资料暂时无法读取",
         "给这一段提意见",
+        "评论所选内容",
+        "右键评论",
+        "选中一段文字后，可以直接评论",
         "查看修改对比",
         "确认这版",
         "最终阅读",
@@ -29,6 +32,15 @@ def test_article_first_prototype_covers_required_creator_states() -> None:
         "平台原生定时",
     ):
         assert visible_contract in source
+
+
+def test_local_comment_is_anchored_to_an_actual_text_selection() -> None:
+    source = VIEW.read_text(encoding="utf-8")
+
+    assert "window.getSelection()" in source
+    assert "selectionMenu" in source
+    assert "@mouseup=\"captureTextSelection\"" in source
+    assert "@contextmenu.prevent=\"openContextComment\"" in source
 
 
 def test_prototype_has_no_pipeline_or_real_publish_request() -> None:
