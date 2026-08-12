@@ -20,7 +20,7 @@ export function installChunkRecovery(router: Router): void {
   router.onError(recover)
   window.addEventListener('vite:preloadError', (event) => {
     event.preventDefault()
-    recover((event as CustomEvent<Error>).detail)
+    recover((event as unknown as CustomEvent<Error>).detail)
   })
 
   router.afterEach(() => window.sessionStorage.removeItem(RECOVERY_KEY))
