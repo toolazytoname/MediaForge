@@ -12,6 +12,8 @@ from pipeline import creator_article_generation
 from pipeline import creator_material_parsing
 from pipeline import article_feedback
 from pipeline import local_annotations
+from pipeline import article_image_revisions
+from pipeline import visuals
 from pipeline import master_documents as master_store
 from pipeline import research as research_store
 from pipeline.creators import image_gen, llm
@@ -291,6 +293,28 @@ def retry_article_images(project_id: str, body: dict[str, Any] = Body(...)) -> d
         raise _master_error(project_id, error) from error
     except Exception as error:
         raise _error(502, "image_generation_failed", f"image retry failed: {error}") from error
+
+
+@router.post("/projects/{project_id}/article/images/replace")
+def replace_article_image(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Apply one reviewed visual candidate without moving any other image."""
+    if not isinstance(body, dict) or set(body) != {"current_asset_id", "candidate_asset_id"}:
+        raise _error(400, "invalid_image_replacement", "replacement requires current_asset_id and candidate_asset_id")
+    current, candidate = body["current_asset_id"], body["candidate_asset_id"]
+    if not isinstance(current, str) or not isinstance(candidate, str):
+        raise _error(400, "invalid_image_replacement", "image asset ids must be text")
+    try:
+        result = article_image_revisions.replace_image_reference(
+            project_id, current_asset_id=current, candidate_asset_id=candidate,
+            now=_now(), projects_root=_root(),
+        )
+        return {"master": _master_dict(result.master), "selected_asset_id": result.selected.id}
+    except article_image_revisions.ArticleImageRevisionError as error:
+        message = str(error)
+        status = 409 if "stale or ambiguous" in message else 400
+        raise _error(status, "image_replacement_stale" if status == 409 else "invalid_image_replacement", error) from error
+    except (master_store.MasterDocumentError, visuals.VisualsError) as error:
+        raise _master_error(project_id, error) from error
 
 
 @router.get("/projects/{project_id}/master")

@@ -8,7 +8,7 @@ import { lineDiff, type DiffRow } from '../utils/articleDiff'
 interface MasterVersion { version: number; title: string; body: string; saved_at: string; reason: string }
 interface Master { title: string; body: string; version: number; updated_at: string; history: MasterVersion[] }
 interface Generation { status: string; completed_images: number; failed_images: number; error: string | null }
-interface VisualAsset { id: string; slot_id: string; prompt: string; model: string; file_path: string | null; status: 'candidate' | 'failed' | 'selected'; failure: string | null; created_at: string }
+interface VisualAsset { id: string; slot_id: string; prompt: string; model: string; file_path: string | null; status: 'candidate' | 'failed' | 'selected'; failure: string | null; created_at: string; reference_asset_id?: string | null; cost_usd?: number; version?: number }
 interface VisualPlan { assets: VisualAsset[] }
 interface FeedbackProposal { id: string; scope: 'whole_article'; feedback: string; target: string | null; readership: string | null; platform: string | null; values: string | null; status: 'ready' | 'failed' | 'accepted' | 'rejected'; state: 'current' | 'obsolete'; error: string | null; proposed_title: string | null; proposed_body: string | null; decision: 'accepted' | 'rejected' | null; decided_at: string | null; accepted_title: string | null; accepted_body: string | null }
 interface LocalAnnotation { id: string; kind: 'text' | 'image'; feedback: string; categories: string[]; excerpt: string | null; paragraph_anchor: string | null; asset_id: string | null; status: 'active' | 'orphaned'; orphan_reason: string | null }
@@ -26,12 +26,13 @@ const lastSaved = ref('')
 const editor = ref<HTMLTextAreaElement | null>(null)
 const isEditing = ref(false); const moreOpen = ref(false); const detailsOpen = ref(false)
 const activeImage = ref<VisualAsset | null>(null); const imagePrompt = ref(''); const imageWorking = ref(false)
+const imageActionError = ref<string | null>(null)
 const feedbackOpen = ref(false); const feedbackWorking = ref(false); const feedbackError = ref<string | null>(null)
 const feedback = ref(''); const feedbackTarget = ref(''); const feedbackReadership = ref(''); const feedbackPlatform = ref(''); const feedbackValues = ref('')
 const feedbackProposals = ref<FeedbackProposal[]>([])
 const proposalReview = ref<FeedbackProposal | null>(null); const proposalTitle = ref(''); const proposalBody = ref('')
 const proposalWorking = ref(false); const proposalError = ref<string | null>(null)
-const proposalStale = ref(false)
+const proposalOutdated = ref(false)
 const versionNotice = ref<{ kind: 'accepted' | 'restored'; version: number } | null>(null)
 const restoreCandidate = ref<number | null>(null)
 const baselinePane = ref<HTMLElement | null>(null); const proposalPane = ref<HTMLElement | null>(null); let syncingDiff = false
@@ -150,13 +151,13 @@ async function retryFeedbackProposal(proposal: FeedbackProposal): Promise<void> 
 }
 function openProposalReview(proposal: FeedbackProposal): void {
   if (proposal.status !== 'ready' || proposal.state !== 'current' || !proposal.proposed_body || !proposal.proposed_title) return
-  proposalReview.value = proposal; proposalTitle.value = proposal.proposed_title; proposalBody.value = proposal.proposed_body; proposalError.value = null; proposalStale.value = false
+  proposalReview.value = proposal; proposalTitle.value = proposal.proposed_title; proposalBody.value = proposal.proposed_body; proposalError.value = null; proposalOutdated.value = false
 }
 function closeProposalReview(): void { if (!proposalWorking.value) proposalReview.value = null }
 function recompareProposal(proposal: FeedbackProposal): void {
   feedback.value = proposal.feedback; feedbackTarget.value = proposal.target ?? ''; feedbackReadership.value = proposal.readership ?? ''
   feedbackPlatform.value = proposal.platform ?? ''; feedbackValues.value = proposal.values ?? ''
-  proposalReview.value = null; proposalStale.value = false; feedbackOpen.value = true
+  proposalReview.value = null; proposalOutdated.value = false; feedbackOpen.value = true
 }
 function syncDiffScroll(source: 'baseline' | 'proposal'): void {
   if (syncingDiff) return
@@ -175,8 +176,8 @@ async function acceptProposal(): Promise<void> {
     versionNotice.value = { kind: 'accepted', version: master.value.version }
   } catch (cause) {
     const message = unwrapError(cause); await load()
-    proposalStale.value = /obsolete|stale|changed|current version|版本/i.test(message)
-    proposalError.value = proposalStale.value ? '文章已经在其他地方改过了。这份建议不会被套用，请以当前文章重新比较。' : message
+    proposalOutdated.value = /obsolete|changed|current version|版本/i.test(message)
+    proposalError.value = proposalOutdated.value ? '文章已经在其他地方改过了。这份建议不会被套用，请以当前文章重新比较。' : message
   } finally { proposalWorking.value = false }
 }
 async function rejectProposal(): Promise<void> {
@@ -232,7 +233,7 @@ function askToRestoreVersion(version: number): void {
   restoreCandidate.value = version
 }
 function closeRestoreConfirmation(): void { if (!saving.value) restoreCandidate.value = null }
-async function confirmRestoreVersion(): Promise<void> {
+async function restoreVersion(): Promise<void> {
   const version = restoreCandidate.value
   if (saving.value || !master.value || version === null || version === master.value.version) return
   const beforeVersion = master.value.version
@@ -263,26 +264,29 @@ function imageFailed(event: Event): void {
   node.classList.add('image-broken'); node.alt = '图片暂时无法加载'
 }
 async function selectAsset(asset: VisualAsset): Promise<void> {
-  await api.post(`/projects/${id.value}/visuals/assets/${asset.id}/select`, { reason: '在文章中替换图片' })
-  await load()
+  if (!activeImage.value || imageWorking.value) return
+  imageWorking.value = true; imageActionError.value = null
+  try {
+    const response = await api.post<{ master: Master; selected_asset_id: string }>(`/projects/${id.value}/article/images/replace`, {
+      current_asset_id: activeImage.value.id, candidate_asset_id: asset.id,
+    })
+    master.value = response.data.master; lastSaved.value = master.value.updated_at; saveStatus.value = 'saved'
+    await loadOptionalContext(); activeImage.value = asset; imagePrompt.value = asset.prompt
+  } catch (cause) { imageActionError.value = `未换图：${unwrapError(cause)}` } finally { imageWorking.value = false }
 }
 async function replaceImage(asset: VisualAsset): Promise<void> {
-  if (!master.value || !activeImage.value) return
-  const oldImage = imageMarkdown(activeImage.value)
-  if (!master.value.body.includes(oldImage)) { error.value = '当前图片位置已变动，请关闭后重新选择。'; return }
   await selectAsset(asset)
-  master.value.body = master.value.body.replace(oldImage, imageMarkdown(asset)); noteChange(); await save()
-  activeImage.value = asset; imagePrompt.value = asset.prompt
 }
 async function editImage(): Promise<void> {
   if (!activeImage.value || !imagePrompt.value.trim() || imageWorking.value) return
   imageWorking.value = true; error.value = null
   try {
-    const created = (await api.post<VisualAsset>(`/projects/${id.value}/visuals/assets/edit`, {
+    await api.post<VisualAsset>(`/projects/${id.value}/visuals/assets/edit`, {
       slot_id: activeImage.value.slot_id, prompt: imagePrompt.value.trim(), reference_asset_id: activeImage.value.id,
-    }, { timeout: GENERATION_TIMEOUT_MS })).data
-    await replaceImage(created)
-  } catch (cause) { error.value = `图片修改失败：${unwrapError(cause)}` } finally { imageWorking.value = false }
+    }, { timeout: GENERATION_TIMEOUT_MS })
+    await loadOptionalContext()
+    imagePrompt.value = activeImage.value.prompt
+  } catch (cause) { imageActionError.value = `图片修改失败：${unwrapError(cause)}` } finally { imageWorking.value = false }
 }
 async function removeImage(): Promise<void> {
   if (!master.value || !activeImage.value) return
@@ -348,12 +352,12 @@ onMounted(async () => { drawerWidth.value = Math.max(280, Math.min(420, window.i
         <div class="diff-columns"><section class="diff-pane"><h3>正式版本</h3><p class="diff-title">{{ master.title }}</p><pre ref="baselinePane" tabindex="0" @scroll="syncDiffScroll('baseline')">{{ master.body }}</pre></section><section class="diff-pane"><h3>建议版本</h3><p class="diff-title">{{ proposalTitle }}</p><textarea v-model="proposalBody" aria-label="建议版本正文" @scroll="syncDiffScroll('proposal')" ref="proposalPane" rows="24" /></section></div>
         <section class="diff-legend" aria-label="逐行修改"><h3>具体改动</h3><div v-for="(row, index) in diffRows" :key="`${row.kind}-${index}`" class="diff-row" :class="row.kind"><span>{{ row.kind === 'add' ? '+' : row.kind === 'remove' ? '−' : ' ' }}</span><code>{{ row.text || ' ' }}</code></div></section>
         <p v-if="proposalError" class="inline-error" role="alert">{{ proposalError }}</p>
-        <div class="proposal-review-actions"><button type="button" class="quiet-button" :disabled="proposalWorking" @click="closeProposalReview">返回文章</button><button type="button" class="danger-button" :disabled="proposalWorking" @click="rejectProposal">拒绝提案</button><button type="button" class="save-button" :disabled="proposalWorking || !proposalTitle.trim() || !proposalBody.trim() || proposalStale" @click="acceptProposal">{{ proposalWorking ? '正在确认…' : '接受为新版本' }}</button></div>
-        <div v-if="proposalStale" class="proposal-recompare" role="alert"><strong>这份建议基于修改前的文章，不能直接套用。</strong><p>正式文章保持不变。重新比较会以当前文章生成一份新提案。</p><button type="button" class="save-button" :disabled="proposalWorking" @click="recompareProposal(proposalReview)">以当前文章重新比较</button></div>
+        <div class="proposal-review-actions"><button type="button" class="quiet-button" :disabled="proposalWorking" @click="closeProposalReview">返回文章</button><button type="button" class="danger-button" :disabled="proposalWorking" @click="rejectProposal">拒绝提案</button><button type="button" class="save-button" :disabled="proposalWorking || !proposalTitle.trim() || !proposalBody.trim() || proposalOutdated" @click="acceptProposal">{{ proposalWorking ? '正在确认…' : '接受为新版本' }}</button></div>
+        <div v-if="proposalOutdated" class="proposal-recompare" role="alert"><strong>这份建议基于修改前的文章，不能直接套用。</strong><p>正式文章保持不变。重新比较会以当前文章生成一份新提案。</p><button type="button" class="save-button" :disabled="proposalWorking" @click="recompareProposal(proposalReview)">以当前文章重新比较</button></div>
       </section>
     </a-drawer>
 
-    <a-modal :open="restoreCandidate !== null" :title="`确认恢复版本 ${restoreCandidate ?? ''}`" :closable="!saving" :mask-closable="!saving" :ok-button-props="{ loading: saving }" ok-text="恢复并创建新版本" cancel-text="保留当前版本" @ok="confirmRestoreVersion" @cancel="closeRestoreConfirmation">
+    <a-modal :open="restoreCandidate !== null" :title="`确认恢复版本 ${restoreCandidate ?? ''}`" :closable="!saving" :mask-closable="!saving" :ok-button-props="{ loading: saving }" ok-text="恢复并创建新版本" cancel-text="保留当前版本" @ok="restoreVersion" @cancel="closeRestoreConfirmation">
       <p>确认恢复版本 {{ restoreCandidate }}。你将把它的内容复制为一个新的正式版本。</p><p>当前文章不会被覆盖，所有旧版本都会继续保留。</p>
     </a-modal>
 
@@ -362,7 +366,16 @@ onMounted(async () => { drawerWidth.value = Math.max(280, Math.min(420, window.i
     </a-drawer>
 
     <a-drawer v-model:open="detailsOpen" title="图片详情" placement="right" :width="drawerWidth">
-      <template v-if="activeImage"><img v-if="activeImage.file_path" class="detail-image" :src="imageUrl(activeImage)" alt="文章图片" @error="imageFailed" /><p class="image-meta">{{ activeImage.model }} · {{ activeImage.created_at }}</p><label for="image-prompt">怎么改这张图？</label><textarea id="image-prompt" v-model="imagePrompt" rows="4" /><div class="image-actions"><button type="button" class="quiet-button" @click="openImageAnnotation(activeImage)">对这张图提意见</button><button type="button" class="save-button" :disabled="imageWorking || !imagePrompt.trim()" @click="editImage">{{ imageWorking ? '正在修改…' : '修改图片' }}</button><button type="button" class="danger-button" @click="removeImage">从文章移除</button></div><div v-if="replacementAssets.length" class="replacement-list"><h3>换成已有候选</h3><button v-for="asset in replacementAssets" :key="asset.id" type="button" @click="replaceImage(asset)">{{ asset.prompt }}</button></div><p v-if="activeImage.failure" class="inline-error">{{ activeImage.failure }}</p></template>
+      <template v-if="activeImage">
+        <img v-if="activeImage.file_path" class="detail-image" :src="imageUrl(activeImage)" alt="文章图片" @error="imageFailed" />
+        <p class="image-meta">当前图片 · {{ activeImage.model }} · {{ activeImage.created_at }}</p>
+        <p class="image-meta">版本 {{ activeImage.version ?? 1 }} · 预估/记录成本 ${{ (activeImage.cost_usd ?? 0).toFixed(4) }}</p>
+        <label for="image-prompt">怎么改这张图？</label><textarea id="image-prompt" v-model="imagePrompt" rows="4" />
+        <div class="image-actions"><button type="button" class="quiet-button" @click="openImageAnnotation(activeImage)">对这张图提意见</button><button type="button" class="save-button" :disabled="imageWorking || !imagePrompt.trim()" @click="editImage">{{ imageWorking ? '正在生成候选…' : '生成修改候选' }}</button><button type="button" class="danger-button" @click="removeImage">从文章移除</button></div>
+        <p class="image-meta">生成候选不会替换文章。比较后由你选择，关闭抽屉即保留原图。</p>
+        <div v-if="replacementAssets.length" class="replacement-list"><h3>候选对比</h3><section v-for="asset in replacementAssets" :key="asset.id" class="candidate-card"><img :src="imageUrl(asset)" alt="图片候选" @error="imageFailed" /><p>{{ asset.prompt }}</p><small>{{ asset.model }} · v{{ asset.version ?? 1 }} · ${{ (asset.cost_usd ?? 0).toFixed(4) }}<template v-if="asset.reference_asset_id"> · 基于当前图修改</template></small><button type="button" :disabled="imageWorking" @click="replaceImage(asset)">{{ imageWorking ? '正在选择…' : '选择这张图片' }}</button></section></div>
+        <p v-if="imageActionError" class="inline-error">{{ imageActionError }}</p><p v-if="activeImage.failure" class="inline-error">{{ activeImage.failure }}</p>
+      </template>
     </a-drawer>
   </main>
 </template>
@@ -370,4 +383,5 @@ onMounted(async () => { drawerWidth.value = Math.max(280, Math.min(420, window.i
 <style scoped>
 .article-workspace{min-height:100vh;background:#f5f1e9;color:#28251f}.topbar{position:sticky;top:0;z-index:5;display:flex;min-height:62px;align-items:center;justify-content:space-between;gap:16px;padding:0 clamp(18px,5vw,72px);border-bottom:1px solid #ded7cb;background:rgba(255,253,248,.94);backdrop-filter:blur(12px)}button{font:inherit;cursor:pointer}.wordmark{border:0;background:transparent;color:#342d26;font:700 20px Georgia,'Songti SC',serif}.top-actions{display:flex;align-items:center;gap:10px}.progress,.save-state{color:#72695e;font-size:13px}.unsaved{color:#9a542e}.quiet-button,.save-button,.local-warning button,.failed button,.versions button,.image-actions button,.replacement-list button{border:0;border-radius:7px;padding:8px 11px}.quiet-button{background:transparent;color:#5f584f}.feedback-entry{color:#6c432e}.save-button,.local-warning button,.failed button{background:#2f5d4f;color:#fffdf8}.save-button:disabled{cursor:not-allowed;background:#bcb4a8}.generating,.failed{max-width:620px;margin:16vh auto;padding:40px;border:1px solid #dfd8cb;border-radius:12px;background:#fffdfa}.generating p{font:32px Georgia,serif;margin:0 0 12px}.generating small{color:#756d63}.article-shell{width:min(820px,calc(100% - 36px));margin:44px auto 88px}.local-warning,.secondary-warning{display:flex;align-items:center;justify-content:space-between;gap:15px;margin-bottom:16px;padding:11px 13px;border:1px solid #e5c4ae;border-radius:8px;background:#fff8f2;color:#8c4429;font-size:13px}.secondary-warning{border-color:#d9d5cd;background:#faf9f5;color:#756b5f}.title{box-sizing:border-box;width:100%;margin:0 0 16px;border:0;border-bottom:1px solid #d8d0c5;outline:0;background:transparent;padding:0 0 15px;font:clamp(35px,5vw,58px)/1.12 Georgia,'Songti SC',serif;color:#29251e}.title:focus{border-color:#9c522f}.reading-switch{display:flex;gap:4px;margin-bottom:18px}.reading-switch button{border:0;border-radius:5px;background:transparent;padding:6px 10px;color:#777065;font-size:13px}.reading-switch button.active{background:#e7ddd0;color:#433a30;font-weight:700}.preview{min-height:460px;background:#fffdfa;border:1px solid #e2dbd0;border-radius:12px;padding:clamp(24px,6vw,70px);font:18px/1.9 Georgia,'Songti SC',serif;box-shadow:0 15px 45px rgba(79,61,38,.05)}.preview :deep(h2){margin-top:2em;font-size:28px}.preview :deep(p){margin:1em 0}.preview :deep(img){display:block;max-width:100%;margin:28px auto;border-radius:7px;cursor:pointer}.preview :deep(img.image-broken){min-height:180px;outline:1px dashed #b35b42;background:#fff5ef}.selection-comment{position:fixed;z-index:20;border:0;border-radius:999px;background:#2f5d4f;color:#fffdf8;padding:8px 13px;box-shadow:0 6px 20px rgba(38,61,49,.22)}.editor-panel{background:#fffdfa;border:1px solid #e2dbd0;border-radius:12px;padding:22px}.editor-panel label,.feedback-form label,.proposal-diff label{display:block;margin:14px 0 9px;color:#665e54;font-size:13px;font-weight:700}.editor-panel textarea,.image-actions+*,#image-prompt,.feedback-form textarea,.feedback-form input,.proposal-diff textarea,.proposal-diff input{box-sizing:border-box;width:100%;border:1px solid #d8d0c3;border-radius:8px;background:#fffdfa;padding:15px;font:14px/1.7 ui-monospace,SFMono-Regular,monospace;color:#2d2924}.editor-panel textarea:focus,#image-prompt:focus,.feedback-form textarea:focus,.feedback-form input:focus,.proposal-diff textarea:focus,.proposal-diff input:focus{outline:2px solid rgba(159,77,49,.24);border-color:#9f4d31}.editor-panel p,.feedback-form p{margin:9px 0 0;color:#776f65;font-size:12px}.feedback-form .scope,.proposal-diff .scope{font-size:14px;color:#4f453a}.feedback-form blockquote,.proposal-diff blockquote{margin:10px 0;padding:10px 13px;border-left:3px solid #b28257;background:#fbf6ef;color:#554b40}.annotation-categories{display:flex;flex-wrap:wrap;gap:7px;margin:17px 0 0;border:0;padding:0}.annotation-categories legend{margin-bottom:8px;color:#665e54;font-size:13px;font-weight:700}.annotation-categories button{border:1px solid #d8d0c3;border-radius:99px;background:#fffdfa;padding:5px 10px;color:#65594e;font-size:12px}.annotation-categories button.active{border-color:#2f5d4f;background:#e7f0ea;color:#214437}.feedback-form .save-button{margin-top:20px}.proposal-notice,.annotation-notice{margin:18px 0;padding:12px 14px;border-left:3px solid #b28257;background:#fbf6ef;color:#65594e;font-size:13px}.proposal-notice p,.annotation-notice p{margin:5px 0}.proposal-notice button,.annotation-notice button{border:0;background:transparent;color:#7c432a;text-decoration:underline}.annotation-notice .orphaned{color:#9a542e}.annotation-notice em{font-style:normal}.inline-error{margin:16px 0;color:#a44130}.failed-actions{display:flex;gap:10px}.failed button.manual,.danger-button{background:#eee4d8;color:#5b382e}.drawer-section{padding:0 0 22px;margin-bottom:20px;border-bottom:1px solid #e8e1d6}.drawer-section h3{margin:0 0 6px;font:700 19px Georgia,'Songti SC',serif}.drawer-section>p{color:#766e63;font-size:13px;line-height:1.6}.versions,.materials{display:grid;gap:9px;margin:14px 0 0;padding:0;list-style:none}.versions li{display:flex;align-items:center;justify-content:space-between;gap:12px}.versions strong,.versions small,.materials strong,.materials small{display:block}.versions small,.materials small{margin-top:3px;color:#80776c;font-size:12px}.versions button{background:#eee7db;color:#51473c}.image-row,.replacement-list button{display:block;width:100%;margin-top:8px;border:1px solid #e2dad0;border-radius:7px;background:#fffdfa;padding:10px;text-align:left;color:#51483e;font-size:12px}.detail-image{width:100%;border-radius:9px;background:#f0ebe2}.image-meta{color:#80776c;font-size:12px}.image-actions{display:flex;gap:9px;margin-top:14px}.replacement-list h3{margin:24px 0 2px;font:700 16px Georgia,'Songti SC',serif}.proposal-diff{padding:2px 4px 28px}.diff-risk{font-size:13px;color:#765e4b}.diff-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}.diff-pane{min-width:0}.diff-pane h3,.diff-legend h3{font:700 16px Georgia,'Songti SC',serif}.diff-title{min-height:1.5em;margin:0 0 8px;color:#5a5146;font-weight:700}.diff-pane pre,.diff-pane textarea{box-sizing:border-box;width:100%;height:440px;margin:0;overflow:auto;white-space:pre-wrap;tab-size:2}.diff-pane pre{border:1px solid #d8d0c3;border-radius:8px;background:#f8f4ed;padding:15px;font:14px/1.7 ui-monospace,SFMono-Regular,monospace}.diff-legend{margin-top:22px}.diff-row{display:grid;grid-template-columns:25px 1fr;padding:3px 8px;border-left:3px solid transparent;white-space:pre-wrap}.diff-row code{overflow-wrap:anywhere}.diff-row.add{border-left-color:#3f8b62;background:#edf8f0}.diff-row.remove{border-left-color:#bf5e4a;background:#fff0ec}.proposal-review-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:21px}@media(max-width:760px){.diff-columns{grid-template-columns:1fr}.diff-pane pre,.diff-pane textarea{height:280px}.proposal-review-actions{align-items:stretch;flex-direction:column}.proposal-review-actions button{width:100%}}@media(max-width:640px){.topbar{align-items:flex-start;min-height:unset;padding-top:13px;padding-bottom:13px}.top-actions{justify-content:flex-end;flex-wrap:wrap}.progress,.save-state{width:100%;text-align:right}.article-shell{margin-top:28px}.local-warning{align-items:flex-start;flex-direction:column}.local-warning button{width:100%}.preview{min-height:360px;padding:25px 21px;font-size:17px}.title{font-size:38px}.image-actions{flex-direction:column}.image-actions button{width:100%}}
 .version-notice{display:flex;align-items:center;gap:10px;margin:16px 0;padding:12px 14px;border:1px solid #b9d1c0;border-radius:8px;background:#edf7ef;color:#254c36;font-size:13px}.version-notice span{flex:1}.version-notice button{border:0;background:transparent;color:#254c36;text-decoration:underline}.proposal-recompare{margin-top:16px;padding:14px;border:1px solid #e5c4ae;border-radius:8px;background:#fff8f2;color:#7d452e}.proposal-recompare p{margin:6px 0 13px;font-size:13px}@media(max-width:640px){.version-notice{align-items:flex-start;flex-wrap:wrap}.version-notice span{flex-basis:100%}}
+.candidate-card{margin-top:12px;border:1px solid #ddd4c8;border-radius:8px;padding:10px;background:#fbf8f2}.candidate-card img{display:block;width:100%;max-height:180px;object-fit:cover;border-radius:5px}.candidate-card p{margin:8px 0 4px;font-size:13px;line-height:1.5}.candidate-card small{display:block;color:#80776c;font-size:11px}.candidate-card button{margin-top:10px;border:0;border-radius:6px;background:#2f5d4f;padding:7px 10px;color:#fffdf8}.candidate-card button:disabled{background:#bcb4a8}
 </style>

@@ -103,6 +103,22 @@ def save_feedback_acceptance(project_id: str, *, proposal_id: str, title: str, b
                        projects_root=projects_root)
 
 
+def save_image_replacement(project_id: str, *, current_asset_id: str, candidate_asset_id: str,
+                           title: str, body: str, now: str,
+                           projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> MasterDocument:
+    """Append an explicitly accepted article-image replacement to history.
+
+    Asset IDs are retained in the immutable reason only for auditability; the
+    visual files and the prior Markdown snapshot are never overwritten.
+    """
+    if not valid_sidecar_id(current_asset_id, "vas_") or not valid_sidecar_id(candidate_asset_id, "vas_"):
+        raise MasterDocumentError("image replacement requires valid visual asset ids")
+    current = _required_master(project_id, projects_root)
+    return _write_next(project_id, title=title, body=body, now=now,
+                       reason=f"image:{current_asset_id}->{candidate_asset_id}", current=current,
+                       projects_root=projects_root)
+
+
 def restore_version(project_id: str, version: int, *, now: str,
                     projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> MasterDocument:
     """Restore a historical version by creating a new version, never rewinding."""

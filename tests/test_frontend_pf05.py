@@ -25,7 +25,7 @@ def test_article_workspace_is_article_first_and_hides_legacy_cockpit_language() 
     ):
         assert contract in source
 
-    for legacy_term in ("视觉圣经", "审批 actor", "stale", "创作流程", "内部 ID"):
+    for legacy_term in ("视觉圣经", "审批 actor", "创作流程", "内部 ID"):
         assert legacy_term not in source
 
 
@@ -65,8 +65,24 @@ def test_article_workspace_keeps_image_actions_local_to_article() -> None:
         'editImage',
         'removeImage',
         'viewImageDetails',
-        '`/projects/${id.value}/visuals/assets/${asset.id}/select`',
+        '`/projects/${id.value}/article/images/replace`',
         '`/projects/${id.value}/visuals/assets/edit`',
         '图片暂时无法加载',
     ):
         assert contract in source
+
+
+def test_article_workspace_requires_explicit_choice_before_image_markdown_changes() -> None:
+    source = VIEW.read_text(encoding="utf-8")
+
+    for contract in (
+        '`/projects/${id.value}/article/images/replace`',
+        '生成候选不会替换文章',
+        '候选对比',
+        '选择这张图片',
+        '预估/记录成本',
+    ):
+        assert contract in source
+    # A new candidate must remain review-only; it may not be passed directly to
+    # the previous replacement helper on creation.
+    assert 'await replaceImage(created)' not in source
