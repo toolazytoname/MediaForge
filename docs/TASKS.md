@@ -7,6 +7,12 @@
 
 ---
 
+## 2026-08-12 产品定义访谈固化（已获批准，按新任务树实施）
+
+> 产品所有者在旧 P0 实施后仍明确表示不会使用，并进一步确认了新的个人创作、人工批注/diff、平台交付、自动化账号、作者定位和长期知识方向。新的事实源是 [2026-08-12-confirmed-product-definition.md](./product-validation/2026-08-12-confirmed-product-definition.md)，详细实施树是 [2026-08-12-confirmed-product-tasklist.md](./product-validation/2026-08-12-confirmed-product-tasklist.md)。
+>
+> 产品所有者已于 2026-08-12 明确要求“根据任务开始干吧，全干完”，满足 tasklist 的 `DOC-02` 授权条件。旧 P0-A—P0-G 的提交是待审查复用的工程资产，不代表新产品定义已通过。与旧“今天 / 灵感 / 项目”首页、个人路径模式选择或固定阶段驾驶舱冲突时，以 2026-08-12 产品定义为准。现在按 `UX-00 → PF-00 → G1` 的顺序在独立 worktree 开工；G4 前不得真实发布、扩视频/平台、迁移 schema 或实现长期知识库。
+
 ## 产品重启 R — 创作工作台黄金路径（2026-08-09 起）
 
 > **优先级**：本章节的 R0 → R9 是当前产品重启的正式执行顺序。它们优先于未完成的遗留 M* 任务；已完成的历史记录保持不动。完整产品方向见 [PRODUCT_RESET_PLAN.md](./PRODUCT_RESET_PLAN.md)。
