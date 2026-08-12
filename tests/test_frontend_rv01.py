@@ -5,3 +5,9 @@ def test_article_workspace_has_explicit_whole_article_feedback_entry_and_review_
     source = (Path(__file__).parents[1] / "frontend/src/views/ArticleWorkspace.vue").read_text(encoding="utf-8")
     for contract in ("对整篇提意见", "整篇文章", "减少说教感，保留真实失败", "AI 只会生成提案，不会直接改写正式文章", "/article/feedback", "提案已生成，正式文章尚未修改", "重试生成提案"):
         assert contract in source
+
+
+def test_article_workspace_opens_a_legible_proposal_review_without_replacing_the_article():
+    source = (Path(__file__).parents[1] / "frontend/src/views/ArticleWorkspace.vue").read_text(encoding="utf-8")
+    for contract in ("审阅修改提案", "正式版本", "建议版本", "接受为新版本", "拒绝提案", "proposal-diff", "diffRows", "@scroll=\"syncDiffScroll"):
+        assert contract in source

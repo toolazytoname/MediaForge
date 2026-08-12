@@ -88,6 +88,21 @@ def save_manual(project_id: str, *, title: str, body: str, now: str,
                        projects_root=projects_root)
 
 
+def save_feedback_acceptance(project_id: str, *, proposal_id: str, title: str, body: str, now: str,
+                             projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> MasterDocument:
+    """Create a new master version after an explicitly accepted article proposal.
+
+    This deliberately shares the same immutable writer as a manual save.  The
+    reason is retained in history so the proposal remains traceable without
+    changing the Project or SQLite contracts.
+    """
+    if not valid_sidecar_id(proposal_id, "afp_"):
+        raise MasterDocumentError(f"invalid feedback proposal id: {proposal_id!r}")
+    current = _required_master(project_id, projects_root)
+    return _write_next(project_id, title=title, body=body, now=now, reason=f"feedback:{proposal_id}", current=current,
+                       projects_root=projects_root)
+
+
 def restore_version(project_id: str, version: int, *, now: str,
                     projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> MasterDocument:
     """Restore a historical version by creating a new version, never rewinding."""

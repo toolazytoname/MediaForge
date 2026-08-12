@@ -72,7 +72,8 @@ def _feedback_dict(proposal: article_feedback.ArticleFeedbackProposal, master: m
             "base_hash": proposal.base_hash, "status": proposal.status,
             "state": article_feedback.proposal_state(proposal, master), "proposed_title": proposal.proposed_title,
             "proposed_body": proposal.proposed_body, "error": proposal.error, "created_at": proposal.created_at,
-            "updated_at": proposal.updated_at}
+            "updated_at": proposal.updated_at, "decision": proposal.decision, "decided_at": proposal.decided_at,
+            "accepted_title": proposal.accepted_title, "accepted_body": proposal.accepted_body}
 
 
 def _annotation_dict(item: local_annotations.LocalAnnotation) -> dict[str, Any]:
@@ -124,6 +125,17 @@ def _feedback_input(body: dict[str, Any]) -> dict[str, str | None]:
             raise article_feedback.ArticleFeedbackError(f"{name} must be non-empty text when provided")
         result[name] = value.strip() if isinstance(value, str) else None
     return result
+
+
+def _feedback_accept_input(body: dict[str, Any]) -> tuple[str, str]:
+    if not isinstance(body, dict) or set(body) != {"title", "body"}:
+        raise article_feedback.ArticleFeedbackError("feedback acceptance must contain only title and body")
+    title, text = body["title"], body["body"]
+    if not isinstance(title, str) or not title.strip() or not isinstance(text, str) or not text.strip():
+        raise article_feedback.ArticleFeedbackError("feedback acceptance title and body must be non-empty text")
+    if len(title.strip()) > 500 or len(text.strip()) > 200_000:
+        raise article_feedback.ArticleFeedbackError("feedback acceptance is too large")
+    return title.strip(), text.strip()
 
 
 def _annotation_input(body: dict[str, Any], *, kind: str) -> tuple[str, str, tuple[str, ...]]:
@@ -428,7 +440,7 @@ def get_article_feedback(project_id: str) -> dict[str, Any]:
         master = master_store.load_master(project_id, projects_root=_root())
         if master is None:
             raise master_store.MasterDocumentError(f"master not found: {project_id}")
-        return {"items": [_feedback_dict(item, master) for item in article_feedback.load_proposals(project_id, projects_root=_root())]}
+        return {"items": [_feedback_dict(item, master) for item in article_feedback.recover_acceptances(project_id, projects_root=_root())]}
     except (article_feedback.ArticleFeedbackError, master_store.MasterDocumentError) as error:
         return _raise_feedback_error(project_id, error)
 
@@ -494,6 +506,38 @@ def retry_article_feedback(project_id: str, proposal_id: str, body: dict[str, An
         return _feedback_dict(ready, master)
     except Exception as error:
         raise _error(502, "llm_feedback_failed", f"AI feedback proposal failed: {error}") from error
+
+
+@router.post("/projects/{project_id}/article/feedback/{proposal_id}/accept")
+def accept_article_feedback(project_id: str, proposal_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Explicitly accept a reviewed proposal; stale bases are a hard conflict."""
+    try:
+        title, text = _feedback_accept_input(body)
+        proposal = article_feedback.accept_proposal(project_id, proposal_id, title=title, body=text,
+                                                    now=_now(), projects_root=_root())
+        master = master_store.load_master(project_id, projects_root=_root())
+        assert master is not None
+        return {"master": _master_dict(master), "proposal": _feedback_dict(proposal, master)}
+    except article_feedback.ArticleFeedbackError as error:
+        if "obsolete" in str(error):
+            raise _error(409, "feedback_obsolete", error) from error
+        return _raise_feedback_error(project_id, error)
+    except master_store.MasterDocumentError as error:
+        return _raise_feedback_error(project_id, error)
+
+
+@router.post("/projects/{project_id}/article/feedback/{proposal_id}/reject")
+def reject_article_feedback(project_id: str, proposal_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Reject a proposal without writing the master document."""
+    if body:
+        raise _error(400, "invalid_feedback_rejection", "feedback rejection request must be empty")
+    try:
+        proposal = article_feedback.reject_proposal(project_id, proposal_id, now=_now(), projects_root=_root())
+        master = master_store.load_master(project_id, projects_root=_root())
+        assert master is not None
+        return _feedback_dict(proposal, master)
+    except (article_feedback.ArticleFeedbackError, master_store.MasterDocumentError) as error:
+        return _raise_feedback_error(project_id, error)
 
 
 def _run_feedback_proposal(project_id: str, master: master_store.MasterDocument, data: dict[str, str | None]) -> article_feedback.ArticleFeedbackProposal:

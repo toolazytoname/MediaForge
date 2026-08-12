@@ -45,6 +45,10 @@ class ArticleFeedbackProposal:
     proposed_title: str | None
     proposed_body: str | None
     error: str | None
+    decision: str | None
+    decided_at: str | None
+    accepted_title: str | None
+    accepted_body: str | None
     created_at: str
     updated_at: str
 
@@ -60,7 +64,7 @@ def create_proposal(project_id: str, *, feedback: str, target: str | None, reade
         _id(proposal_id or new_id("afp")), _project_id(project_id), "whole_article", _text("feedback", feedback),
         _optional("target", target), _optional("readership", readership), _optional("platform", platform), _optional("values", values),
         master.version, master_hash(master), "ready", _text("proposed_title", proposed_title), _text("proposed_body", proposed_body),
-        None, _timestamp("created_at", now), _timestamp("updated_at", now),
+        None, None, None, None, None, _timestamp("created_at", now), _timestamp("updated_at", now),
     )
     return _append(project_id, proposal, projects_root)
 
@@ -75,7 +79,7 @@ def create_failed_proposal(project_id: str, *, feedback: str, target: str | None
     proposal = ArticleFeedbackProposal(
         _id(proposal_id or new_id("afp")), _project_id(project_id), "whole_article", _text("feedback", feedback),
         _optional("target", target), _optional("readership", readership), _optional("platform", platform), _optional("values", values),
-        master.version, master_hash(master), "failed", None, None, _text("error", error),
+        master.version, master_hash(master), "failed", None, None, _text("error", error), None, None, None, None,
         _timestamp("created_at", now), _timestamp("updated_at", now),
     )
     return _append(project_id, proposal, projects_root)
@@ -93,6 +97,84 @@ def complete_failed_proposal(project_id: str, proposal_id: str, *, proposed_titl
                           proposed_body=_text("proposed_body", proposed_body), error=None, updated_at=_timestamp("updated_at", now))
         _write(project_id, tuple(updated if item.id == proposal_id else item for item in items), projects_root)
         return updated
+
+
+def accept_proposal(project_id: str, proposal_id: str, *, title: str, body: str, now: str,
+                    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> ArticleFeedbackProposal:
+    """Accept a current proposal as a new immutable master version.
+
+    The comparison checks *both* the version and content hash immediately
+    before the shared master writer is called.  A stale proposal is never
+    applied, even if its suggested text itself looks valid.
+    """
+    project_id = _project_id(project_id); proposal_id = _id(proposal_id)
+    timestamp = _timestamp("decided_at", now)
+    with _lock(project_id):
+        items = load_proposals(project_id, projects_root=projects_root)
+        proposal = _find(items, proposal_id)
+        if proposal.status == "accepting":
+            return _recover_one_acceptance(project_id, proposal, items, projects_root)
+        if proposal.status != "ready":
+            raise ArticleFeedbackError(f"feedback proposal is already {proposal.status}: {proposal.id}")
+        master = _required_master(project_id, projects_root)
+        if proposal_state(proposal, master) != "current":
+            raise ArticleFeedbackError("feedback proposal is obsolete; compare it with the current article again")
+        accepted_title = _text("title", title); accepted_body = _text("body", body)
+        # Intent first: two independent sidecars cannot share an OS-level
+        # transaction.  If the process dies after master.json is written, the
+        # durable intent plus its history reason lets the next request finish
+        # the decision without guessing or applying the text twice.
+        intent = replace(proposal, status="accepting", decision="accepted", decided_at=timestamp,
+                         accepted_title=accepted_title, accepted_body=accepted_body, updated_at=timestamp)
+        _write(project_id, tuple(intent if item.id == proposal_id else item for item in items), projects_root)
+        try:
+            master_documents.save_feedback_acceptance(project_id, proposal_id=proposal.id, title=accepted_title,
+                                                      body=accepted_body, now=timestamp, projects_root=projects_root)
+        except Exception:
+            # A normal write error can safely go back to ready.  A hard crash
+            # leaves ``accepting`` and is handled by recover_acceptances().
+            _write(project_id, items, projects_root)
+            raise
+        return _recover_one_acceptance(project_id, intent, (*items,), projects_root)
+
+
+def reject_proposal(project_id: str, proposal_id: str, *, now: str,
+                    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> ArticleFeedbackProposal:
+    """Record rejection only; the authoritative master sidecar is untouched."""
+    project_id = _project_id(project_id); proposal_id = _id(proposal_id)
+    timestamp = _timestamp("decided_at", now)
+    with _lock(project_id):
+        items = load_proposals(project_id, projects_root=projects_root)
+        proposal = _find(items, proposal_id)
+        if proposal.status != "ready":
+            raise ArticleFeedbackError(f"feedback proposal is already {proposal.status}: {proposal.id}")
+        updated = replace(proposal, status="rejected", decision="rejected", decided_at=timestamp, updated_at=timestamp)
+        _write(project_id, tuple(updated if item.id == proposal_id else item for item in items), projects_root)
+        return updated
+
+
+def recover_acceptances(project_id: str, *, projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> tuple[ArticleFeedbackProposal, ...]:
+    """Finish an interrupted accepted-proposal audit record, if any.
+
+    Only an ``accepting`` intent whose corresponding immutable master history
+    entry exists can be finalized.  Otherwise it remains visibly interrupted;
+    this function never writes a master document itself.
+    """
+    project_id = _project_id(project_id)
+    with _lock(project_id):
+        items = load_proposals(project_id, projects_root=projects_root)
+        changed = False; resolved: list[ArticleFeedbackProposal] = []
+        for proposal in items:
+            if proposal.status != "accepting":
+                resolved.append(proposal); continue
+            try:
+                repaired = _recover_one_acceptance(project_id, proposal, items, projects_root, write=False)
+            except ArticleFeedbackError:
+                repaired = proposal
+            changed = changed or repaired is not proposal; resolved.append(repaired)
+        result = tuple(resolved)
+        if changed: _write(project_id, result, projects_root)
+        return result
 
 
 def load_proposals(project_id: str, *, projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> tuple[ArticleFeedbackProposal, ...]:
@@ -138,6 +220,20 @@ def _write(project_id: str, items: tuple[ArticleFeedbackProposal, ...], projects
     tmp.replace(path)
 
 
+def _recover_one_acceptance(project_id: str, proposal: ArticleFeedbackProposal,
+                            items: tuple[ArticleFeedbackProposal, ...], projects_root: str | Path,
+                            *, write: bool = True) -> ArticleFeedbackProposal:
+    if proposal.status != "accepting" or proposal.accepted_title is None or proposal.accepted_body is None:
+        raise ArticleFeedbackError("feedback acceptance recovery is invalid")
+    master = _required_master(project_id, projects_root)
+    reason = f"feedback:{proposal.id}"
+    if not any(snapshot.reason == reason for snapshot in master.history):
+        raise ArticleFeedbackError("feedback acceptance is interrupted; the master write was not completed")
+    accepted = replace(proposal, status="accepted")
+    if write: _write(project_id, tuple(accepted if item.id == proposal.id else item for item in items), projects_root)
+    return accepted
+
+
 def _required_master(project_id: str, projects_root: str | Path) -> master_documents.MasterDocument:
     try:
         master = master_documents.load_master(_project_id(project_id), projects_root=projects_root)
@@ -156,22 +252,31 @@ def _ensure_project(project_id: str, projects_root: str | Path) -> None:
 
 
 def _from_payload(payload: Any, expected_project_id: str) -> ArticleFeedbackProposal:
-    if not isinstance(payload, dict) or set(payload) != set(ArticleFeedbackProposal.__dataclass_fields__):
+    legacy_fields = set(ArticleFeedbackProposal.__dataclass_fields__) - {"decision", "decided_at", "accepted_title", "accepted_body"}
+    if not isinstance(payload, dict) or set(payload) not in (set(ArticleFeedbackProposal.__dataclass_fields__), legacy_fields):
         raise ArticleFeedbackError("feedback proposal has missing or unknown fields")
+    if set(payload) == legacy_fields:
+        payload = {**payload, "decision": None, "decided_at": None, "accepted_title": None, "accepted_body": None}
     item = ArticleFeedbackProposal(
         _id(payload["id"]), _project_id(payload["project_id"]), payload["scope"], _text("feedback", payload["feedback"]),
         _optional("target", payload["target"]), _optional("readership", payload["readership"]), _optional("platform", payload["platform"]), _optional("values", payload["values"]),
         _version(payload["base_version"]), _hash(payload["base_hash"]), payload["status"], _nullable_text("proposed_title", payload["proposed_title"]),
         _nullable_text("proposed_body", payload["proposed_body"]), _nullable_text("error", payload["error"]),
+        _decision(payload["decision"]), _nullable_timestamp("decided_at", payload["decided_at"]),
+        _nullable_text("accepted_title", payload["accepted_title"]), _nullable_text("accepted_body", payload["accepted_body"]),
         _timestamp("created_at", payload["created_at"]), _timestamp("updated_at", payload["updated_at"]),
     )
     if item.project_id != expected_project_id or item.scope != "whole_article":
         raise ArticleFeedbackError("feedback proposal project or scope is invalid")
-    if item.status == "ready" and (item.proposed_title is None or item.proposed_body is None or item.error is not None):
+    if item.status == "ready" and (item.proposed_title is None or item.proposed_body is None or item.error is not None or item.decision is not None or item.decided_at is not None):
         raise ArticleFeedbackError("ready feedback proposal is invalid")
-    if item.status == "failed" and (item.proposed_title is not None or item.proposed_body is not None or item.error is None):
+    if item.status == "failed" and (item.proposed_title is not None or item.proposed_body is not None or item.error is None or item.decision is not None or item.decided_at is not None):
         raise ArticleFeedbackError("failed feedback proposal is invalid")
-    if item.status not in {"ready", "failed"}:
+    if item.status in {"accepted", "accepting"} and (item.decision != "accepted" or item.decided_at is None or item.accepted_title is None or item.accepted_body is None or item.error is not None):
+        raise ArticleFeedbackError("accepted feedback proposal is invalid")
+    if item.status == "rejected" and (item.decision != "rejected" or item.decided_at is None or item.accepted_title is not None or item.accepted_body is not None or item.error is not None):
+        raise ArticleFeedbackError("rejected feedback proposal is invalid")
+    if item.status not in {"ready", "failed", "accepting", "accepted", "rejected"}:
         raise ArticleFeedbackError("feedback proposal status is invalid")
     return item
 
@@ -206,6 +311,11 @@ def _text(name: str, value: Any) -> str:
     if not isinstance(value, str) or not value.strip(): raise ArticleFeedbackError(f"{name} must be a non-empty string")
     return value.strip()
 def _nullable_text(name: str, value: Any) -> str | None: return None if value is None else _text(name, value)
+def _nullable_timestamp(name: str, value: Any) -> str | None: return None if value is None else _timestamp(name, value)
+def _decision(value: Any) -> str | None:
+    if value is None: return None
+    if value not in {"accepted", "rejected"}: raise ArticleFeedbackError("feedback decision is invalid")
+    return value
 def _optional(name: str, value: Any) -> str | None: return None if value is None else _text(name, value)
 def _version(value: Any) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 1: raise ArticleFeedbackError("invalid base version")
