@@ -16,9 +16,11 @@ safe_publish 门禁生效，无需重启 webui 进程。
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any
+from urllib import error, request
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, HTTPException
@@ -278,6 +280,37 @@ def clear_openai_image_model() -> dict[str, Any]:
         "configured": False,
         "reload_error": _reload_providers(),
     }
+
+
+@router.get("/settings/openai-image-models")
+def discover_openai_image_models() -> dict[str, Any]:
+    """Read a configured compatible relay's model catalogue without saving it.
+
+    This is deliberately a read-only settings aid.  It does not attempt image
+    generation, does not alter the active model, and never returns the relay
+    URL, request headers, or upstream error body.
+    """
+    base_url = os.environ.get(_OPENAI_IMAGE_BASE_URL)
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not base_url or not api_key:
+        raise _err(409, "image_model_discovery_unavailable", "configure an OpenAI-compatible image relay and key first")
+    try:
+        # Stored settings already pass this normalizer, but re-validating before
+        # a network call ensures environment tampering cannot turn this into an
+        # arbitrary request primitive.
+        normalized = _normalize_openai_image_base_url(base_url)
+        req = request.Request(f"{normalized}/models", headers={"Authorization": f"Bearer {api_key}"}, method="GET")
+        with request.urlopen(req, timeout=8.0) as response:
+            payload = json.loads(response.read())
+    except (ValueError, error.HTTPError, error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        # Only report a stable local reason.  Compatible endpoints sometimes
+        # echo authorization fragments in their response bodies.
+        raise _err(502, "image_model_discovery_failed", f"could not read the relay model list ({type(exc).__name__})") from exc
+    items = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        raise _err(502, "image_model_discovery_failed", "relay returned an invalid model list")
+    models = sorted({item["id"] for item in items if isinstance(item, dict) and isinstance(item.get("id"), str) and _OPENAI_IMAGE_MODEL_RE.fullmatch(item["id"])})
+    return {"models": models, "source": "relay"}
 
 
 # ── publish.enabled / allowed_platforms（发布总开关，用户明确要求

@@ -884,6 +884,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const openaiImageBaseUrl = ref<string | null>(null)
   const openaiImageModel = ref('gpt-image-2')
   const openaiImageModelConfigured = ref(false)
+  const discoveredOpenAIImageModels = ref<string[]>([])
+  const discoveringOpenAIImageModels = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
   async function load() {
@@ -992,6 +994,20 @@ export const useSettingsStore = defineStore('settings', () => {
       return false
     }
   }
+  async function discoverOpenAIImageModels(): Promise<boolean> {
+    discoveringOpenAIImageModels.value = true
+    try {
+      const r = await api.get<{ models: string[] }>('/settings/openai-image-models')
+      discoveredOpenAIImageModels.value = r.data.models
+      return true
+    } catch (e) {
+      discoveredOpenAIImageModels.value = []
+      message.error(`检测图片模型失败：${unwrapError(e)}`)
+      return false
+    } finally {
+      discoveringOpenAIImageModels.value = false
+    }
+  }
   // 发布总开关（用户明确要求可从 UI 操作，不必手改 config.yaml）
   async function setPublishEnabled(enabled: boolean): Promise<boolean> {
     try {
@@ -1016,10 +1032,10 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
   return {
-    config, doctor, keyGroups, openaiImageBaseUrl, openaiImageModel, openaiImageModelConfigured, loading, error,
+    config, doctor, keyGroups, openaiImageBaseUrl, openaiImageModel, openaiImageModelConfigured, discoveredOpenAIImageModels, discoveringOpenAIImageModels, loading, error,
     load, loadKeys, saveKey, clearKey,
     loadOpenAIImageBaseUrl, saveOpenAIImageBaseUrl, clearOpenAIImageBaseUrl,
-    loadOpenAIImageModel, saveOpenAIImageModel, clearOpenAIImageModel,
+    loadOpenAIImageModel, saveOpenAIImageModel, clearOpenAIImageModel, discoverOpenAIImageModels,
     setPublishEnabled, setPublishAllowedPlatforms,
   }
 })

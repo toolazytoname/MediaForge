@@ -5,12 +5,12 @@
 // （用户明确要求，见 TASKS.md「待评估事项（用户临场提需求，2026-07-16）」），
 // 不必手改 config.yaml
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { Modal } from 'ant-design-vue'
+import { message, Modal } from 'ant-design-vue'
 import { useSettingsStore } from '../stores'
 import { storeToRefs } from 'pinia'
 
 const store = useSettingsStore()
-const { config, doctor, keyGroups, openaiImageBaseUrl, openaiImageModel, openaiImageModelConfigured, loading } = storeToRefs(store)
+const { config, doctor, keyGroups, openaiImageBaseUrl, openaiImageModel, openaiImageModelConfigured, discoveredOpenAIImageModels, discoveringOpenAIImageModels, loading } = storeToRefs(store)
 
 // 每个 key 名对应的输入框暂存值（不回填已保存的明文，只在提交时读取）
 const pendingValues = reactive<Record<string, string>>({})
@@ -88,6 +88,17 @@ async function onClearOpenAIImageModel() {
   } finally {
     openaiImageModelSaving.value = false
   }
+}
+
+async function onDiscoverOpenAIImageModels() {
+  const ok = await store.discoverOpenAIImageModels()
+  if (ok && discoveredOpenAIImageModels.value.length === 0) {
+    message.warning('中转站没有返回可用于设置的模型名；请向服务商确认。')
+  }
+}
+
+function useDiscoveredOpenAIImageModel(model: string) {
+  openaiImageModelInput.value = model
 }
 
 // ── 发布总开关 ────────────────────────────────────────────
@@ -247,8 +258,18 @@ async function onSavePlatforms() {
         type="warning"
         show-icon
         style="margin-bottom: 12px"
-        message="使用中转站时，请向中转站确认实际支持的图片模型名，再填写这里；系统不会猜测或自动替换模型。保存不会立即生成图片，请回到文章中手动点击“重试图片”。"
+        message="可先读取中转站公开的模型列表；这不会生成图片、扣除图片额度、保存模型或暴露密钥。列表不保证每个模型都支持图像生成，仍由你选择后手动保存。"
       />
+      <a-space style="margin-bottom: 12px" wrap>
+        <a-button :loading="discoveringOpenAIImageModels" :disabled="!openaiImageBaseUrl" @click="onDiscoverOpenAIImageModels">
+          检测可用模型
+        </a-button>
+        <span v-if="!openaiImageBaseUrl" style="color: #888">请先保存中转站地址。</span>
+        <template v-if="discoveredOpenAIImageModels.length">
+          <span style="color: #666">中转站返回：</span>
+          <a-tag v-for="model in discoveredOpenAIImageModels" :key="model" style="cursor: pointer" @click="useDiscoveredOpenAIImageModel(model)">{{ model }}</a-tag>
+        </template>
+      </a-space>
       <a-space align="baseline" wrap>
         <a-input
           v-model:value="openaiImageModelInput"
