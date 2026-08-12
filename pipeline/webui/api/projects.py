@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
 from pipeline import creator_materials
+from pipeline import creator_material_parsing
 from pipeline import projects as project_store
 
 
@@ -94,13 +95,18 @@ def create_project_from_creator_prompt(body: dict[str, Any]) -> project_store.Pr
     )
 
 
-def _material_dict(material: creator_materials.CreatorMaterial) -> dict[str, Any]:
-    return {
+def _material_dict(material: creator_materials.CreatorMaterial, *, project_id: str | None = None) -> dict[str, Any]:
+    data = {
         "id": material.id, "kind": material.kind, "source": material.source,
         "original_name": material.original_name, "sha256": material.sha256,
         "created_at": material.created_at, "status": material.status,
         "error": material.error, "stored_path": material.stored_path,
     }
+    if project_id is not None:
+        data["analysis"] = creator_material_parsing.get_project_material_analysis(
+            project_id, material.id, projects_root=_PROJECTS_ROOT
+        )
+    return data
 
 
 def _material_error(error: creator_materials.CreatorMaterialError) -> HTTPException:
@@ -220,8 +226,22 @@ def get_project(project_id: str) -> dict[str, Any]:
 def get_project_materials(project_id: str) -> dict[str, Any]:
     try:
         project_store.load_project(project_id, projects_root=_PROJECTS_ROOT)
-        return {"items": [_material_dict(item) for item in creator_materials.list_project_materials(project_id, projects_root=_PROJECTS_ROOT)]}
+        return {"items": [_material_dict(item, project_id=project_id) for item in creator_materials.list_project_materials(project_id, projects_root=_PROJECTS_ROOT)]}
     except project_store.ProjectManifestError as error:
         raise _manifest_error(project_id, error) from error
     except creator_materials.CreatorMaterialError as error:
+        raise _material_error(error) from error
+
+
+@router.post("/projects/{project_id}/materials/{material_id}/parse")
+def parse_project_material(project_id: str, material_id: str) -> dict[str, Any]:
+    """Explicitly parse one project-local source; never calls an LLM."""
+    try:
+        project_store.load_project(project_id, projects_root=_PROJECTS_ROOT)
+        return creator_material_parsing.parse_project_material(
+            project_id, material_id, projects_root=_PROJECTS_ROOT
+        )
+    except project_store.ProjectManifestError as error:
+        raise _manifest_error(project_id, error) from error
+    except (creator_materials.CreatorMaterialError, creator_material_parsing.MaterialParseError) as error:
         raise _material_error(error) from error

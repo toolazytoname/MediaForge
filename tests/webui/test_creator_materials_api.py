@@ -62,3 +62,28 @@ def test_creator_start_cleans_up_its_new_project_when_attachment_fails(tmp_path,
     })
     assert response.status_code == 400
     assert list((tmp_path / "projects").glob("prj_*/project.json")) == []
+
+
+def test_project_material_parse_is_explicit_traceable_and_keeps_bad_url_not_used(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(deps, "_DB_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setattr(projects_api, "_PROJECTS_ROOT", tmp_path / "projects")
+    client = TestClient(create_app())
+    note = client.post("/api/v1/creator-materials", json={
+        "draft_id": "draft_12345678", "kind": "text", "value": "第一段真实事实。\n\n第二段。"
+    }).json()
+    bad_url = client.post("/api/v1/creator-materials", json={
+        "draft_id": "draft_12345678", "kind": "url", "value": "http://127.0.0.1/private"
+    }).json()
+    project = client.post("/api/v1/projects/creator-start", json={
+        "prompt": "带资料的文章", "draft_id": "draft_12345678", "material_ids": [note["id"], bad_url["id"]]
+    }).json()
+
+    usable = client.post(f"/api/v1/projects/{project['id']}/materials/{note['id']}/parse")
+    rejected = client.post(f"/api/v1/projects/{project['id']}/materials/{bad_url['id']}/parse")
+    listed = client.get(f"/api/v1/projects/{project['id']}/materials")
+
+    assert usable.status_code == 200 and usable.json()["segments"][0]["citation"] == f"{note['id']}:1"
+    assert rejected.status_code == 200 and rejected.json()["status"] == "not_used"
+    assert {item["id"]: item["analysis"]["status"] for item in listed.json()["items"]} == {
+        note["id"]: "used", bad_url["id"]: "not_used"
+    }

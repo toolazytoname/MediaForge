@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
 import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult } from '../stores'
-import { unwrapError } from '../api/client'
+import { api, unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 
 const route = useRoute()
@@ -49,6 +49,9 @@ const importingSlot = ref<string | null>(null)
 const variantGenerating = ref<string | null>(null)
 const exporting = ref(false)
 const exportResult = ref<ProjectExportResult | null>(null)
+interface ProjectMaterial { id: string; kind: string; source: string; original_name: string | null; status: string; error: string | null; analysis: { status: 'used' | 'not_used'; error: string | null; parsed_at: string; segments: Array<{ citation: string; text: string; kind: string }> } | null }
+const materials = ref<ProjectMaterial[]>([])
+const parsingMaterial = ref<string | null>(null)
 
 const unverifiedFacts = computed(() => board.value?.claims.filter(item => item.kind === 'fact' && (item.status === 'unverified' || !item.source_ids.length)) ?? [])
 const openQuestions = computed(() => board.value?.claims.filter(item => item.kind === 'open_question' && item.status === 'open') ?? [])
@@ -85,6 +88,7 @@ async function loadPage(): Promise<void> {
   }
   try {
     project.value = await store.getDetail(projectId.value)
+    materials.value = (await api.get<{ items: ProjectMaterial[] }>(`/projects/${projectId.value}/materials`)).data.items
     await researchStore.load(projectId.value)
     await masterStore.load(projectId.value)
     await visualsStore.load(projectId.value)
@@ -98,6 +102,15 @@ async function loadPage(): Promise<void> {
   } catch (e) {
     detailError.value = unwrapError(e)
   }
+}
+
+async function parseMaterial(item: ProjectMaterial): Promise<void> {
+  if (!projectId.value || parsingMaterial.value) return
+  parsingMaterial.value = item.id
+  try {
+    await api.post(`/projects/${projectId.value}/materials/${item.id}/parse`)
+    materials.value = (await api.get<{ items: ProjectMaterial[] }>(`/projects/${projectId.value}/materials`)).data.items
+  } catch (e) { detailError.value = unwrapError(e) } finally { parsingMaterial.value = null }
 }
 
 async function refreshApprovalStatus(): Promise<void> {
@@ -256,7 +269,15 @@ watch(projectId, loadPage)
         </header>
         <div class="project-grid">
           <a-card title="创作意图" :bordered="false"><dl><dt>写给谁</dt><dd>{{ project.audience }}</dd><dt>这次要完成什么</dt><dd>{{ project.goal }}</dd><dt>声音</dt><dd>{{ project.voice }}</dd></dl></a-card>
-          <a-card title="目前的材料" :bordered="false"><p>已关联 {{ project.content_ids.length }} 篇内容，{{ project.asset_paths.length }} 项资产。</p><p class="muted">来源、判断和待确认项均由你明确录入，不会自动抓取或改写。</p></a-card>
+          <a-card title="参考资料" :bordered="false" class="project-materials">
+            <p v-if="!materials.length" class="muted">这篇文章还没有附加资料。</p>
+            <article v-for="item in materials" :key="item.id" class="project-material-row">
+              <div><strong>{{ item.original_name || item.source }}</strong><small>{{ item.analysis?.status === 'used' ? `已使用 · ${item.analysis.segments.length} 个可引用段落` : item.analysis?.status === 'not_used' ? `未使用：${item.analysis.error}` : '尚未读取' }}</small></div>
+              <a-button size="small" :loading="parsingMaterial === item.id" @click="parseMaterial(item)">{{ item.analysis ? '重新读取' : '读取资料' }}</a-button>
+              <p v-if="item.analysis?.status === 'used' && item.analysis.segments[0]" class="material-citation">{{ item.analysis.segments[0].citation }} · {{ item.analysis.segments[0].text }}</p>
+            </article>
+            <p class="muted">只会使用已读取的来源；坏链接会标为未使用，不影响继续起稿。</p>
+          </a-card>
         </div>
         <nav class="workflow-cockpit" aria-label="创作流程">
           <div><p class="eyebrow">当前路径</p><h2>{{ nextStep.done ? '内容包已就绪' : `下一步：${nextStep.label}` }}</h2><p>一次只处理一个环节；已完成的步骤仍可回看，任何上游修改都会触发重新检查。</p></div>
@@ -337,7 +358,7 @@ watch(projectId, loadPage)
 .eyebrow { margin: 0 0 8px; color: #7a6650; font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
 h1, h2 { color: #292522; font-family: Georgia, 'Songti SC', serif; } h1 { margin: 0 0 12px; font-size: clamp(30px, 4vw, 44px); line-height: 1.2; } h2 { margin: 0 0 8px; font-size: 22px; }
 .list-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-bottom: 28px; }.list-header > div { max-width: 720px; }.list-header p, .idea, .project-row p, .project-row span, .project-workspace p { color: #706b65; line-height: 1.7; }.notice { margin-bottom: 16px; }
-.project-list { border-top: 1px solid #ded7cd; }.project-row { width: 100%; display: flex; justify-content: space-between; gap: 24px; padding: 22px 4px; text-align: left; border: 0; border-bottom: 1px solid #ded7cd; background: transparent; cursor: pointer; }.project-row:hover h2 { color: #886d4b; }.project-row p { max-width: 700px; margin: 0 0 6px; }.project-row span, .row-meta { color: #948d84; font-size: 13px; }.row-meta { display: flex; align-items: center; gap: 16px; white-space: nowrap; }.empty-icon { color: #b39b79; font-size: 44px; }.count { color: #948d84; font-size: 13px; }.back { margin-bottom: 12px; padding-left: 0; }.project-workspace > header { max-width: 760px; margin-bottom: 28px; }.idea { font-size: 18px; }.project-grid, .research-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.project-grid :deep(.ant-card), .research-grid :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.project-grid dd { margin: 4px 0 16px; color: #4e4943; }.project-grid dt { color: #948d84; font-size: 12px; }.muted { color: #948d84 !important; }.research-board { margin-top: 34px; max-width: 1000px; }.section-heading { margin-bottom: 18px; }.section-heading p { max-width: 680px; }.research-alerts { display: grid; gap: 8px; margin-bottom: 16px; }.record-list { display: grid; gap: 10px; margin-bottom: 20px; }.record-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.record-list p { margin: 6px 0; color: #5e5851; }.record-list small { color: #897f75; word-break: break-word; }.claim-meta { display: flex; gap: 6px; }.claim-list .unverified { border-left-color: #d89614; }.claim-list .unresolved { border-left-color: #7f59b0; }.caveat { color: #7a5d3d !important; }.research-form { padding-top: 12px; border-top: 1px solid #e8e1d5; }.form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.project-list { border-top: 1px solid #ded7cd; }.project-row { width: 100%; display: flex; justify-content: space-between; gap: 24px; padding: 22px 4px; text-align: left; border: 0; border-bottom: 1px solid #ded7cd; background: transparent; cursor: pointer; }.project-row:hover h2 { color: #886d4b; }.project-row p { max-width: 700px; margin: 0 0 6px; }.project-row span, .row-meta { color: #948d84; font-size: 13px; }.row-meta { display: flex; align-items: center; gap: 16px; white-space: nowrap; }.empty-icon { color: #b39b79; font-size: 44px; }.count { color: #948d84; font-size: 13px; }.back { margin-bottom: 12px; padding-left: 0; }.project-workspace > header { max-width: 760px; margin-bottom: 28px; }.idea { font-size: 18px; }.project-grid, .research-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.project-grid :deep(.ant-card), .research-grid :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.project-grid dd { margin: 4px 0 16px; color: #4e4943; }.project-grid dt { color: #948d84; font-size: 12px; }.muted { color: #948d84 !important; }.project-material-row { margin: 10px 0; padding: 9px 0; border-top: 1px solid #eee8df; }.project-material-row:first-of-type { border-top: 0; }.project-material-row > div { display: flex; justify-content: space-between; gap: 10px; }.project-material-row strong,.project-material-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.project-material-row small { color: #837b70; font-size: 12px; }.project-material-row .material-citation { margin: 7px 0 0; color: #635b51; font-size: 12px; line-height: 1.45; }.research-board { margin-top: 34px; max-width: 1000px; }.section-heading { margin-bottom: 18px; }.section-heading p { max-width: 680px; }.research-alerts { display: grid; gap: 8px; margin-bottom: 16px; }.record-list { display: grid; gap: 10px; margin-bottom: 20px; }.record-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.record-list p { margin: 6px 0; color: #5e5851; }.record-list small { color: #897f75; word-break: break-word; }.claim-meta { display: flex; gap: 6px; }.claim-list .unverified { border-left-color: #d89614; }.claim-list .unresolved { border-left-color: #7f59b0; }.caveat { color: #7a5d3d !important; }.research-form { padding-top: 12px; border-top: 1px solid #e8e1d5; }.form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .workflow-cockpit { position: sticky; top: 12px; z-index: 4; display: grid; grid-template-columns: minmax(240px, .7fr) 1.3fr; gap: 20px; margin: 26px 0 6px; padding: 18px; border: 1px solid #ded7cd; border-radius: 12px; background: rgba(255, 253, 248, .96); box-shadow: 0 10px 30px rgba(75, 60, 40, .08); backdrop-filter: blur(8px); }.workflow-cockpit h2 { font-size: 18px; }.workflow-cockpit p { margin: 0; font-size: 13px; }.workflow-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: stretch; gap: 6px; }.workflow-steps button { display: grid; place-content: center; gap: 3px; min-height: 62px; padding: 7px; border: 1px solid #ded7cd; border-radius: 8px; color: #706b65; background: #fff; cursor: pointer; }.workflow-steps button.active { color: #60482d; border-color: #a6845b; background: #f5eee3; }.workflow-steps button.done { color: #39704b; }.workflow-steps span { font-weight: 700; }
 .master-workbench { margin-top: 34px; }.master-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 16px; }.master-grid :deep(.ant-card), .version-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.suggestion-actions, .proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; }.proposal-list { display: grid; gap: 10px; margin-top: 16px; }.proposal-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.proposal-meta { display: flex; justify-content: space-between; gap: 8px; color: #948d84; font-size: 12px; }.proposal-copy { max-height: 160px; overflow: auto; white-space: pre-wrap; color: #4e4943; }.version-card { margin-top: 16px; }.version-list { display: grid; gap: 8px; }.version-list article { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #e8e1d5; }.version-list span { margin-left: 8px; color: #948d84; font-size: 12px; }.version-list p { margin: 4px 0 0; color: #706b65; }.selection-note { color: #7a6650; font-size: 13px; }
 .draft-actions, .export-panel, .variant-adapt, .local-imports { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; padding: 14px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fffdf8; }.draft-actions p, .export-panel p { margin: 4px 0 0; }.draft-proposal { margin-bottom: 16px; border-color: #c7b497; background: #fbf6ed; }.draft-proposal .proposal-copy { max-height: 360px; }.master-count { color: #7a6650 !important; font-size: 13px; }.variant-adapt > div { display: flex; align-items: center; gap: 10px; }.variant-adapt > p { flex-basis: 100%; margin: 0; }.local-imports { justify-content: flex-start; }.import-button { display: inline-flex; padding: 6px 11px; border: 1px dashed #a6845b; border-radius: 6px; color: #60482d; cursor: pointer; background: #fff; }.import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.visual-bootstrap { margin-bottom: 12px; }
