@@ -265,9 +265,18 @@ class OpenAIImageProvider(ImageProvider):
         return self._json_call("/images/generations", payload)
 
     def estimated_cost_usd(self, *, aspect_ratio: str, n: int = 1) -> float:
-        """Return the pre-request, displayed estimate for this image request."""
+        """Return an auditable pre-request estimate, when the model price is known.
+
+        A compatibility relay may accept an arbitrary model alias.  Its billing
+        is not necessarily GPT Image 2 billing, so recording the default-model
+        estimate as a real cost would be misleading.  Those calls deliberately
+        persist a zero/unknown estimate until the relay supplies a priced model
+        contract.
+        """
         if aspect_ratio not in self._SIZES or not (1 <= n <= 4):
             raise ValueError("OpenAIImageProvider: invalid image cost request")
+        if self._model != self.DEFAULT_MODEL:
+            return 0.0
         return self._ESTIMATED_COST_USD[self._SIZES[aspect_ratio]] * n
 
     def edit(self, prompt: str, *, image_path: Path, aspect_ratio: str = "1:1", n: int = 1) -> list[bytes]:

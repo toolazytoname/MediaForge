@@ -279,6 +279,7 @@ def keys_env(client, tmp_path, monkeypatch):
     for name in set(LLM_ENV_VARS) | set(IMAGE_ENV_VARS):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("OPENAI_IMAGE_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_IMAGE_MODEL", raising=False)
     return tmp_path
 
 
@@ -409,6 +410,46 @@ class TestOpenAIImageEndpoint:
         assert r.status_code == 200
         assert r.json() == {"base_url": None, "reload_error": None}
         assert "OPENAI_IMAGE_BASE_URL" not in os.environ
+
+
+class TestOpenAIImageModelEndpoint:
+    def test_get_reports_default_model_when_unconfigured(self, client, keys_env):
+        r = client.get("/api/v1/settings/openai-image-model")
+        assert r.status_code == 200
+        assert r.json() == {"model": "gpt-image-2", "configured": False}
+
+    @pytest.mark.parametrize("model", ["", " ", "../image", "gpt image", "gpt/image", "gpt\nimage", "x" * 129])
+    def test_rejects_unsafe_model_tokens(self, client, keys_env, model):
+        r = client.post("/api/v1/settings/openai-image-model", json={"model": model})
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"]["code"] == "invalid_openai_image_model"
+
+    def test_saves_safe_model_and_reloads_provider(self, client, keys_env, monkeypatch):
+        from pipeline.webui.api import settings as settings_mod
+        reloads: list[str] = []
+        monkeypatch.setattr(settings_mod, "_reload_providers", lambda: reloads.append("reload") or None)
+
+        r = client.post("/api/v1/settings/openai-image-model", json={"model": "relay-image-v1.2"})
+
+        assert r.status_code == 200
+        assert r.json() == {"model": "relay-image-v1.2", "configured": True, "reload_error": None}
+        assert reloads == ["reload"]
+        assert os.environ["OPENAI_IMAGE_MODEL"] == "relay-image-v1.2"
+        import json as _json
+        assert _json.loads((keys_env / "env.json").read_text(encoding="utf-8")) == {
+            "OPENAI_IMAGE_MODEL": "relay-image-v1.2",
+        }
+
+    def test_clear_restores_default_and_reloads_provider(self, client, keys_env, monkeypatch):
+        from pipeline.webui.api import settings as settings_mod
+        monkeypatch.setattr(settings_mod, "_reload_providers", lambda: None)
+        client.post("/api/v1/settings/openai-image-model", json={"model": "relay-image"})
+
+        r = client.delete("/api/v1/settings/openai-image-model")
+
+        assert r.status_code == 200
+        assert r.json() == {"model": "gpt-image-2", "configured": False, "reload_error": None}
+        assert "OPENAI_IMAGE_MODEL" not in os.environ
 
 
 # ── settings/publish-enabled / publish-allowed-platforms（发布总

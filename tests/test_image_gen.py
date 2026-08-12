@@ -70,12 +70,20 @@ class TestOpenAIImageProvider:
 
     def test_from_env_and_malformed_response(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "key")
+        monkeypatch.delenv("OPENAI_IMAGE_MODEL", raising=False)
         assert image_gen.OpenAIImageProvider.from_env()._model == "gpt-image-2"
         provider = image_gen.OpenAIImageProvider("key")
         with patch("pipeline.creators.image_gen.request.urlopen") as mock:
             mock.return_value = _mock_urlopen_response(json_body={"data": [{}]})
             with pytest.raises(ValueError, match="lacks b64_json"):
                 provider.call("x", aspect_ratio="1:1", n=1)
+
+    def test_from_env_honors_configured_compatible_model(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "key")
+        monkeypatch.setenv("OPENAI_IMAGE_MODEL", "relay-image-v1.2")
+        provider = image_gen.OpenAIImageProvider.from_env()
+        assert provider._model == "relay-image-v1.2"
+        assert provider.estimated_cost_usd(aspect_ratio="16:9") == 0.0
 
     def test_http_error_never_exposes_credential_fragments(self):
         provider = image_gen.OpenAIImageProvider("sk-private-value")

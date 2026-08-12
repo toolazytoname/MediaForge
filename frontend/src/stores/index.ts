@@ -882,6 +882,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const doctor = ref<DoctorItem[]>([])
   const keyGroups = ref<SettingsKeyGroup[]>([])
   const openaiImageBaseUrl = ref<string | null>(null)
+  const openaiImageModel = ref('gpt-image-2')
+  const openaiImageModelConfigured = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
   async function load() {
@@ -957,6 +959,39 @@ export const useSettingsStore = defineStore('settings', () => {
       return false
     }
   }
+  async function loadOpenAIImageModel() {
+    try {
+      const r = await api.get<{ model: string; configured: boolean }>('/settings/openai-image-model')
+      openaiImageModel.value = r.data.model
+      openaiImageModelConfigured.value = r.data.configured
+    } catch (e) {
+      message.error(`加载图片模型失败：${unwrapError(e)}`)
+    }
+  }
+  async function saveOpenAIImageModel(model: string): Promise<boolean> {
+    try {
+      const r = await api.post<{ model: string; configured: boolean }>('/settings/openai-image-model', { model })
+      openaiImageModel.value = r.data.model
+      openaiImageModelConfigured.value = r.data.configured
+      message.success('已保存图片模型；下一次明确重试会使用它')
+      return true
+    } catch (e) {
+      message.error(`保存失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  async function clearOpenAIImageModel(): Promise<boolean> {
+    try {
+      const r = await api.delete<{ model: string; configured: boolean }>('/settings/openai-image-model')
+      openaiImageModel.value = r.data.model
+      openaiImageModelConfigured.value = r.data.configured
+      message.success('已恢复默认 GPT Image 2 模型')
+      return true
+    } catch (e) {
+      message.error(`清除失败：${unwrapError(e)}`)
+      return false
+    }
+  }
   // 发布总开关（用户明确要求可从 UI 操作，不必手改 config.yaml）
   async function setPublishEnabled(enabled: boolean): Promise<boolean> {
     try {
@@ -981,9 +1016,10 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
   return {
-    config, doctor, keyGroups, openaiImageBaseUrl, loading, error,
+    config, doctor, keyGroups, openaiImageBaseUrl, openaiImageModel, openaiImageModelConfigured, loading, error,
     load, loadKeys, saveKey, clearKey,
     loadOpenAIImageBaseUrl, saveOpenAIImageBaseUrl, clearOpenAIImageBaseUrl,
+    loadOpenAIImageModel, saveOpenAIImageModel, clearOpenAIImageModel,
     setPublishEnabled, setPublishAllowedPlatforms,
   }
 })

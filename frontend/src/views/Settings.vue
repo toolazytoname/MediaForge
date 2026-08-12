@@ -10,18 +10,21 @@ import { useSettingsStore } from '../stores'
 import { storeToRefs } from 'pinia'
 
 const store = useSettingsStore()
-const { config, doctor, keyGroups, openaiImageBaseUrl, loading } = storeToRefs(store)
+const { config, doctor, keyGroups, openaiImageBaseUrl, openaiImageModel, openaiImageModelConfigured, loading } = storeToRefs(store)
 
 // 每个 key 名对应的输入框暂存值（不回填已保存的明文，只在提交时读取）
 const pendingValues = reactive<Record<string, string>>({})
 const saving = reactive<Record<string, boolean>>({})
 const openaiImageBaseUrlInput = ref('')
 const openaiImageBaseUrlSaving = ref(false)
+const openaiImageModelInput = ref('')
+const openaiImageModelSaving = ref(false)
 
 onMounted(() => {
   store.load()
   store.loadKeys()
   store.loadOpenAIImageBaseUrl()
+  store.loadOpenAIImageModel()
 })
 
 async function onSave(name: string) {
@@ -63,6 +66,27 @@ async function onClearOpenAIImageBaseUrl() {
     await store.clearOpenAIImageBaseUrl()
   } finally {
     openaiImageBaseUrlSaving.value = false
+  }
+}
+
+async function onSaveOpenAIImageModel() {
+  const value = openaiImageModelInput.value.trim()
+  if (!value) return
+  openaiImageModelSaving.value = true
+  try {
+    const ok = await store.saveOpenAIImageModel(value)
+    if (ok) openaiImageModelInput.value = ''
+  } finally {
+    openaiImageModelSaving.value = false
+  }
+}
+
+async function onClearOpenAIImageModel() {
+  openaiImageModelSaving.value = true
+  try {
+    await store.clearOpenAIImageModel()
+  } finally {
+    openaiImageModelSaving.value = false
   }
 }
 
@@ -216,6 +240,39 @@ async function onSavePlatforms() {
       </a-space>
       <p style="margin: 12px 0 0; color: #666">
         当前：{{ openaiImageBaseUrl || 'OpenAI 官方默认接口' }}
+      </p>
+      <a-divider />
+      <h4>图片模型</h4>
+      <a-alert
+        type="warning"
+        show-icon
+        style="margin-bottom: 12px"
+        message="使用中转站时，请向中转站确认实际支持的图片模型名，再填写这里；系统不会猜测或自动替换模型。保存不会立即生成图片，请回到文章中手动点击“重试图片”。"
+      />
+      <a-space align="baseline" wrap>
+        <a-input
+          v-model:value="openaiImageModelInput"
+          placeholder="由中转站明确提供的图片模型名"
+          style="width: 360px"
+        />
+        <a-button
+          type="primary"
+          :loading="openaiImageModelSaving"
+          :disabled="!openaiImageModelInput.trim()"
+          @click="onSaveOpenAIImageModel"
+        >
+          保存模型
+        </a-button>
+        <a-button
+          v-if="openaiImageModelConfigured"
+          :loading="openaiImageModelSaving"
+          @click="onClearOpenAIImageModel"
+        >
+          恢复默认模型
+        </a-button>
+      </a-space>
+      <p style="margin: 12px 0 0; color: #666">
+        当前模型：{{ openaiImageModel }}{{ openaiImageModelConfigured ? '（中转站覆盖）' : '（默认）' }}
       </p>
     </a-card>
 

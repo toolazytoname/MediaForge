@@ -6,6 +6,7 @@ import pytest
 from pipeline import projects as project_store
 from pipeline.creators import image_gen, llm
 from pipeline.webui import deps
+from pipeline.webui.api import master_documents as master_api
 from pipeline.webui.api import projects as projects_api
 from pipeline.webui.app import create_app
 
@@ -49,3 +50,28 @@ def test_provider_unavailable_does_not_create_a_blank_article(client, tmp_path):
     assert response.status_code == 503
     assert response.json()["detail"]["error"]["code"] == "llm_provider_unavailable"
     assert client.get("/api/v1/projects/prj_generate/master").json() == {"master": None}
+
+
+def test_explicit_image_retry_uses_the_current_configured_provider_model(client, tmp_path, monkeypatch):
+    _project(tmp_path / "projects")
+
+    class Provider:
+        _model = "relay-image-v1.2"
+        def estimated_cost_usd(self, *, aspect_ratio): return 0.01
+        def call(self, prompt, *, aspect_ratio, n, response_format="base64"): return [b"png"]
+
+    observed = {}
+    monkeypatch.setattr(image_gen, "_PROVIDER", Provider())
+    monkeypatch.setattr(
+        master_api.creator_article_generation,
+        "retry_failed_images",
+        lambda _project_id, **kwargs: observed.update(kwargs) or type("Outcome", (), {
+            "status": "completed", "title": "标题", "body": "正文",
+            "completed_images": (), "failed_images": (), "error": None,
+        })(),
+    )
+
+    response = client.post("/api/v1/projects/prj_generate/article/images/retry", json={})
+
+    assert response.status_code == 200
+    assert observed["image_model"] == "relay-image-v1.2"

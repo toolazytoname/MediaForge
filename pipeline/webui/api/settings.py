@@ -17,6 +17,7 @@ safe_publish 门禁生效，无需重启 webui 进程。
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -60,6 +61,9 @@ _KEY_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
 ]
 _ALLOWED_KEY_NAMES = frozenset(LLM_ENV_VARS) | frozenset(IMAGE_ENV_VARS)
 _OPENAI_IMAGE_BASE_URL = "OPENAI_IMAGE_BASE_URL"
+_OPENAI_IMAGE_MODEL = "OPENAI_IMAGE_MODEL"
+_OPENAI_IMAGE_DEFAULT_MODEL = "gpt-image-2"
+_OPENAI_IMAGE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _reload_providers() -> str | None:
@@ -229,6 +233,51 @@ def clear_openai_image_base_url() -> dict[str, str | None]:
     delete_env_secret(_OPENAI_IMAGE_BASE_URL, _ENV_SECRETS_PATH)
     os.environ.pop(_OPENAI_IMAGE_BASE_URL, None)
     return {"base_url": None, "reload_error": _reload_providers()}
+
+
+# ── GPT Image 2 中转站模型 ─────────────────────────────────
+
+
+def _normalize_openai_image_model(value: Any) -> str:
+    """Accept a bounded OpenAI-compatible model identifier, never a path."""
+    if not isinstance(value, str) or not _OPENAI_IMAGE_MODEL_RE.fullmatch(value):
+        raise ValueError(
+            "model must be a 1–128 character identifier using letters, numbers, dots, underscores, or hyphens"
+        )
+    return value
+
+
+@router.get("/settings/openai-image-model")
+def get_openai_image_model() -> dict[str, Any]:
+    """Return the active model name without exposing any credential."""
+    configured = os.environ.get(_OPENAI_IMAGE_MODEL)
+    return {"model": configured or _OPENAI_IMAGE_DEFAULT_MODEL, "configured": bool(configured)}
+
+
+@router.post("/settings/openai-image-model")
+def save_openai_image_model(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Persist and hot-reload a relay-supported Images API model name."""
+    if set(body) != {"model"}:
+        raise _err(400, "invalid_openai_image_model", "request requires only model")
+    try:
+        model = _normalize_openai_image_model(body["model"])
+    except ValueError as error:
+        raise _err(400, "invalid_openai_image_model", str(error)) from error
+    write_env_secret(_OPENAI_IMAGE_MODEL, model, _ENV_SECRETS_PATH)
+    os.environ[_OPENAI_IMAGE_MODEL] = model
+    return {"model": model, "configured": True, "reload_error": _reload_providers()}
+
+
+@router.delete("/settings/openai-image-model")
+def clear_openai_image_model() -> dict[str, Any]:
+    """Clear the relay override and use the built-in GPT Image 2 default."""
+    delete_env_secret(_OPENAI_IMAGE_MODEL, _ENV_SECRETS_PATH)
+    os.environ.pop(_OPENAI_IMAGE_MODEL, None)
+    return {
+        "model": _OPENAI_IMAGE_DEFAULT_MODEL,
+        "configured": False,
+        "reload_error": _reload_providers(),
+    }
 
 
 # ── publish.enabled / allowed_platforms（发布总开关，用户明确要求
