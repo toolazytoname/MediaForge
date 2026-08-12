@@ -17,6 +17,8 @@
 
 > **PF-00 已完成（2026-08-12，commit `2301eb3`）**：`ac232fe` 与 `codex/creator-workflow-p0` 的 19 个提交已逐项审计，报告见 [2026-08-12-pf00-asset-audit.md](./product-validation/2026-08-12-pf00-asset-audit.md)。后续新实现从 `ac232fe` 选择性复用安全与恢复资产，禁止 merge/cherry-pick 整个旧 UI 分支。
 
+> **G1 当前进度（2026-08-12）**：`PF-01`（commit `e0366ef`）已将首页接到真实单输入项目创建；`PF-02`（commit `246f551`）已提供项目侧的 URL、笔记、图片、PDF、Markdown 资料入口与独立失败状态。继续 `PF-03` 的安全解析和可核查引用；不得把“资料已添加”伪称为“资料已经读懂”。
+
 ## 产品重启 R — 创作工作台黄金路径（2026-08-09 起）
 
 > **优先级**：本章节的 R0 → R9 是当前产品重启的正式执行顺序。它们优先于未完成的遗留 M* 任务；已完成的历史记录保持不动。完整产品方向见 [PRODUCT_RESET_PLAN.md](./PRODUCT_RESET_PLAN.md)。
