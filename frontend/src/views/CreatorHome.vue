@@ -66,7 +66,9 @@ async function startArticle(): Promise<void> {
     })
     clearDraft()
     materialDraftId.value = newDraftId()
-    await router.push(`/projects/${response.data.id}`)
+    // The following page performs the authorized generation and immediately
+    // shows its real progress.  There is still only one creator click here.
+    await router.push(`/projects/${response.data.id}?generate=1`)
   } catch (cause) {
     error.value = unwrapError(cause)
   } finally {

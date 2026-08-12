@@ -7,9 +7,11 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+from pipeline import creator_article_generation
+from pipeline import creator_material_parsing
 from pipeline import master_documents as master_store
 from pipeline import research as research_store
-from pipeline.creators import llm
+from pipeline.creators import image_gen, llm
 from pipeline.webui import deps
 from pipeline.webui.api import projects as projects_api
 
@@ -35,6 +37,11 @@ def _master_dict(master: master_store.MasterDocument | None) -> dict[str, Any] |
     return {"project_id": master.project_id, "title": master.title, "body": master.body,
             "version": master.version, "created_at": master.created_at, "updated_at": master.updated_at,
             "history": [_snapshot_dict(item) for item in master.history]}
+
+
+def _generation_dict(outcome: creator_article_generation.GenerationOutcome) -> dict[str, Any]:
+    return {"status": outcome.status, "title": outcome.title, "body": outcome.body,
+            "completed_images": outcome.completed_images, "failed_images": outcome.failed_images, "error": outcome.error}
 
 
 def _snapshot_dict(snapshot: master_store.MasterSnapshot) -> dict[str, Any]:
@@ -144,6 +151,73 @@ def propose_draft(project_id: str) -> dict[str, str]:
             conn.close()
     except Exception as error:
         raise _error(502, "llm_draft_failed", f"AI draft failed: {error}") from error
+
+
+@router.get("/projects/{project_id}/article/generation")
+def get_article_generation(project_id: str) -> dict[str, Any]:
+    """Return a recoverable, creator-facing progress record."""
+    try:
+        outcome = creator_article_generation.load_generation(project_id, projects_root=_root())
+        return {"generation": _generation_dict(outcome) if outcome is not None else None}
+    except (creator_article_generation.ArticleGenerationError, master_store.MasterDocumentError) as error:
+        raise _master_error(project_id, error) from error
+
+
+@router.post("/projects/{project_id}/article/generate")
+def generate_complete_article(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Explicitly generate a first editable draft and its in-context images."""
+    if body:
+        raise _error(400, "invalid_generation_request", "generation request must be empty")
+    if not _llm_is_configured():
+        raise _error(503, "llm_provider_unavailable", "AI provider is not configured; your idea is kept and you can retry or write manually")
+    provider = image_gen._PROVIDER
+    if not hasattr(provider, "call"):
+        image_model = "unavailable"
+        image_cost = lambda _ratio: 0.0
+        def create_image(_prompt: str, _ratio: str) -> bytes:
+            raise image_gen.ImageProviderError("GPT Image 2 is unavailable. Configure it in Settings and retry this image.")
+    else:
+        image_model = getattr(provider, "_model", "image-provider")
+        image_cost = lambda ratio: provider.estimated_cost_usd(aspect_ratio=ratio) if hasattr(provider, "estimated_cost_usd") else 0.0
+        def create_image(prompt: str, ratio: str) -> bytes:
+            return image_gen._call_with_retry(provider, prompt, aspect_ratio=ratio, n=1)[0]
+    try:
+        def write_article(prompt: str) -> dict[str, str]:
+            conn = deps.get_conn()
+            try:
+                return llm.complete_json(prompt, stage="creator_article_draft", ref_id=project_id,
+                    model_tier="creative", max_tokens=6000, conn=conn, parse=_parse_article)
+            finally:
+                conn.close()
+        outcome = creator_article_generation.generate_article(project_id, projects_root=_root(), now=_now(),
+            write_article=write_article, make_image=create_image, image_model=image_model, image_cost=image_cost,
+            source_context=creator_material_parsing.project_material_context(project_id, projects_root=_root()))
+        return _generation_dict(outcome)
+    except (creator_article_generation.ArticleGenerationError, master_store.MasterDocumentError,
+            projects_api.project_store.ProjectManifestError) as error:
+        raise _master_error(project_id, error) from error
+    except Exception as error:
+        raise _error(502, "article_generation_failed", f"article generation failed: {error}") from error
+
+
+@router.post("/projects/{project_id}/article/images/retry")
+def retry_article_images(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """A separate, auditable retry for failed image locations only."""
+    if body:
+        raise _error(400, "invalid_generation_request", "image retry request must be empty")
+    provider = image_gen._PROVIDER
+    if not hasattr(provider, "call"):
+        raise _error(503, "image_provider_unavailable", "GPT Image 2 is unavailable; configure it in Settings before retrying this image")
+    try:
+        outcome = creator_article_generation.retry_failed_images(project_id, projects_root=_root(), now=_now(),
+            make_image=lambda prompt, ratio: image_gen._call_with_retry(provider, prompt, aspect_ratio=ratio, n=1)[0],
+            image_model=getattr(provider, "_model", "image-provider"),
+            image_cost=lambda ratio: provider.estimated_cost_usd(aspect_ratio=ratio) if hasattr(provider, "estimated_cost_usd") else 0.0)
+        return _generation_dict(outcome)
+    except (creator_article_generation.ArticleGenerationError, master_store.MasterDocumentError) as error:
+        raise _master_error(project_id, error) from error
+    except Exception as error:
+        raise _error(502, "image_generation_failed", f"image retry failed: {error}") from error
 
 
 @router.get("/projects/{project_id}/master")
