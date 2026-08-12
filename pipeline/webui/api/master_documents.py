@@ -75,7 +75,12 @@ def _feedback_dict(proposal: article_feedback.ArticleFeedbackProposal, master: m
             "state": article_feedback.proposal_state(proposal, master), "proposed_title": proposal.proposed_title,
             "proposed_body": proposal.proposed_body, "error": proposal.error, "created_at": proposal.created_at,
             "updated_at": proposal.updated_at, "decision": proposal.decision, "decided_at": proposal.decided_at,
-            "accepted_title": proposal.accepted_title, "accepted_body": proposal.accepted_body}
+            "accepted_title": proposal.accepted_title, "accepted_body": proposal.accepted_body,
+            "annotation_id": proposal.annotation_id, "annotation_kind": proposal.annotation_kind,
+            "annotation_excerpt": proposal.annotation_excerpt, "annotation_asset_id": proposal.annotation_asset_id,
+            "annotation_categories": list(proposal.annotation_categories),
+            "annotation_resolved_version": proposal.annotation_resolved_version,
+            "annotation_resolved_hash": proposal.annotation_resolved_hash}
 
 
 def _annotation_dict(item: local_annotations.LocalAnnotation) -> dict[str, Any]:
@@ -457,6 +462,44 @@ def remove_local_annotation(project_id: str, annotation_id: str) -> None:
         return _raise_annotation_error(project_id, error)
 
 
+@router.post("/projects/{project_id}/article/annotations/{annotation_id}/propose", status_code=201)
+def request_local_annotation_proposal(project_id: str, annotation_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Generate a review-only proposal for one active annotation after a click."""
+    if body:
+        raise _error(400, "invalid_local_proposal", "local proposal request must be empty")
+    try:
+        master = master_store.load_master(project_id, projects_root=_root())
+        if master is None: raise master_store.MasterDocumentError(f"master not found: {project_id}")
+        annotation = local_annotations.resolve_annotation(project_id, annotation_id, now=_now(), projects_root=_root())
+        if annotation.status != "active": raise local_annotations.LocalAnnotationError("annotation is orphaned; confirm its target before requesting a proposal")
+        if annotation.resolved_version != master.version or annotation.resolved_hash != article_feedback.master_hash(master):
+            raise local_annotations.LocalAnnotationError("annotation changed while resolving; request a proposal from the current article")
+    except (local_annotations.LocalAnnotationError, master_store.MasterDocumentError) as error:
+        message = str(error)
+        if "orphaned" in message or "changed while" in message: raise _error(409, "annotation_obsolete", error) from error
+        return _raise_annotation_error(project_id, error)
+    if not _llm_is_configured():
+        try: failed = article_feedback.create_failed_local_proposal(project_id, annotation_id=annotation.id, error="AI provider is not configured", now=_now(), projects_root=_root())
+        except article_feedback.ArticleFeedbackError as error: return _raise_feedback_error(project_id, error)
+        raise _error(503, "llm_provider_unavailable", {"message": "AI provider is not configured; your local feedback has been saved and can be retried.", "feedback_id": failed.id})
+    run_lock = _feedback_run_lock(project_id)
+    if not run_lock.acquire(blocking=False): raise _error(409, "feedback_generation_in_progress", "an article feedback proposal is already being prepared")
+    try:
+        proposed = _call_local_feedback_llm(project_id, master, annotation)
+        current = master_store.load_master(project_id, projects_root=_root())
+        latest = local_annotations.resolve_annotation(project_id, annotation.id, now=_now(), projects_root=_root())
+        if current is None or current.version != master.version or article_feedback.master_hash(current) != article_feedback.master_hash(master) or latest.status != "active" or latest.resolved_version != master.version or latest.resolved_hash != article_feedback.master_hash(master):
+            raise article_feedback.ArticleFeedbackError("article or annotation changed while AI was preparing this proposal")
+        result = article_feedback.create_local_proposal(project_id, annotation_id=annotation.id, proposed_title=proposed["title"], proposed_body=proposed["body"], now=_now(), projects_root=_root())
+        return _feedback_dict(result, master)
+    except Exception as error:
+        try: failed = article_feedback.create_failed_local_proposal(project_id, annotation_id=annotation.id, error=str(error), now=_now(), projects_root=_root())
+        except article_feedback.ArticleFeedbackError as save_error: return _raise_feedback_error(project_id, save_error)
+        raise _error(502, "llm_feedback_failed", {"message": f"AI local feedback proposal failed: {error}", "feedback_id": failed.id}) from error
+    finally:
+        run_lock.release()
+
+
 @router.get("/projects/{project_id}/article/feedback")
 def get_article_feedback(project_id: str) -> dict[str, Any]:
     """List whole-article feedback proposals without exposing an accept path yet."""
@@ -580,6 +623,14 @@ def _call_feedback_llm(project_id: str, master: master_store.MasterDocument, fee
             stage="article_feedback_proposal", ref_id=project_id, model_tier="creative", max_tokens=6000, conn=conn, parse=_parse_article)
     finally:
         conn.close()
+
+
+def _call_local_feedback_llm(project_id: str, master: master_store.MasterDocument, annotation: local_annotations.LocalAnnotation) -> dict[str, str]:
+    anchor = f"所选文本：{annotation.excerpt}" if annotation.kind == "text" else f"图片资产：{annotation.asset_id}\n关联段落：{annotation.paragraph_anchor}"
+    prompt = f"""你是中文资深编辑。作者对文章中一个明确位置提出意见；生成只供审阅的完整文章修改提案，绝不发布或直接修改正式文章。\n\n正式标题：{master.title}\n正式正文：\n{master.body}\n\n局部范围：{anchor}\n作者意见：{annotation.feedback}\n重点：{', '.join(annotation.categories) or '未指定'}\n\n规则：只返回严格 JSON：{{\"title\":\"...\",\"body\":\"...\"}}；保留其他内容，不虚构事实。"""
+    conn = deps.get_conn()
+    try: return llm.complete_json(prompt, stage="local_annotation_feedback_proposal", ref_id=project_id, model_tier="creative", max_tokens=6000, conn=conn, parse=_parse_article)
+    finally: conn.close()
 
 
 def _whole_feedback_prompt(project_id: str, master: master_store.MasterDocument, feedback: str, target: str | None,

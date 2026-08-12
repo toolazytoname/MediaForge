@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pipeline import master_documents, projects as project_store
+from pipeline import local_annotations, master_documents, projects as project_store
 from pipeline.utils.ids import new_id
 from pipeline.utils.sidecar_ids import valid_sidecar_id
 
@@ -49,6 +49,13 @@ class ArticleFeedbackProposal:
     decided_at: str | None
     accepted_title: str | None
     accepted_body: str | None
+    annotation_id: str | None
+    annotation_kind: str | None
+    annotation_excerpt: str | None
+    annotation_asset_id: str | None
+    annotation_categories: tuple[str, ...]
+    annotation_resolved_version: int | None
+    annotation_resolved_hash: str | None
     created_at: str
     updated_at: str
 
@@ -64,7 +71,7 @@ def create_proposal(project_id: str, *, feedback: str, target: str | None, reade
         _id(proposal_id or new_id("afp")), _project_id(project_id), "whole_article", _text("feedback", feedback),
         _optional("target", target), _optional("readership", readership), _optional("platform", platform), _optional("values", values),
         master.version, master_hash(master), "ready", _text("proposed_title", proposed_title), _text("proposed_body", proposed_body),
-        None, None, None, None, None, _timestamp("created_at", now), _timestamp("updated_at", now),
+        None, None, None, None, None, None, None, None, None, (), None, None, _timestamp("created_at", now), _timestamp("updated_at", now),
     )
     return _append(project_id, proposal, projects_root)
 
@@ -80,8 +87,29 @@ def create_failed_proposal(project_id: str, *, feedback: str, target: str | None
         _id(proposal_id or new_id("afp")), _project_id(project_id), "whole_article", _text("feedback", feedback),
         _optional("target", target), _optional("readership", readership), _optional("platform", platform), _optional("values", values),
         master.version, master_hash(master), "failed", None, None, _text("error", error), None, None, None, None,
-        _timestamp("created_at", now), _timestamp("updated_at", now),
+        None, None, None, None, (), None, None, _timestamp("created_at", now), _timestamp("updated_at", now),
     )
+    return _append(project_id, proposal, projects_root)
+
+
+def create_local_proposal(project_id: str, *, annotation_id: str, proposed_title: str, proposed_body: str,
+                          now: str, projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+                          proposal_id: str | None = None) -> ArticleFeedbackProposal:
+    """Persist an AI suggestion for one still-active, exactly resolved annotation."""
+    master = _required_master(project_id, projects_root)
+    annotation = _current_annotation(project_id, annotation_id, master, now, projects_root)
+    proposal = _local_record(project_id, annotation, master, status="ready", proposed_title=proposed_title,
+                             proposed_body=proposed_body, error=None, now=now, proposal_id=proposal_id)
+    return _append(project_id, proposal, projects_root)
+
+
+def create_failed_local_proposal(project_id: str, *, annotation_id: str, error: str, now: str,
+                                 projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+                                 proposal_id: str | None = None) -> ArticleFeedbackProposal:
+    master = _required_master(project_id, projects_root)
+    annotation = _current_annotation(project_id, annotation_id, master, now, projects_root)
+    proposal = _local_record(project_id, annotation, master, status="failed", proposed_title=None,
+                             proposed_body=None, error=error, now=now, proposal_id=proposal_id)
     return _append(project_id, proposal, projects_root)
 
 
@@ -200,6 +228,33 @@ def proposal_state(proposal: ArticleFeedbackProposal, master: master_documents.M
     return "current" if proposal.base_version == master.version and proposal.base_hash == master_hash(master) else "obsolete"
 
 
+def _current_annotation(project_id: str, annotation_id: str, master: master_documents.MasterDocument, now: str,
+                        projects_root: str | Path) -> local_annotations.LocalAnnotation:
+    try:
+        annotation = local_annotations.resolve_annotation(project_id, annotation_id, now=now, projects_root=projects_root)
+    except local_annotations.LocalAnnotationError as exc:
+        raise ArticleFeedbackError(str(exc)) from exc
+    if annotation.status != "active":
+        raise ArticleFeedbackError("annotation is orphaned; confirm its target before requesting a proposal")
+    if annotation.resolved_version != master.version or annotation.resolved_hash != master_hash(master):
+        raise ArticleFeedbackError("annotation changed while resolving; request a proposal from the current article")
+    return annotation
+
+
+def _local_record(project_id: str, annotation: local_annotations.LocalAnnotation, master: master_documents.MasterDocument,
+                  *, status: str, proposed_title: str | None, proposed_body: str | None, error: str | None,
+                  now: str, proposal_id: str | None) -> ArticleFeedbackProposal:
+    scope = "local_text" if annotation.kind == "text" else "local_image"
+    return ArticleFeedbackProposal(
+        _id(proposal_id or new_id("afp")), _project_id(project_id), scope, annotation.feedback, None, None, None, None,
+        master.version, master_hash(master), status,
+        _nullable_text("proposed_title", proposed_title), _nullable_text("proposed_body", proposed_body), _nullable_text("error", error),
+        None, None, None, None, annotation.id, annotation.kind, annotation.excerpt, annotation.asset_id,
+        annotation.categories, annotation.resolved_version, annotation.resolved_hash,
+        _timestamp("created_at", now), _timestamp("updated_at", now),
+    )
+
+
 def master_hash(master: master_documents.MasterDocument) -> str:
     return hashlib.sha256(f"{master.title}\0{master.body}".encode("utf-8")).hexdigest()
 
@@ -252,11 +307,17 @@ def _ensure_project(project_id: str, projects_root: str | Path) -> None:
 
 
 def _from_payload(payload: Any, expected_project_id: str) -> ArticleFeedbackProposal:
-    legacy_fields = set(ArticleFeedbackProposal.__dataclass_fields__) - {"decision", "decided_at", "accepted_title", "accepted_body"}
-    if not isinstance(payload, dict) or set(payload) not in (set(ArticleFeedbackProposal.__dataclass_fields__), legacy_fields):
+    additions = {"decision", "decided_at", "accepted_title", "accepted_body", "annotation_id", "annotation_kind", "annotation_excerpt", "annotation_asset_id", "annotation_categories", "annotation_resolved_version", "annotation_resolved_hash"}
+    legacy_fields = set(ArticleFeedbackProposal.__dataclass_fields__) - additions
+    rv03_fields = legacy_fields | {"decision", "decided_at", "accepted_title", "accepted_body"}
+    accepted_old_fields = (legacy_fields, rv03_fields, set(ArticleFeedbackProposal.__dataclass_fields__) - {"decision", "decided_at", "accepted_title", "accepted_body"})
+    if not isinstance(payload, dict) or set(payload) not in (set(ArticleFeedbackProposal.__dataclass_fields__), *accepted_old_fields):
         raise ArticleFeedbackError("feedback proposal has missing or unknown fields")
-    if set(payload) == legacy_fields:
-        payload = {**payload, "decision": None, "decided_at": None, "accepted_title": None, "accepted_body": None}
+    if set(payload) != set(ArticleFeedbackProposal.__dataclass_fields__):
+        defaults = {"decision": None, "decided_at": None, "accepted_title": None, "accepted_body": None,
+                    "annotation_id": None, "annotation_kind": None, "annotation_excerpt": None, "annotation_asset_id": None,
+                    "annotation_categories": [], "annotation_resolved_version": None, "annotation_resolved_hash": None}
+        payload = {**defaults, **payload}
     item = ArticleFeedbackProposal(
         _id(payload["id"]), _project_id(payload["project_id"]), payload["scope"], _text("feedback", payload["feedback"]),
         _optional("target", payload["target"]), _optional("readership", payload["readership"]), _optional("platform", payload["platform"]), _optional("values", payload["values"]),
@@ -264,10 +325,20 @@ def _from_payload(payload: Any, expected_project_id: str) -> ArticleFeedbackProp
         _nullable_text("proposed_body", payload["proposed_body"]), _nullable_text("error", payload["error"]),
         _decision(payload["decision"]), _nullable_timestamp("decided_at", payload["decided_at"]),
         _nullable_text("accepted_title", payload["accepted_title"]), _nullable_text("accepted_body", payload["accepted_body"]),
+        _nullable_annotation_id(payload["annotation_id"]), _nullable_annotation_kind(payload["annotation_kind"]),
+        _nullable_text("annotation_excerpt", payload["annotation_excerpt"]), _nullable_asset_id(payload["annotation_asset_id"]),
+        _annotation_categories(payload["annotation_categories"]), _nullable_version(payload["annotation_resolved_version"]), _nullable_hash(payload["annotation_resolved_hash"]),
         _timestamp("created_at", payload["created_at"]), _timestamp("updated_at", payload["updated_at"]),
     )
-    if item.project_id != expected_project_id or item.scope != "whole_article":
+    if item.project_id != expected_project_id or item.scope not in {"whole_article", "local_text", "local_image"}:
         raise ArticleFeedbackError("feedback proposal project or scope is invalid")
+    is_local = item.scope.startswith("local_")
+    if is_local != (item.annotation_id is not None): raise ArticleFeedbackError("feedback proposal annotation scope is invalid")
+    if not is_local and any((item.annotation_kind, item.annotation_excerpt, item.annotation_asset_id, item.annotation_resolved_version, item.annotation_resolved_hash)):
+        raise ArticleFeedbackError("whole article feedback cannot contain annotation evidence")
+    if item.scope == "local_text" and (item.annotation_kind != "text" or not item.annotation_excerpt or item.annotation_asset_id is not None): raise ArticleFeedbackError("local text feedback annotation is invalid")
+    if item.scope == "local_image" and (item.annotation_kind != "image" or item.annotation_asset_id is None or item.annotation_excerpt is not None): raise ArticleFeedbackError("local image feedback annotation is invalid")
+    if is_local and (item.annotation_resolved_version is None or item.annotation_resolved_hash is None): raise ArticleFeedbackError("local feedback annotation snapshot is invalid")
     if item.status == "ready" and (item.proposed_title is None or item.proposed_body is None or item.error is not None or item.decision is not None or item.decided_at is not None):
         raise ArticleFeedbackError("ready feedback proposal is invalid")
     if item.status == "failed" and (item.proposed_title is not None or item.proposed_body is not None or item.error is None or item.decision is not None or item.decided_at is not None):
@@ -317,6 +388,23 @@ def _decision(value: Any) -> str | None:
     if value not in {"accepted", "rejected"}: raise ArticleFeedbackError("feedback decision is invalid")
     return value
 def _optional(name: str, value: Any) -> str | None: return None if value is None else _text(name, value)
+def _nullable_annotation_id(value: Any) -> str | None: return None if value is None else _annotation_id(value)
+def _annotation_id(value: Any) -> str:
+    if not valid_sidecar_id(value, "lan_"): raise ArticleFeedbackError(f"invalid annotation id: {value!r}")
+    return value
+def _nullable_annotation_kind(value: Any) -> str | None:
+    if value is None: return None
+    if value not in {"text", "image"}: raise ArticleFeedbackError("invalid annotation kind")
+    return value
+def _nullable_asset_id(value: Any) -> str | None:
+    if value is None: return None
+    if not valid_sidecar_id(value, "vas_"): raise ArticleFeedbackError(f"invalid visual asset id: {value!r}")
+    return value
+def _annotation_categories(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value) or len(value) != len(set(value)): raise ArticleFeedbackError("invalid annotation categories")
+    return tuple(value)
+def _nullable_version(value: Any) -> int | None: return None if value is None else _version(value)
+def _nullable_hash(value: Any) -> str | None: return None if value is None else _hash(value)
 def _version(value: Any) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 1: raise ArticleFeedbackError("invalid base version")
     return value

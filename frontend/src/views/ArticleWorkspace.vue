@@ -10,7 +10,7 @@ interface Master { title: string; body: string; version: number; updated_at: str
 interface Generation { status: string; completed_images: number; failed_images: number; error: string | null }
 interface VisualAsset { id: string; slot_id: string; prompt: string; model: string; file_path: string | null; status: 'candidate' | 'failed' | 'selected'; failure: string | null; created_at: string; reference_asset_id?: string | null; cost_usd?: number; version?: number }
 interface VisualPlan { assets: VisualAsset[] }
-interface FeedbackProposal { id: string; scope: 'whole_article'; feedback: string; target: string | null; readership: string | null; platform: string | null; values: string | null; status: 'ready' | 'failed' | 'accepted' | 'rejected'; state: 'current' | 'obsolete'; error: string | null; proposed_title: string | null; proposed_body: string | null; decision: 'accepted' | 'rejected' | null; decided_at: string | null; accepted_title: string | null; accepted_body: string | null }
+interface FeedbackProposal { id: string; scope: 'whole_article' | 'local_text' | 'local_image'; feedback: string; target: string | null; readership: string | null; platform: string | null; values: string | null; status: 'ready' | 'failed' | 'accepted' | 'rejected'; state: 'current' | 'obsolete'; error: string | null; proposed_title: string | null; proposed_body: string | null; decision: 'accepted' | 'rejected' | null; decided_at: string | null; accepted_title: string | null; accepted_body: string | null; annotation_id: string | null; annotation_kind: 'text' | 'image' | null; annotation_excerpt: string | null; annotation_asset_id: string | null; annotation_categories: string[] }
 interface LocalAnnotation { id: string; kind: 'text' | 'image'; feedback: string; categories: string[]; excerpt: string | null; paragraph_anchor: string | null; asset_id: string | null; status: 'active' | 'orphaned'; orphan_reason: string | null }
 interface ProjectMaterial { id: string; kind: string; source: string; original_name: string | null; status: string; error: string | null; analysis: { status: 'used' | 'not_used'; segments: Array<{ citation: string; text: string }> } | null }
 
@@ -128,6 +128,14 @@ async function submitLocalAnnotation(): Promise<void> {
 async function removeAnnotation(item: LocalAnnotation): Promise<void> {
   try { await api.delete(`/projects/${id.value}/article/annotations/${item.id}`); annotations.value = annotations.value.filter(current => current.id !== item.id) }
   catch (cause) { annotationError.value = unwrapError(cause) }
+}
+async function proposeFromAnnotation(annotation: LocalAnnotation): Promise<void> {
+  if (annotation.status !== 'active' || feedbackWorking.value) return
+  feedbackWorking.value = true; annotationError.value = null
+  try {
+    const proposal = (await api.post<FeedbackProposal>(`/projects/${id.value}/article/annotations/${annotation.id}/propose`, {}, { timeout: GENERATION_TIMEOUT_MS })).data
+    feedbackProposals.value = [proposal, ...feedbackProposals.value]
+  } catch (cause) { annotationError.value = unwrapError(cause); await load() } finally { feedbackWorking.value = false }
 }
 function feedbackPayload(): Record<string, string> {
   const values: Record<string, string> = { feedback: feedback.value.trim() }
@@ -329,7 +337,7 @@ onMounted(async () => { drawerWidth.value = Math.max(280, Math.min(420, window.i
         <button type="button" @click="versionNotice = null" aria-label="关闭版本确认提示">知道了</button>
       </aside>
       <aside v-if="feedbackProposals.length" class="proposal-notice" aria-live="polite"><strong>提案状态</strong><template v-for="proposal in feedbackProposals" :key="proposal.id"><p v-if="proposal.status === 'ready' && proposal.state === 'current'">提案已生成，正式文章尚未修改。 <button type="button" @click="openProposalReview(proposal)">审阅修改提案</button></p><p v-else-if="proposal.status === 'ready'">这份提案基于旧版本，文章已更新，不能接受。</p><p v-else-if="proposal.status === 'accepted'">提案已接受，正式文章已创建新版本。</p><p v-else-if="proposal.status === 'rejected'">提案已拒绝，正式文章没有变化。</p><p v-else>提案暂未生成：{{ proposal.error }} <button type="button" :disabled="feedbackWorking" @click="retryFeedbackProposal(proposal)">重试生成提案</button></p></template></aside>
-      <aside v-if="annotations.length" class="annotation-notice" aria-live="polite"><strong>局部批注 · {{ activeAnnotations.length }} 条待处理</strong><template v-for="item in annotations" :key="item.id"><p :class="{ orphaned: item.status === 'orphaned' }"><span v-if="item.kind === 'text'">“{{ item.excerpt }}”</span><span v-else>图片：{{ item.paragraph_anchor }}</span> · {{ item.feedback }} <em v-if="item.status === 'orphaned'">已失配：{{ item.orphan_reason }}</em> <button type="button" @click="removeAnnotation(item)">移除批注</button></p></template></aside>
+      <aside v-if="annotations.length" class="annotation-notice" aria-live="polite"><strong>局部批注 · {{ activeAnnotations.length }} 条待处理</strong><template v-for="item in annotations" :key="item.id"><p :class="{ orphaned: item.status === 'orphaned' }"><span v-if="item.kind === 'text'">“{{ item.excerpt }}”</span><span v-else>图片：{{ item.paragraph_anchor }}</span> · {{ item.feedback }} <em v-if="item.status === 'orphaned'">已失配：{{ item.orphan_reason }}</em> <button v-if="item.status === 'active'" type="button" :disabled="feedbackWorking" @click="proposeFromAnnotation(item)">{{ feedbackWorking ? '正在生成…' : '生成修改提案' }}</button> <button type="button" @click="removeAnnotation(item)">移除批注</button></p></template></aside>
     </section>
     <section v-else class="failed"><h1>文章还没有生成</h1><p>{{ error || '你的想法仍在项目里；你可以重试，或直接开始手写。' }}</p><div class="failed-actions"><button type="button" :disabled="working" @click="generate">重试生成文章</button><button type="button" class="manual" :disabled="working" @click="startManual">直接开始手写</button></div></section>
 
@@ -345,7 +353,8 @@ onMounted(async () => { drawerWidth.value = Math.max(280, Math.min(420, window.i
 
     <a-drawer :open="Boolean(proposalReview)" title="审阅修改提案" placement="right" :width="Math.max(720, drawerWidth * 2)" @close="closeProposalReview">
       <section v-if="proposalReview && master" class="proposal-diff" aria-label="文章修改差异">
-        <p class="scope">作用范围：<strong>整篇文章</strong> · 正式版本 v{{ master.version }}。接受前会再次校验版本和内容；若文章已变更，系统会拒绝写入。</p>
+        <p class="scope">作用范围：<strong>{{ proposalReview.scope === 'whole_article' ? '整篇文章' : '局部批注' }}</strong> · 正式版本 v{{ master.version }}。接受前会再次校验版本和内容；若文章已变更，系统会拒绝写入。</p>
+        <p v-if="proposalReview.scope === 'local_text'" class="diff-risk">针对所选内容：“{{ proposalReview.annotation_excerpt }}”</p><p v-else-if="proposalReview.scope === 'local_image'" class="diff-risk">针对图片：{{ proposalReview.annotation_asset_id }}</p>
         <blockquote>{{ proposalReview.feedback }}</blockquote>
         <p class="diff-risk">涉及图片链接 {{ affectedImages }} 处。来源事实与待核查项仍需作者确认。</p>
         <label for="proposal-title">建议标题（可手动调整）</label><input id="proposal-title" v-model="proposalTitle" />

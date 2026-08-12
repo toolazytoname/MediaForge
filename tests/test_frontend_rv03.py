@@ -13,3 +13,9 @@ def test_line_diff_uses_lcs_for_add_remove_and_unchanged_markdown_lines():
     source = (Path(__file__).parents[1] / "frontend/src/utils/articleDiff.ts").read_text(encoding="utf-8")
     for contract in ("type DiffRow", "kind: 'same' | 'add' | 'remove'", "matrix[i + 1][j + 1]", "left[i] === right[j]"):
         assert contract in source
+
+
+def test_local_annotation_has_explicit_proposal_action_and_discloses_scope_in_review():
+    source = (Path(__file__).parents[1] / "frontend/src/views/ArticleWorkspace.vue").read_text(encoding="utf-8")
+    for contract in ("生成修改提案", "/article/annotations/${annotation.id}/propose", "局部批注", "annotation_excerpt", "annotation_asset_id"):
+        assert contract in source
