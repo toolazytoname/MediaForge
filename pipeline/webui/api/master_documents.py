@@ -565,14 +565,40 @@ def retry_article_feedback(project_id: str, proposal_id: str, body: dict[str, An
         return _raise_feedback_error(project_id, error)
     if not _llm_is_configured():
         raise _error(503, "llm_provider_unavailable", "AI provider is not configured; your feedback remains saved for retry")
+    annotation: local_annotations.LocalAnnotation | None = None
+    if failed.scope != "whole_article":
+        try:
+            assert failed.annotation_id is not None
+            annotation = local_annotations.resolve_annotation(project_id, failed.annotation_id, now=_now(), projects_root=_root())
+            if annotation.status != "active" or annotation.resolved_version != master.version or annotation.resolved_hash != article_feedback.master_hash(master):
+                raise local_annotations.LocalAnnotationError("annotation is orphaned or changed; create a new proposal from its current target")
+        except local_annotations.LocalAnnotationError as error:
+            raise _error(409, "annotation_obsolete", error) from error
     if article_feedback.proposal_state(failed, master) != "current":
-        raise _error(409, "feedback_obsolete", "the article changed; create a new proposal from the current version")
+        code = "annotation_obsolete" if annotation is not None else "feedback_obsolete"
+        raise _error(409, code, "the article changed; create a new proposal from the current version")
+    run_lock = _feedback_run_lock(project_id)
+    if not run_lock.acquire(blocking=False):
+        raise _error(409, "feedback_generation_in_progress", "an article feedback proposal is already being prepared")
     try:
-        proposed = _call_feedback_llm(project_id, master, failed.feedback, failed.target, failed.readership, failed.platform, failed.values)
+        if annotation is None:
+            proposed = _call_feedback_llm(project_id, master, failed.feedback, failed.target, failed.readership, failed.platform, failed.values)
+        else:
+            proposed = _call_local_feedback_llm(project_id, master, annotation)
+            current = master_store.load_master(project_id, projects_root=_root())
+            resolved = local_annotations.resolve_annotation(project_id, annotation.id, now=_now(), projects_root=_root())
+            if current is None or current.version != master.version or article_feedback.master_hash(current) != article_feedback.master_hash(master) or resolved.status != "active" or resolved.resolved_version != master.version or resolved.resolved_hash != article_feedback.master_hash(master):
+                raise article_feedback.ArticleFeedbackError("article or annotation changed while AI was preparing this proposal")
         ready = article_feedback.complete_failed_proposal(project_id, failed.id, proposed_title=proposed["title"], proposed_body=proposed["body"], now=_now(), projects_root=_root())
         return _feedback_dict(ready, master)
+    except article_feedback.ArticleFeedbackError as error:
+        if "article or annotation changed" in str(error):
+            raise _error(409, "annotation_obsolete", error) from error
+        raise _error(502, "llm_feedback_failed", f"AI feedback proposal failed: {error}") from error
     except Exception as error:
         raise _error(502, "llm_feedback_failed", f"AI feedback proposal failed: {error}") from error
+    finally:
+        run_lock.release()
 
 
 @router.post("/projects/{project_id}/article/feedback/{proposal_id}/accept")

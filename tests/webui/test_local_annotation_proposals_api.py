@@ -34,10 +34,30 @@ def test_local_proposal_provider_failure_is_retryable_and_orphan_blocks(client, 
     failed = client.post(f"/api/v1/projects/prj_localapi/article/annotations/{annotation.id}/propose", json={})
     assert failed.status_code == 502
     proposal_id = failed.json()["detail"]["error"]["feedback_id"]
-    monkeypatch.setattr(master_api.llm, "complete_json", lambda *args, **kwargs: {"title": "标题", "body": "建议"})
-    assert client.post(f"/api/v1/projects/prj_localapi/article/feedback/{proposal_id}/retry", json={}).status_code == 200
+    captured = []
+    def local_retry(prompt, *args, **kwargs):
+        captured.append(prompt)
+        return {"title": "标题", "body": "建议"}
+    monkeypatch.setattr(master_api.llm, "complete_json", local_retry)
+    retried = client.post(f"/api/v1/projects/prj_localapi/article/feedback/{proposal_id}/retry", json={})
+    assert retried.status_code == 200
+    assert retried.json()["scope"] == "local_text"
+    assert "所选文本：写具体" in captured[0]
+    assert "局部范围：" in captured[0]
     master_documents.save_manual("prj_localapi", title="标题", body="目标已经没了", now="2026-08-12T10:03:00+00:00", projects_root=tmp_path / "projects")
     assert client.post(f"/api/v1/projects/prj_localapi/article/annotations/{annotation.id}/propose", json={}).status_code == 409
+
+
+def test_failed_local_retry_rejects_an_orphaned_annotation(client, tmp_path, monkeypatch):
+    annotation = _project(tmp_path / "projects")
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    monkeypatch.setattr(master_api.llm, "complete_json", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("down")))
+    failed = client.post(f"/api/v1/projects/prj_localapi/article/annotations/{annotation.id}/propose", json={})
+    proposal_id = failed.json()["detail"]["error"]["feedback_id"]
+    master_documents.save_manual("prj_localapi", title="标题", body="选中文本已删除", now="2026-08-12T10:04:00+00:00", projects_root=tmp_path / "projects")
+    retry = client.post(f"/api/v1/projects/prj_localapi/article/feedback/{proposal_id}/retry", json={})
+    assert retry.status_code == 409
+    assert retry.json()["detail"]["error"]["code"] == "annotation_obsolete"
 
 
 @pytest.fixture
