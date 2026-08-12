@@ -20,7 +20,7 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 ### 当前交接基线（2026-08-12，产品访谈固化后修订）
 
 - **R1–R9 的底层能力已完成，但 R0 创作者验收失败**：代理项目 `prj_a63f79b2` 能组合出主稿、真实图片、双平台稿、审批和 ZIP，只证明能力存在，不证明产品可用。用户随后明确反馈不会使用，并要求推翻旧流水线交互。
-- **当前唯一优先级**：执行 `docs/product-validation/2026-08-12-confirmed-product-definition.md` 与 `docs/product-validation/2026-08-12-confirmed-product-tasklist.md`。产品所有者已于 2026-08-12 批准 `DOC-02`；从 `UX-00 → PF-00 → G1` 开始，阶段闸门仍有效，不得机械进入 R10。
+- **当前唯一优先级**：执行 `docs/product-validation/2026-08-12-confirmed-product-definition.md` 与 `docs/product-validation/2026-08-12-confirmed-product-tasklist.md`。产品所有者已于 2026-08-12 批准 `DOC-02`，旧 P0 的 `PF-00` 资产审计已完成（见 `docs/product-validation/2026-08-12-pf00-asset-audit.md`）；现在先完成 `UX-00` 真人原型确认，随后进入 G1。阶段闸门仍有效，不得机械进入 R10。
 - GPT Image 2 已经通过用户在设置页配置的 OpenAI-compatible relay 完成真实生成与编辑；Settings 支持可选 `OPENAI_IMAGE_BASE_URL`（仅 HTTPS `/v1`），密钥与中转配置都只保存到权限 `0600` 的 gitignored `secrets/env.json`。不得将任何 key 或用户中转站地址写入 Git。
 - 此前记录的旧 P0 工程基线：完整 Python 回归 **1711 passed, 13 skipped**；前端生产构建通过（仅有既知的大 chunk 警告）；跨进程发布锁连续 10 次通过；`publish.enabled=false`。本次只做文档固化，没有重跑，且这些数字不代表新产品路径通过。
 - 对抗审查已补：sidecar 路径穿越、AI 可审阅初稿、真实平台适配、图片本地恢复、安全 Markdown/图文预览、主稿晚改确认、审批 stale 刷新、真实审批角色和无静默覆盖的版本化导出。
