@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,6 +10,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from pipeline import creator_article_generation
 from pipeline import creator_material_parsing
+from pipeline import article_feedback
 from pipeline import master_documents as master_store
 from pipeline import research as research_store
 from pipeline.creators import image_gen, llm
@@ -17,6 +19,8 @@ from pipeline.webui.api import projects as projects_api
 
 
 router = APIRouter(tags=["master-documents"])
+_FEEDBACK_RUN_LOCKS: dict[str, threading.Lock] = {}
+_FEEDBACK_RUN_LOCKS_GUARD = threading.Lock()
 
 
 def _root():
@@ -28,6 +32,10 @@ def _now() -> str:
 
 
 def _error(status: int, code: str, error: Exception | str) -> HTTPException:
+    if isinstance(error, dict):
+        detail = {"code": code, **error}
+        detail.setdefault("message", code)
+        return HTTPException(status_code=status, detail={"error": detail})
     return HTTPException(status_code=status, detail={"error": {"code": code, "message": str(error)}})
 
 
@@ -56,6 +64,16 @@ def _suggestion_dict(suggestion: master_store.MasterSuggestion) -> dict[str, Any
             "status": suggestion.status, "created_at": suggestion.created_at, "decided_at": suggestion.decided_at}
 
 
+def _feedback_dict(proposal: article_feedback.ArticleFeedbackProposal, master: master_store.MasterDocument) -> dict[str, Any]:
+    return {"id": proposal.id, "project_id": proposal.project_id, "scope": proposal.scope,
+            "feedback": proposal.feedback, "target": proposal.target, "readership": proposal.readership,
+            "platform": proposal.platform, "values": proposal.values, "base_version": proposal.base_version,
+            "base_hash": proposal.base_hash, "status": proposal.status,
+            "state": article_feedback.proposal_state(proposal, master), "proposed_title": proposal.proposed_title,
+            "proposed_body": proposal.proposed_body, "error": proposal.error, "created_at": proposal.created_at,
+            "updated_at": proposal.updated_at}
+
+
 def _master_error(project_id: str, error: master_store.MasterDocumentError) -> HTTPException:
     message = str(error)
     if message == f"project not found: {project_id}":
@@ -79,6 +97,22 @@ def _suggestion_input(body: dict[str, Any]) -> tuple[str, str | None]:
     if set(body) not in ({"action"}, {"action", "selection"}):
         raise master_store.MasterDocumentError("suggestion body must contain action and optional selection")
     return body["action"], body.get("selection")
+
+
+def _feedback_input(body: dict[str, Any]) -> dict[str, str | None]:
+    allowed = {"feedback", "target", "readership", "platform", "values"}
+    if not isinstance(body, dict) or "feedback" not in body or set(body) - allowed:
+        raise article_feedback.ArticleFeedbackError("feedback body must contain feedback and optional target, readership, platform, values")
+    feedback = body["feedback"]
+    if not isinstance(feedback, str) or not feedback.strip() or len(feedback.strip()) > 8_000:
+        raise article_feedback.ArticleFeedbackError("feedback must be a non-empty string")
+    result: dict[str, str | None] = {"feedback": feedback.strip()}
+    for name in allowed - {"feedback"}:
+        value = body.get(name)
+        if value is not None and (not isinstance(value, str) or not value.strip() or len(value.strip()) > 2_000):
+            raise article_feedback.ArticleFeedbackError(f"{name} must be non-empty text when provided")
+        result[name] = value.strip() if isinstance(value, str) else None
+    return result
 
 
 def _parse_article(text: str) -> dict[str, str]:
@@ -320,6 +354,124 @@ def reject_suggestion(project_id: str, suggestion_id: str) -> dict[str, Any]:
         return _suggestion_dict(master_store.reject_suggestion(project_id, suggestion_id, now=_now(), projects_root=_root()))
     except master_store.MasterDocumentError as error:
         raise _master_error(project_id, error) from error
+
+
+@router.get("/projects/{project_id}/article/feedback")
+def get_article_feedback(project_id: str) -> dict[str, Any]:
+    """List whole-article feedback proposals without exposing an accept path yet."""
+    try:
+        master = master_store.load_master(project_id, projects_root=_root())
+        if master is None:
+            raise master_store.MasterDocumentError(f"master not found: {project_id}")
+        return {"items": [_feedback_dict(item, master) for item in article_feedback.load_proposals(project_id, projects_root=_root())]}
+    except (article_feedback.ArticleFeedbackError, master_store.MasterDocumentError) as error:
+        return _raise_feedback_error(project_id, error)
+
+
+@router.post("/projects/{project_id}/article/feedback", status_code=201)
+def request_article_feedback(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Generate a whole-article proposal after an explicit author click.
+
+    A failure is deliberately recorded first. This gives the author a retryable
+    record of their instruction instead of silently discarding it.
+    """
+    try:
+        data = _feedback_input(body)
+        master = master_store.load_master(project_id, projects_root=_root())
+        if master is None:
+            raise master_store.MasterDocumentError(f"master not found: {project_id}")
+    except (article_feedback.ArticleFeedbackError, master_store.MasterDocumentError) as error:
+        return _raise_feedback_error(project_id, error)
+    if not _llm_is_configured():
+        try:
+            failed = article_feedback.create_failed_proposal(project_id, **data, error="AI provider is not configured", now=_now(), projects_root=_root())
+        except article_feedback.ArticleFeedbackError as error:
+            return _raise_feedback_error(project_id, error)
+        raise _error(503, "llm_provider_unavailable", {"message": "AI provider is not configured; your feedback has been saved and can be retried.", "feedback_id": failed.id})
+    run_lock = _feedback_run_lock(project_id)
+    if not run_lock.acquire(blocking=False):
+        raise _error(409, "feedback_generation_in_progress", "a whole-article feedback proposal is already being prepared")
+    try:
+        proposal = _run_feedback_proposal(project_id, master, data)
+        return _feedback_dict(proposal, master)
+    except Exception as error:
+        try:
+            failed = article_feedback.create_failed_proposal(project_id, **data, error=str(error), now=_now(), projects_root=_root())
+        except article_feedback.ArticleFeedbackError as save_error:
+            return _raise_feedback_error(project_id, save_error)
+        raise _error(502, "llm_feedback_failed", {"message": f"AI feedback proposal failed: {error}", "feedback_id": failed.id}) from error
+    finally:
+        run_lock.release()
+
+
+@router.post("/projects/{project_id}/article/feedback/{proposal_id}/retry")
+def retry_article_feedback(project_id: str, proposal_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    if body:
+        raise _error(400, "invalid_feedback_retry", "feedback retry request must be empty")
+    try:
+        master = master_store.load_master(project_id, projects_root=_root())
+        if master is None:
+            raise master_store.MasterDocumentError(f"master not found: {project_id}")
+        failed = next(item for item in article_feedback.load_proposals(project_id, projects_root=_root()) if item.id == proposal_id)
+        if failed.status != "failed":
+            raise article_feedback.ArticleFeedbackError("only a failed feedback proposal can be retried")
+    except StopIteration:
+        return _raise_feedback_error(project_id, article_feedback.ArticleFeedbackError(f"feedback proposal not found: {proposal_id}"))
+    except (article_feedback.ArticleFeedbackError, master_store.MasterDocumentError) as error:
+        return _raise_feedback_error(project_id, error)
+    if not _llm_is_configured():
+        raise _error(503, "llm_provider_unavailable", "AI provider is not configured; your feedback remains saved for retry")
+    if article_feedback.proposal_state(failed, master) != "current":
+        raise _error(409, "feedback_obsolete", "the article changed; create a new proposal from the current version")
+    try:
+        proposed = _call_feedback_llm(project_id, master, failed.feedback, failed.target, failed.readership, failed.platform, failed.values)
+        ready = article_feedback.complete_failed_proposal(project_id, failed.id, proposed_title=proposed["title"], proposed_body=proposed["body"], now=_now(), projects_root=_root())
+        return _feedback_dict(ready, master)
+    except Exception as error:
+        raise _error(502, "llm_feedback_failed", f"AI feedback proposal failed: {error}") from error
+
+
+def _run_feedback_proposal(project_id: str, master: master_store.MasterDocument, data: dict[str, str | None]) -> article_feedback.ArticleFeedbackProposal:
+    proposed = _call_feedback_llm(project_id, master, data["feedback"] or "", data["target"], data["readership"], data["platform"], data["values"])
+    current = master_store.load_master(project_id, projects_root=_root())
+    if current is None or current.version != master.version or current.body != master.body or current.title != master.title:
+        raise article_feedback.ArticleFeedbackError("master changed while AI was preparing this proposal")
+    return article_feedback.create_proposal(project_id, **data, proposed_title=proposed["title"], proposed_body=proposed["body"], now=_now(), projects_root=_root(), base_version=master.version, base_hash=article_feedback.master_hash(master))
+
+
+def _call_feedback_llm(project_id: str, master: master_store.MasterDocument, feedback: str, target: str | None,
+                       readership: str | None, platform: str | None, values: str | None) -> dict[str, str]:
+    conn = deps.get_conn()
+    try:
+        return llm.complete_json(_whole_feedback_prompt(project_id, master, feedback, target, readership, platform, values),
+            stage="article_feedback_proposal", ref_id=project_id, model_tier="creative", max_tokens=6000, conn=conn, parse=_parse_article)
+    finally:
+        conn.close()
+
+
+def _whole_feedback_prompt(project_id: str, master: master_store.MasterDocument, feedback: str, target: str | None,
+                           readership: str | None, platform: str | None, values: str | None) -> str:
+    project = projects_api.project_store.load_project(project_id, projects_root=_root())
+    return f"""你是中文资深编辑。作者对整篇文章提出了明确反馈；请生成一个只供审阅的修改提案，绝不发布，也不代表作者确认。\n
+正式文章标题：{master.title}\n正式文章正文：\n{master.body}\n\n作者意见：{feedback}\n希望达到：{target or '未指定'}\n目标读者：{readership or project.audience}\n目标平台：{platform or '未指定'}\n必须遵守的价值取向：{values or '未指定'}\n项目声音：{project.voice}\n\n规则：\n1. 保留作者没有要求放弃的真实经历、限制和不确定性；不虚构事实、引语、数据或案例。\n2. 这不是正式文章，不能说已经修改、已经发布或已经获得作者同意。\n3. 只返回严格 JSON：{{\"title\":\"...\",\"body\":\"...\"}}，不要代码围栏或额外文字。"""
+
+
+def _raise_feedback_error(project_id: str, error: Exception) -> None:
+    message = str(error)
+    if message == f"project not found: {project_id}":
+        raise _error(404, "project_not_found", error)
+    if message == f"master not found: {project_id}":
+        raise _error(404, "master_not_found", error)
+    if message.startswith("feedback proposal not found:"):
+        raise _error(404, "feedback_not_found", error)
+    if "manifest" in message or "invalid feedback JSON" in message:
+        raise _error(500, "feedback_manifest_invalid", error)
+    raise _error(400, "invalid_feedback_request", error)
+
+
+def _feedback_run_lock(project_id: str) -> threading.Lock:
+    with _FEEDBACK_RUN_LOCKS_GUARD:
+        return _FEEDBACK_RUN_LOCKS.setdefault(project_id, threading.Lock())
 
 
 def _llm_is_configured() -> bool:
