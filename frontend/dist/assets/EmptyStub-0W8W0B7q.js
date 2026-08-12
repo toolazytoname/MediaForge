@@ -1,0 +1,1 @@
+import{P as e,_ as t,i as n,kt as r,p as i,u as a}from"./runtime-core.esm-bundler-DVsitf5h.js";var o=t({__name:`EmptyStub`,props:{msg:{}},setup(t){return(o,s)=>(e(),i(n,null,[a(`h2`,null,r(t.msg||`View`),1),s[0]||=a(`p`,null,`占位 — M10-8 接入真实数据。`,-1)],64))}});export{o as default};

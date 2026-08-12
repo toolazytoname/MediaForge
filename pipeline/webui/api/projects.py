@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from typing import Any
+from pathlib import Path
+import shutil
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
+from pipeline import creator_materials
 from pipeline import projects as project_store
 
 
@@ -72,8 +75,9 @@ def create_project_from_creator_prompt(body: dict[str, Any]) -> project_store.Pr
     The remaining manifest fields deliberately receive product defaults here,
     rather than making a new creator understand project configuration first.
     """
-    if set(body) != {"prompt"}:
-        raise project_store.ProjectManifestError("creator start body must contain only prompt")
+    allowed = {"prompt", "draft_id", "material_ids"}
+    if not set(body).issubset(allowed) or set(body) == set():
+        raise project_store.ProjectManifestError("creator start body must contain prompt and optional draft_id/material_ids")
     prompt = body["prompt"]
     if not isinstance(prompt, str) or not prompt.strip():
         raise project_store.ProjectManifestError("prompt must be a non-empty string")
@@ -88,6 +92,21 @@ def create_project_from_creator_prompt(body: dict[str, Any]) -> project_store.Pr
         autonomy="collaborate",
         now=datetime.now(timezone.utc).isoformat(), projects_root=_PROJECTS_ROOT,
     )
+
+
+def _material_dict(material: creator_materials.CreatorMaterial) -> dict[str, Any]:
+    return {
+        "id": material.id, "kind": material.kind, "source": material.source,
+        "original_name": material.original_name, "sha256": material.sha256,
+        "created_at": material.created_at, "status": material.status,
+        "error": material.error, "stored_path": material.stored_path,
+    }
+
+
+def _material_error(error: creator_materials.CreatorMaterialError) -> HTTPException:
+    return HTTPException(status_code=400, detail={"error": {
+        "code": "invalid_creator_material", "message": str(error),
+    }})
 
 
 @router.get("/projects")
@@ -114,10 +133,77 @@ def create_project(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
 def creator_start_project(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """One-click creator entrypoint; it stores intent but does not invoke AI yet."""
     try:
+        draft_id = body.get("draft_id")
+        material_ids = body.get("material_ids", [])
+        if draft_id is not None:
+            if not isinstance(draft_id, str) or not isinstance(material_ids, list) or any(not isinstance(item, str) for item in material_ids):
+                raise project_store.ProjectManifestError("draft_id and material_ids must be strings")
+            creator_materials.selected_draft_materials(draft_id, material_ids, projects_root=_PROJECTS_ROOT)
+        elif material_ids:
+            raise project_store.ProjectManifestError("material_ids require a draft_id")
         project = create_project_from_creator_prompt(body)
+        if draft_id is not None:
+            creator_materials.attach_draft_materials(draft_id, project.id, material_ids, projects_root=_PROJECTS_ROOT)
     except project_store.ProjectManifestError as error:
         raise _invalid_input("invalid_creator_start", error) from error
+    except creator_materials.CreatorMaterialError as error:
+        if "project" in locals():
+            _remove_new_project(project.id)
+        raise _invalid_input("invalid_creator_start", error) from error
     return _project_dict(project)
+
+
+def _remove_new_project(project_id: str) -> None:
+    """Remove only a directory created by this request after an attach failure."""
+    candidate = Path(_PROJECTS_ROOT) / project_id
+    if candidate.parent == Path(_PROJECTS_ROOT) and candidate.name == project_id:
+        shutil.rmtree(candidate, ignore_errors=True)
+
+
+@router.get("/creator-materials/drafts/{draft_id}")
+def get_draft_materials(draft_id: str) -> dict[str, Any]:
+    try:
+        return {"items": [_material_dict(item) for item in creator_materials.list_draft_materials(draft_id, projects_root=_PROJECTS_ROOT)]}
+    except creator_materials.CreatorMaterialError as error:
+        raise _material_error(error) from error
+
+
+@router.post("/creator-materials", status_code=201)
+def create_creator_material(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        if set(body) != {"draft_id", "kind", "value"}:
+            raise creator_materials.CreatorMaterialError("material body must contain draft_id, kind and value")
+        if body["kind"] == "text":
+            item = creator_materials.add_text_material(body["draft_id"], body["value"], projects_root=_PROJECTS_ROOT)
+        elif body["kind"] == "url":
+            item = creator_materials.add_url_material(body["draft_id"], body["value"], projects_root=_PROJECTS_ROOT)
+        else:
+            raise creator_materials.CreatorMaterialError("kind must be text or url")
+        return _material_dict(item)
+    except creator_materials.CreatorMaterialError as error:
+        raise _material_error(error) from error
+
+
+@router.post("/creator-materials/upload", status_code=201)
+async def upload_creator_material(
+    draft_id: str = Form(...), file: UploadFile = File(...)
+) -> dict[str, Any]:
+    try:
+        payload = await file.read(creator_materials.MAX_FILE_BYTES + 1)
+        item = creator_materials.add_file_material(draft_id, file.filename or "", payload, file.content_type, projects_root=_PROJECTS_ROOT)
+        return _material_dict(item)
+    except creator_materials.CreatorMaterialError as error:
+        raise _material_error(error) from error
+    finally:
+        await file.close()
+
+
+@router.delete("/creator-materials/drafts/{draft_id}/{material_id}", status_code=204)
+def delete_creator_material(draft_id: str, material_id: str) -> None:
+    try:
+        creator_materials.remove_draft_material(draft_id, material_id, projects_root=_PROJECTS_ROOT)
+    except creator_materials.CreatorMaterialError as error:
+        raise _material_error(error) from error
 
 
 @router.get("/projects/{project_id}")
@@ -128,3 +214,14 @@ def get_project(project_id: str) -> dict[str, Any]:
     except project_store.ProjectManifestError as error:
         raise _manifest_error(project_id, error) from error
     return _project_dict(project)
+
+
+@router.get("/projects/{project_id}/materials")
+def get_project_materials(project_id: str) -> dict[str, Any]:
+    try:
+        project_store.load_project(project_id, projects_root=_PROJECTS_ROOT)
+        return {"items": [_material_dict(item) for item in creator_materials.list_project_materials(project_id, projects_root=_PROJECTS_ROOT)]}
+    except project_store.ProjectManifestError as error:
+        raise _manifest_error(project_id, error) from error
+    except creator_materials.CreatorMaterialError as error:
+        raise _material_error(error) from error
