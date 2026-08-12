@@ -44,7 +44,7 @@ const developerOpen = ref(false)
 const route = useRoute()
 // UX-00: the creator's first screen is the article input itself.  The legacy
 // workbench remains reachable after creation, but must not compete with it.
-const showLegacyShell = computed(() => route.path !== '/')
+const showLegacyShell = computed(() => route.path !== '/' && !route.path.startsWith('/projects/'))
 </script>
 
 <template>
