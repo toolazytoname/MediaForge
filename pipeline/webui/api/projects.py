@@ -66,6 +66,30 @@ def create_project_from_input(body: dict[str, Any]) -> project_store.Project:
     )
 
 
+def create_project_from_creator_prompt(body: dict[str, Any]) -> project_store.Project:
+    """Create a v0 sidecar from the single creator-facing home input.
+
+    The remaining manifest fields deliberately receive product defaults here,
+    rather than making a new creator understand project configuration first.
+    """
+    if set(body) != {"prompt"}:
+        raise project_store.ProjectManifestError("creator start body must contain only prompt")
+    prompt = body["prompt"]
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise project_store.ProjectManifestError("prompt must be a non-empty string")
+    normalized = prompt.strip()
+    title = normalized.splitlines()[0].strip()[:100]
+    return project_store.create_project(
+        title=title,
+        idea=normalized,
+        audience="希望把 AI 用进真实生活的普通人",
+        goal="完成一篇可继续编辑的图文文章",
+        voice="真实、清楚、有个人判断",
+        autonomy="collaborate",
+        now=datetime.now(timezone.utc).isoformat(), projects_root=_PROJECTS_ROOT,
+    )
+
+
 @router.get("/projects")
 def list_projects() -> dict[str, Any]:
     """List valid manifests newest first; malformed data is deliberately visible."""
@@ -76,16 +100,6 @@ def list_projects() -> dict[str, Any]:
     return {"items": [_project_dict(item) for item in items], "total": len(items)}
 
 
-@router.get("/projects/{project_id}")
-def get_project(project_id: str) -> dict[str, Any]:
-    """Read one manifest. This endpoint never creates or changes a project."""
-    try:
-        project = project_store.load_project(project_id, projects_root=_PROJECTS_ROOT)
-    except project_store.ProjectManifestError as error:
-        raise _manifest_error(project_id, error) from error
-    return _project_dict(project)
-
-
 @router.post("/projects", status_code=201)
 def create_project(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """显式创建 sidecar Project；不写 SQLite、不调用 AI。"""
@@ -93,4 +107,24 @@ def create_project(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         project = create_project_from_input(body)
     except project_store.ProjectManifestError as error:
         raise _invalid_input("invalid_project_input", error) from error
+    return _project_dict(project)
+
+
+@router.post("/projects/creator-start", status_code=201)
+def creator_start_project(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """One-click creator entrypoint; it stores intent but does not invoke AI yet."""
+    try:
+        project = create_project_from_creator_prompt(body)
+    except project_store.ProjectManifestError as error:
+        raise _invalid_input("invalid_creator_start", error) from error
+    return _project_dict(project)
+
+
+@router.get("/projects/{project_id}")
+def get_project(project_id: str) -> dict[str, Any]:
+    """Read one manifest. This endpoint never creates or changes a project."""
+    try:
+        project = project_store.load_project(project_id, projects_root=_PROJECTS_ROOT)
+    except project_store.ProjectManifestError as error:
+        raise _manifest_error(project_id, error) from error
     return _project_dict(project)

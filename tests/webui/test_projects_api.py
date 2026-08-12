@@ -98,3 +98,27 @@ def test_invalid_manifest_returns_visible_server_error(client, tmp_path):
     detail = response.json()["detail"]["error"]
     assert detail["code"] == "project_manifest_invalid"
     assert "project collection" in detail["message"]
+
+
+def test_creator_start_creates_a_project_from_one_semantic_input(client, tmp_path):
+    response = client.post("/api/v1/projects/creator-start", json={
+        "prompt": "我想写一篇关于 AI 工具很多，却让我更难下班的真实复盘。",
+    })
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["idea"] == "我想写一篇关于 AI 工具很多，却让我更难下班的真实复盘。"
+    assert body["title"] == "我想写一篇关于 AI 工具很多，却让我更难下班的真实复盘。"
+    assert body["audience"] == "希望把 AI 用进真实生活的普通人"
+    assert body["goal"] == "完成一篇可继续编辑的图文文章"
+    assert body["voice"] == "真实、清楚、有个人判断"
+    assert body["autonomy"] == "collaborate"
+    assert (tmp_path / "projects" / body["id"] / "project.json").is_file()
+
+
+@pytest.mark.parametrize("payload", [{}, {"prompt": " "}, {"prompt": 7}, {"prompt": "x", "title": "not allowed"}])
+def test_creator_start_rejects_missing_or_extra_semantic_input(client, payload):
+    response = client.post("/api/v1/projects/creator-start", json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"]["code"] == "invalid_creator_start"

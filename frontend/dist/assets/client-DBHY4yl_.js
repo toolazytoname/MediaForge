@@ -1,0 +1,1 @@
+import{t as e}from"./axios-BGmZl9Qd.js";var t=e.create({baseURL:`/api/v1`,timeout:3e4}),n=600*1e3;async function r(e,n){return t.post(e,n)}function i(t){if(e.isAxiosError(t)){let e=t,n=e.response?.data?.detail?.error??e.response?.data?.error;if(n)return`${n.code}: ${n.message}`;if(e.message)return e.message}return t instanceof Error?t.message:String(t)}export{i,t as n,r,n as t};

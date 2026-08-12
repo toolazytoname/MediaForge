@@ -48,3 +48,21 @@ def test_prototype_has_no_pipeline_or_real_publish_request() -> None:
     assert "axios" not in source
     assert "/api/" not in source
     assert "fetch(" not in source
+
+
+def test_real_creator_home_has_one_required_semantic_input_and_safe_start_contract() -> None:
+    source = (ROOT / "frontend/src/views/CreatorHome.vue").read_text(encoding="utf-8")
+
+    for contract in (
+        "把一个想法做成文章",
+        "生成文章",
+        "/projects/creator-start",
+        "localStorage",
+        "@keydown.meta.enter.prevent",
+        "@keydown.ctrl.enter.prevent",
+        ":disabled=\"!canStart || starting\"",
+        "最近创作",
+        "自动化创作",
+    ):
+        assert contract in source
+    assert "自主程度" not in source

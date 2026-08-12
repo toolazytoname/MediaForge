@@ -3,7 +3,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', name: 'creator-prototype', component: () => import('../views/CreatorPrototype.vue') },
+  { path: '/', name: 'creator-home', component: () => import('../views/CreatorHome.vue') },
   { path: '/ideas', name: 'ideas', component: () => import('../views/Ideas.vue') },
   { path: '/projects', name: 'projects', component: () => import('../views/Projects.vue') },
   { path: '/projects/new', name: 'project-create', component: () => import('../views/ProjectCreate.vue') },
