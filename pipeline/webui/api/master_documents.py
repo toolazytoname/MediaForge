@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, HTTPException
 from pipeline import creator_article_generation
 from pipeline import creator_material_parsing
 from pipeline import article_feedback
+from pipeline import local_annotations
 from pipeline import master_documents as master_store
 from pipeline import research as research_store
 from pipeline.creators import image_gen, llm
@@ -74,6 +75,16 @@ def _feedback_dict(proposal: article_feedback.ArticleFeedbackProposal, master: m
             "updated_at": proposal.updated_at}
 
 
+def _annotation_dict(item: local_annotations.LocalAnnotation) -> dict[str, Any]:
+    return {"id": item.id, "project_id": item.project_id, "kind": item.kind, "feedback": item.feedback,
+            "categories": list(item.categories), "excerpt": item.excerpt, "context_before": item.context_before,
+            "context_after": item.context_after, "structural_anchor": item.structural_anchor,
+            "paragraph_anchor": item.paragraph_anchor, "asset_id": item.asset_id, "source_version": item.source_version,
+            "source_hash": item.source_hash, "resolved_version": item.resolved_version, "resolved_hash": item.resolved_hash,
+            "status": item.status, "orphan_reason": item.orphan_reason, "created_at": item.created_at,
+            "updated_at": item.updated_at}
+
+
 def _master_error(project_id: str, error: master_store.MasterDocumentError) -> HTTPException:
     message = str(error)
     if message == f"project not found: {project_id}":
@@ -113,6 +124,22 @@ def _feedback_input(body: dict[str, Any]) -> dict[str, str | None]:
             raise article_feedback.ArticleFeedbackError(f"{name} must be non-empty text when provided")
         result[name] = value.strip() if isinstance(value, str) else None
     return result
+
+
+def _annotation_input(body: dict[str, Any], *, kind: str) -> tuple[str, str, tuple[str, ...]]:
+    required = {"feedback", "categories", "excerpt"} if kind == "text" else {"feedback", "categories", "asset_id"}
+    if not isinstance(body, dict) or set(body) != required:
+        raise local_annotations.LocalAnnotationError("local annotation body has missing or unknown fields")
+    feedback = body["feedback"]
+    anchor = body["excerpt"] if kind == "text" else body["asset_id"]
+    categories = body["categories"]
+    if not isinstance(feedback, str) or not feedback.strip() or len(feedback.strip()) > 8_000:
+        raise local_annotations.LocalAnnotationError("feedback must be a non-empty string")
+    if not isinstance(anchor, str) or not anchor.strip() or len(anchor.strip()) > 8_000:
+        raise local_annotations.LocalAnnotationError("annotation target must be non-empty text")
+    if not isinstance(categories, list) or any(not isinstance(item, str) for item in categories):
+        raise local_annotations.LocalAnnotationError("categories must be an array of strings")
+    return feedback.strip(), anchor.strip(), tuple(categories)
 
 
 def _parse_article(text: str) -> dict[str, str]:
@@ -356,6 +383,44 @@ def reject_suggestion(project_id: str, suggestion_id: str) -> dict[str, Any]:
         raise _master_error(project_id, error) from error
 
 
+@router.get("/projects/{project_id}/article/annotations")
+def get_local_annotations(project_id: str) -> dict[str, Any]:
+    """Return local author instructions and refresh their safe target status."""
+    try:
+        return {"items": [_annotation_dict(item) for item in local_annotations.resolve_all_annotations(
+            project_id, now=_now(), projects_root=_root())]}
+    except local_annotations.LocalAnnotationError as error:
+        return _raise_annotation_error(project_id, error)
+
+
+@router.post("/projects/{project_id}/article/annotations/text", status_code=201)
+def create_local_text_annotation(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        feedback, excerpt, categories = _annotation_input(body, kind="text")
+        return _annotation_dict(local_annotations.create_text_annotation(
+            project_id, excerpt=excerpt, feedback=feedback, categories=categories, now=_now(), projects_root=_root()))
+    except local_annotations.LocalAnnotationError as error:
+        return _raise_annotation_error(project_id, error)
+
+
+@router.post("/projects/{project_id}/article/annotations/image", status_code=201)
+def create_local_image_annotation(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        feedback, asset_id, categories = _annotation_input(body, kind="image")
+        return _annotation_dict(local_annotations.create_image_annotation(
+            project_id, asset_id=asset_id, feedback=feedback, categories=categories, now=_now(), projects_root=_root()))
+    except local_annotations.LocalAnnotationError as error:
+        return _raise_annotation_error(project_id, error)
+
+
+@router.delete("/projects/{project_id}/article/annotations/{annotation_id}", status_code=204)
+def remove_local_annotation(project_id: str, annotation_id: str) -> None:
+    try:
+        local_annotations.remove_annotation(project_id, annotation_id, projects_root=_root())
+    except local_annotations.LocalAnnotationError as error:
+        return _raise_annotation_error(project_id, error)
+
+
 @router.get("/projects/{project_id}/article/feedback")
 def get_article_feedback(project_id: str) -> dict[str, Any]:
     """List whole-article feedback proposals without exposing an accept path yet."""
@@ -467,6 +532,17 @@ def _raise_feedback_error(project_id: str, error: Exception) -> None:
     if "manifest" in message or "invalid feedback JSON" in message:
         raise _error(500, "feedback_manifest_invalid", error)
     raise _error(400, "invalid_feedback_request", error)
+
+
+def _raise_annotation_error(project_id: str, error: Exception) -> None:
+    message = str(error)
+    if message == f"project not found: {project_id}":
+        raise _error(404, "project_not_found", error)
+    if message == f"master not found: {project_id}" or message.startswith("visual asset not found:") or message.startswith("local annotation not found:"):
+        raise _error(404, "annotation_record_not_found", error)
+    if "manifest" in message or "annotations JSON" in message:
+        raise _error(500, "local_annotations_manifest_invalid", error)
+    raise _error(400, "invalid_local_annotation_request", error)
 
 
 def _feedback_run_lock(project_id: str) -> threading.Lock:
