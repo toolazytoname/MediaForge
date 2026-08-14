@@ -3,8 +3,7 @@
 // 不 vendor 也不重发平台官方美术资源；抖音/今日头条/视频号无对应品牌图标条目，
 // 保留 icon: undefined，UI 回退为文字色块。
 // 「已支持」= 后端 pipeline/config.py::PlatformsConfig 真实注册的 5 个平台。
-// 「规划中」= 蚁小二对标计划（docs/research/yixiaoer-teardown-and-plan.md）里列出、
-// 本项目尚未实现发布适配器的平台位——仅作陈列，不可点击授权。
+// 「规划中」= 产品后置、尚未实现发布适配器的平台位——仅作陈列，不可点击授权。
 import {
   siXiaohongshu,
   siWechat,

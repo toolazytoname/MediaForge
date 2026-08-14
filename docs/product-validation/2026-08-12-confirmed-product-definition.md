@@ -4,7 +4,7 @@
 > 状态：**需求已记录，尚未授权进入实现**  
 > 依据：2026-08-10 创作者真人验收，以及 2026-08-10—2026-08-12 与产品所有者的连续访谈  
 > 配套任务清单：[2026-08-12-confirmed-product-tasklist.md](./2026-08-12-confirmed-product-tasklist.md)  
-> 历史整改证据：[2026-08-10-creator-workflow-remediation.md](./2026-08-10-creator-workflow-remediation.md)
+> 历史整改证据：[../archive/2026-08-10-creator-workflow-remediation.md](../archive/2026-08-10-creator-workflow-remediation.md)
 
 ## 1. 这份文件解决什么问题
 

@@ -3,7 +3,7 @@
 > 固化日期：2026-08-12  
 > 状态：**已获产品所有者授权，按阶段闸门实施中**  
 > 产品事实源：[2026-08-12-confirmed-product-definition.md](./2026-08-12-confirmed-product-definition.md)  
-> 旧整改证据：[2026-08-10-creator-workflow-remediation.md](./2026-08-10-creator-workflow-remediation.md)
+> 旧整改证据：[../archive/2026-08-10-creator-workflow-remediation.md](../archive/2026-08-10-creator-workflow-remediation.md)
 
 ## 0. 使用规则
 
@@ -125,7 +125,7 @@ G6 长期知识层、更多平台和受监督真实发布
 - **输出**：基线报告、提交映射、声明文件范围和合并顺序。
 - **红线**：不得 reset/clean 用户工作区；不得直接全量搬运旧 UI；不得把旧 P0 checkbox 当成新产品验收。
 
-  ✅ 完成于 2026-08-12，commit 待本次文档提交，备注：完成 `ac232fe` 与旧 P0 19 个提交的逐项资产映射；保留安全/恢复原则，禁止整支 UI 合并，详见 [PF-00 审计报告](./2026-08-12-pf00-asset-audit.md)。
+  ✅ 完成于 2026-08-12，commit 待本次文档提交，备注：完成 `ac232fe` 与旧 P0 19 个提交的逐项资产映射；保留安全/恢复原则，禁止整支 UI 合并，详见 [PF-00 审计报告](../archive/2026-08-12-pf00-asset-audit.md)。
 
 ### G0 闸门
 

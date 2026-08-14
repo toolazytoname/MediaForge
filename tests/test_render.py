@@ -294,7 +294,7 @@ class TestRenderCardsE2E:
         paths = render_cards(
             "xhs_card", sample_slides, tmp_out_dir
         )
-        # 没异常 + 全部有内容 = 视觉验收在 docs/samples/ 单独做
+        # 没异常 + 全部有内容 = 视觉验收由人工抽查即可
         assert all(p.stat().st_size > 1000 for p in paths)
 
     def test_prefix_in_filename(

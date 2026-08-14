@@ -17,21 +17,19 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 - 现有 `topics → contents` 的冻结 1:1 契约暂不改。Project v0 先用 `output/projects/<project_id>/project.json` sidecar manifest 聚合已有内容与资产；需要迁移 schema 时先写 RFC 并等待用户确认。
 - 在 R11 的四周真人使用实验达标以前，禁止把“支持的平台数、生成篇数、后台卡片数”当成功指标。
 
-### 当前交接基线（2026-08-12，产品访谈固化后修订）
+### 当前交接基线
 
-- **R1–R9 的底层能力已完成，但 R0 创作者验收失败**：代理项目 `prj_a63f79b2` 能组合出主稿、真实图片、双平台稿、审批和 ZIP，只证明能力存在，不证明产品可用。用户随后明确反馈不会使用，并要求推翻旧流水线交互。
-- **当前唯一优先级**：执行 `docs/product-validation/2026-08-12-confirmed-product-definition.md` 与 `docs/product-validation/2026-08-12-confirmed-product-tasklist.md`。产品所有者已于 2026-08-12 批准 `DOC-02`，旧 P0 的 `PF-00` 资产审计已完成（见 `docs/product-validation/2026-08-12-pf00-asset-audit.md`）；现在先完成 `UX-00` 真人原型确认，随后进入 G1。阶段闸门仍有效，不得机械进入 R10。
-- GPT Image 2 已经通过用户在设置页配置的 OpenAI-compatible relay 完成真实生成与编辑；Settings 支持可选 `OPENAI_IMAGE_BASE_URL`（仅 HTTPS `/v1`），密钥与中转配置都只保存到权限 `0600` 的 gitignored `secrets/env.json`。不得将任何 key 或用户中转站地址写入 Git。
-- 此前记录的旧 P0 工程基线：完整 Python 回归 **1711 passed, 13 skipped**；前端生产构建通过（仅有既知的大 chunk 警告）；跨进程发布锁连续 10 次通过；`publish.enabled=false`。本次只做文档固化，没有重跑，且这些数字不代表新产品路径通过。
-- 对抗审查已补：sidecar 路径穿越、AI 可审阅初稿、真实平台适配、图片本地恢复、安全 Markdown/图文预览、主稿晚改确认、审批 stale 刷新、真实审批角色和无静默覆盖的版本化导出。
-- `frontend/dist/` 是 Vite 生成物；源码变化后重建即可，不要手工维护旧 hash 资源。
+- **当前唯一优先级**：执行 `docs/product-validation/2026-08-12-confirmed-product-definition.md` 与 `docs/product-validation/2026-08-12-confirmed-product-tasklist.md`。`DOC-02` 已批准；按阶段闸门推进，不得机械进入 R10 或认领归档旧 M*。
+- R1–R9 底层能力在库；R0 创作者产品验收仍未通过。开发分支为 `develop`。
+- 图片密钥与中转只放权限 `0600` 的 gitignored `secrets/env.json`；不得写入 Git。
+- `publish.enabled=false`；`frontend/dist/` 为 Vite 生成物，源码变更后重建。
 
 ## 会话重启指引（READ THIS FIRST）
 
 每次会话开始，按顺序读这些文件再开工，**不要通读整个 codebase**：
 
 1. `docs/PRODUCT_RESET_PLAN.md` — 当前产品目标、边界和 R0–R14 建设顺序
-2. `docs/TASKS.md` — 已实现能力、旧任务和恢复记录；先看顶部 2026-08-12 固化区，不得机械认领任何旧 `[ ]`
+2. `docs/TASKS.md` — 任务入口；执行细节以 confirmed tasklist 为准，历史见 `docs/archive/`
 3. `docs/TECH_SPEC.md` — 数据模型与接口契约（实现必须严格遵守，不得擅自改 schema）
 4. `docs/HARD_PARTS.md` — 你要做的任务如果在这里有对应条目，先读完再动手
 5. `docs/product-validation/2026-08-12-confirmed-product-definition.md` — 最新确认的用户、场景、交互和产品边界；与旧 UX 冲突时以它为准
@@ -41,7 +39,7 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 
 ## 工作约定（强制）
 
-1. **最新产品定义优先于遗留任务顺序**：R1–R9 和旧 P0 只是底层/工程资产，R0 产品验收仍未通过。先读 2026-08-12 产品定义与 tasklist；`DOC-02` 已于 2026-08-12 获用户批准，现按阶段闸门执行，不要机械领取旧 M*、R10 或旧 P0 清单。完成任务后勾选并追加 `✅ 完成于 <日期>，commit <sha>，备注 <一句话>`。
+1. **最新产品定义优先于遗留任务顺序**：先读 2026-08-12 产品定义与 tasklist；按阶段闸门执行，不要机械领取归档旧清单。完成任务后在 confirmed tasklist 勾选并追加 `✅ 完成于 <日期>，commit <sha>，备注 <一句话>`。
 2. **接口契约不可变**：`pipeline/models.py` 的字段、`SourceAdapter`/`PublisherAdapter` 的方法签名、SQLite 表结构，都在 TECH_SPEC.md 里定死了。如果实现中发现契约有问题，**停下来在 TASKS.md 里记录问题**，不要擅自修改契约。
 3. **TDD**：每个任务先写测试（TASKS.md 里已给出测试要点），RED → GREEN → 重构
 4. **不可变数据**：函数返回新对象，不原地修改传入参数（遵守全局 coding-style 规则）
