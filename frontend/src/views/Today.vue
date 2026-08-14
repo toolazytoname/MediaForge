@@ -17,6 +17,7 @@ const { items, loading, error } = storeToRefs(projectsStore)
 const latestProject = computed(() => items.value[0] ?? null)
 const topic = ref('')
 const idea = ref('')
+const notes = ref('')
 const starting = ref(false)
 const startError = ref<string | null>(null)
 const latestHasWechat = ref(false)
@@ -31,6 +32,7 @@ onMounted(async () => {
       const draft = JSON.parse(raw) as { topic?: string; idea?: string }
       topic.value = draft.topic ?? ''
       idea.value = draft.idea ?? ''
+      notes.value = draft.notes ?? ''
     }
   } catch {
     localStorage.removeItem(DRAFT_KEY)
@@ -46,8 +48,8 @@ onMounted(async () => {
   }
 })
 
-watch([topic, idea], () => {
-  localStorage.setItem(DRAFT_KEY, JSON.stringify({ topic: topic.value, idea: idea.value }))
+watch([topic, idea, notes], () => {
+  localStorage.setItem(DRAFT_KEY, JSON.stringify({ topic: topic.value, idea: idea.value, notes: notes.value }))
 })
 
 function titleFromInput(): string {
@@ -64,7 +66,7 @@ async function startArticle(mode: 'review' | 'auto' = 'review'): Promise<void> {
   try {
     const project = await projectsStore.create({
       title: titleFromInput(),
-      idea: idea.value.trim() || topic.value.trim(),
+      idea: [idea.value.trim() || topic.value.trim(), notes.value.trim() ? `作者提供的资料：\n${notes.value.trim()}` : ''].filter(Boolean).join('\n\n'),
       audience: '27—39 岁左右、正在用 AI 重建工作方式的知识工作者',
       goal: '完成一篇可在微信公众号发布的图文草稿',
       voice: '第一人称、诚实克制、具体、不喊口号',
@@ -125,6 +127,14 @@ function onMetaEnter(event: KeyboardEvent): void {
           :auto-size="{ minRows: 5, maxRows: 10 }"
           placeholder="这段话可以不完整。写下你真正想说的判断、经历或还没想清楚的问题。"
           @keydown="onMetaEnter"
+        />
+      </label>
+      <label class="field">
+        <span>可选资料</span>
+        <a-textarea
+          v-model:value="notes"
+          :auto-size="{ minRows: 2, maxRows: 6 }"
+          placeholder="可粘贴笔记或摘录。不是必填。今晚还不抓网页或 PDF。"
         />
       </label>
       <div class="compose-actions">

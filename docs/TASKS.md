@@ -18,7 +18,7 @@
   ✅ 完成于 2026-08-14，commit 76f7e8e，备注：点一段就地对比，整篇意见单独入口。
 
 - [x] **NIGHT-03｜受控 / 全自动双入口 + 微信头条一次准备**  
-  首页「生成文章」只出图文；「全自动准备双平台稿」继续生成微信和头条独立稿；`POST /prepare-platforms` 幂等且失败时复制主稿兜底。不真发。
+  ✅ 完成于 2026-08-14，commit 6dafb95，备注：首页分受控/全自动；prepare-platforms 一次出微信和头条独立稿，失败则复制主稿，published=false。
 
 - [x] **NIGHT-04｜视频与小红书规格**  
   ✅ 完成于 2026-08-14，备注：只写研究/规格，不实现真发和数字人。见 [2026-08-14-overnight-content-platform-plan.md](./product-validation/2026-08-14-overnight-content-platform-plan.md)。

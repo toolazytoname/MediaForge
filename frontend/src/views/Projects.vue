@@ -36,6 +36,18 @@ const claimSaving = ref(false)
 const masterSaving = ref(false)
 const suggestionSaving = ref(false)
 const masterForm = ref({ title: '', body: '' })
+const saveStatus = ref('')
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+watch(() => [masterForm.value.title, masterForm.value.body], () => {
+  if (!projectId.value || composing.value || !master.value) return
+  if (master.value.title === masterForm.value.title && master.value.body === masterForm.value.body) {
+    saveStatus.value = '已保存'
+    return
+  }
+  saveStatus.value = '未保存'
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => { void saveMaster() }, 1600)
+})
 const visualSaving = ref(false)
 const visualGenerating = ref<string | null>(null)
 const visualBible = ref('')
@@ -240,7 +252,14 @@ async function composeArticle(): Promise<void> {
 async function saveMaster(): Promise<void> {
   if (!projectId.value) return
   masterSaving.value = true
-  try { await masterStore.save(projectId.value, masterForm.value); await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } finally { masterSaving.value = false }
+  try {
+    await masterStore.save(projectId.value, masterForm.value)
+    saveStatus.value = '已保存'
+    await refreshApprovalStatus()
+  } catch (e) {
+    saveStatus.value = '保存失败'
+    detailError.value = unwrapError(e)
+  } finally { masterSaving.value = false }
 }
 async function proposeDraft(): Promise<void> {
   if (!projectId.value) return
@@ -493,7 +512,7 @@ watch(projectId, loadPage)
             <a-button type="primary" :loading="draftGenerating" :disabled="composing" @click="composeArticle">生成文章</a-button>
           </div>
           <a-card v-if="draftProposal" title="待审阅的 AI 初稿" :bordered="false" class="draft-proposal"><h3>{{ draftProposal.title }}</h3><p class="proposal-copy">{{ draftProposal.body }}</p><div class="proposal-actions"><a-button type="primary" @click="useDraftProposal">放入编辑器继续修改</a-button><a-button @click="draftProposal = null">丢弃</a-button></div></a-card>
-          <p class="master-count">{{ masterForm.body.trim().length }} 字</p>
+          <p class="master-count">{{ masterForm.body.trim().length }} 字 · {{ saveStatus || (masterSaving ? '保存中' : '已保存') }}</p>
           <div v-if="master?.body.trim() && !wechatVariant" class="draft-actions">
             <div><strong>同一主题，按平台再写一版</strong><p class="muted">微信走长文阅读，头条更直接。两份稿互相独立，不会覆盖这篇文章。不会真实发布。</p></div>
             <a-button type="primary" :loading="preparingPlatforms" @click="preparePlatformDrafts().then(() => openTab('wechat'))">生成微信和头条稿</a-button>
