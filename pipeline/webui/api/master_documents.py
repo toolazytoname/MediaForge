@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
@@ -68,10 +69,19 @@ def _manual_input(body: dict[str, Any]) -> tuple[str, str]:
     return body["title"], body["body"]
 
 
-def _suggestion_input(body: dict[str, Any]) -> tuple[str, str | None]:
-    if set(body) not in ({"action"}, {"action", "selection"}):
-        raise master_store.MasterDocumentError("suggestion body must contain action and optional selection")
-    return body["action"], body.get("selection")
+def _suggestion_input(body: dict[str, Any]) -> tuple[str, str | None, str | None]:
+    allowed = {
+        frozenset({"action"}),
+        frozenset({"action", "selection"}),
+        frozenset({"action", "note"}),
+        frozenset({"action", "selection", "note"}),
+    }
+    if frozenset(body) not in allowed:
+        raise master_store.MasterDocumentError("suggestion body must contain action and optional selection/note")
+    note = body.get("note")
+    if note is not None and (not isinstance(note, str) or not note.strip()):
+        raise master_store.MasterDocumentError("suggestion note must be non-empty text when provided")
+    return body["action"], body.get("selection"), note.strip() if isinstance(note, str) else None
 
 
 def _parse_article(text: str) -> dict[str, str]:
@@ -226,7 +236,7 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
     this handler.
     """
     try:
-        action, selection = _suggestion_input(body)
+        action, selection, note = _suggestion_input(body)
         if action not in {"clarify", "shorten", "change_voice", "add_counterpoint"}:
             raise master_store.MasterDocumentError(
                 "suggestion action must be clarify, shorten, change_voice or add_counterpoint"
@@ -238,7 +248,7 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
             raise master_store.MasterDocumentError(
                 "selection must occur exactly once in the current master body"
             )
-        prompt = _suggestion_prompt(project_id, master, action, selection)
+        prompt = _suggestion_prompt(project_id, master, action, selection, note)
     except master_store.MasterDocumentError as error:
         raise _master_error(project_id, error) from error
     if not _llm_is_configured():
@@ -254,7 +264,8 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
         raise _error(502, "llm_suggestion_failed", f"AI suggestion failed: {error}") from error
     try:
         proposed_title = master.title
-        proposed_body = _replace_selection(master.body, selection, proposed) if selection is not None else proposed
+        cleaned = _clean_replacement(proposed, selection)
+        proposed_body = _replace_selection(master.body, selection, cleaned) if selection is not None else cleaned
         suggestion = master_store.create_suggestion(project_id, action=action, selection=selection,
             proposed_title=proposed_title, proposed_body=proposed_body, now=_now(), projects_root=_root())
         return _suggestion_dict(suggestion)
@@ -288,7 +299,13 @@ def _replace_selection(body: str, selection: str, replacement: str) -> str:
     return body.replace(selection, replacement, 1)
 
 
-def _suggestion_prompt(project_id: str, master: master_store.MasterDocument, action: str, selection: str | None) -> str:
+def _suggestion_prompt(
+    project_id: str,
+    master: master_store.MasterDocument,
+    action: str,
+    selection: str | None,
+    note: str | None = None,
+) -> str:
     project = projects_api.project_store.load_project(project_id, projects_root=_root())
     try:
         board = research_store.load_research(project_id, projects_root=_root())
@@ -297,7 +314,43 @@ def _suggestion_prompt(project_id: str, master: master_store.MasterDocument, act
     claims = "\n".join(f"- {item.kind}/{item.status}: {item.text}" for item in board.claims) or "- none"
     sources = "\n".join(f"- {item.title}: {item.reference}" for item in board.sources) or "- none"
     target = selection if selection is not None else master.body
-    instruction = {"clarify": "rewrite it to be clearer without adding unsupported claims", "shorten": "compress it while preserving the author's point", "change_voice": f"rewrite it in this voice: {project.voice}", "add_counterpoint": "add a fair, explicit counterpoint while preserving the author's claim"}[action]
-    return ("You are proposing an edit, not publishing a final answer. Return ONLY the replacement text, no preface.\n"
-            f"Action: {instruction}\nAudience: {project.audience}\nGoal: {project.goal}\nVoice: {project.voice}\n"
-            f"Research sources:\n{sources}\nResearch claims:\n{claims}\n\nText to revise:\n{target}")
+    instruction = {
+        "clarify": "rewrite it to be clearer without adding unsupported claims",
+        "shorten": "compress it while preserving the author's point",
+        "change_voice": f"rewrite it in this voice: {project.voice}",
+        "add_counterpoint": "add a fair, explicit counterpoint while preserving the author's claim",
+    }[action]
+    note_line = f"Author instruction: {note}\n" if note else ""
+    scope = "only the selected passage" if selection else "the full article"
+    selection_rule = (
+        "The selected passage is the only thing you may rewrite. Return only that rewritten passage. "
+        "Do not return the article title, cover, headings, or any other paragraph.\n"
+        if selection else
+        "Return the complete rewritten article body in Markdown, without a wrapping title unless one is already in the body.\n"
+    )
+    return (
+        "You are proposing an edit, not publishing a final answer. Return ONLY the replacement text, no preface.\n"
+        f"Revise {scope}.\n{selection_rule}"
+        f"Action: {instruction}\n{note_line}"
+        f"Audience: {project.audience}\nGoal: {project.goal}\nVoice: {project.voice}\n"
+        f"Research sources:\n{sources}\nResearch claims:\n{claims}\n\nText to revise:\n{target}"
+    )
+
+
+def _clean_replacement(proposed: str, selection: str | None) -> str:
+    text = proposed.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        end = -1 if lines[-1].strip().startswith("```") else len(lines)
+        text = "\n".join(lines[1:end]).strip()
+    if not selection:
+        return text
+    if text.startswith("![") or text.startswith("# ") or "\n## " in text:
+        paragraphs = [
+            part.strip()
+            for part in text.split("\n\n")
+            if part.strip() and not part.strip().startswith("![") and not part.strip().startswith("#")
+        ]
+        if paragraphs:
+            return max(paragraphs, key=lambda item: SequenceMatcher(None, item, selection).ratio())
+    return text

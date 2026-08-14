@@ -327,8 +327,18 @@ export const useMasterStore = defineStore('master', () => {
     return response.data
   }
 
-  async function request(projectId: string, input: Pick<MasterSuggestion, 'action' | 'selection'>): Promise<MasterSuggestion> {
-    const response = await apiPost<MasterSuggestion>(`/projects/${projectId}/master/suggestions`, input.selection ? input : { action: input.action })
+  async function request(
+    projectId: string,
+    input: Pick<MasterSuggestion, 'action' | 'selection'> & { note?: string },
+  ): Promise<MasterSuggestion> {
+    const body: Record<string, string> = { action: input.action }
+    if (input.selection) body.selection = input.selection
+    if (input.note?.trim()) body.note = input.note.trim()
+    const response = await api.post<MasterSuggestion>(
+      `/projects/${projectId}/master/suggestions`,
+      body,
+      { timeout: GENERATION_TIMEOUT_MS },
+    )
     suggestions.value = [...suggestions.value, response.data]
     return response.data
   }

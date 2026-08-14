@@ -76,6 +76,50 @@ def test_invalid_suggestion_input_never_calls_the_provider(client, tmp_path, mon
     assert client.get("/api/v1/projects/prj_master/master/suggestions").json() == {"items": []}
 
 
+def test_suggestion_note_is_passed_to_the_provider_and_does_not_write(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "标题", "body": "这段话太说教了。"})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    seen = {}
+
+    def fake_complete(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return "这段话只保留判断，不再教训读者。"
+
+    monkeypatch.setattr(master_api.llm, "complete", fake_complete)
+    response = client.post(
+        "/api/v1/projects/prj_master/master/suggestions",
+        json={"action": "clarify", "selection": "这段话太说教了。", "note": "少说教，保留真实失败"},
+    )
+
+    assert response.status_code == 201
+    assert "Author instruction: 少说教，保留真实失败" in seen["prompt"]
+    assert "Revise only the selected passage." in seen["prompt"]
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["body"] == "这段话太说教了。"
+
+
+def test_suggestion_strips_full_article_when_only_a_passage_was_selected(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "标题", "body": "第一段。\n\n这段要改。\n\n第三段。"})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    monkeypatch.setattr(
+        master_api.llm,
+        "complete",
+        lambda *args, **kwargs: "# 标题\n\n![封面](x.png)\n\n这段已经改好了。\n\n第三段。",
+    )
+
+    response = client.post(
+        "/api/v1/projects/prj_master/master/suggestions",
+        json={"action": "clarify", "selection": "这段要改。"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["proposed_body"] == "第一段。\n\n这段已经改好了。\n\n第三段。"
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["body"] == "第一段。\n\n这段要改。\n\n第三段。"
+
+
 def test_master_api_errors_are_explicit(client):
     missing = client.get("/api/v1/projects/prj_missing/master")
     assert missing.status_code == 404
