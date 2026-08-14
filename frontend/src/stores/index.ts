@@ -1633,7 +1633,14 @@ export const useVariantsStore = defineStore('variants', () => {
   async function checkUpstream(projectId: string, platform: PlatformVariant['platform']) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/check-upstream`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   async function acknowledgeMaster(projectId: string, platform: PlatformVariant['platform']) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/acknowledge-master`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   async function restore(projectId: string, platform: PlatformVariant['platform'], version: number) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/versions/${version}/restore`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
-  return { variants, loading, error, load, create, save, lock, checkUpstream, acknowledgeMaster, restore }
+  async function prepare(projectId: string): Promise<{ variants: PlatformVariant[]; warnings: string[] }> {
+    const response = await api.post<{ variants: PlatformVariant[]; warnings: string[] }>(
+      `/projects/${projectId}/prepare-platforms`, {}, { timeout: GENERATION_TIMEOUT_MS },
+    )
+    variants.value = response.data.variants
+    return response.data
+  }
+  return { variants, loading, error, load, create, save, lock, checkUpstream, acknowledgeMaster, restore, prepare }
 })
 
 export interface ApprovalCheck { id: 'master' | 'visuals' | 'wechat_mp' | 'toutiao'; status: 'pending' | 'approved'; note: string | null; approved_by: string | null; approved_at: string | null }

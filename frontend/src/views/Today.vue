@@ -57,7 +57,7 @@ function titleFromInput(): string {
   return firstLine.slice(0, 36) || '未命名文章'
 }
 
-async function startArticle(): Promise<void> {
+async function startArticle(mode: 'review' | 'auto' = 'review'): Promise<void> {
   if (!canStart.value || starting.value) return
   starting.value = true
   startError.value = null
@@ -68,10 +68,10 @@ async function startArticle(): Promise<void> {
       audience: '27—39 岁左右、正在用 AI 重建工作方式的知识工作者',
       goal: '完成一篇可在微信公众号发布的图文草稿',
       voice: '第一人称、诚实克制、具体、不喊口号',
-      autonomy: 'draft',
+      autonomy: mode === 'auto' ? 'pack' : 'draft',
     })
     localStorage.removeItem(DRAFT_KEY)
-    await router.push(`/projects/${project.id}?compose=1`)
+    await router.push(mode === 'auto' ? `/projects/${project.id}?compose=1&auto=1` : `/projects/${project.id}?compose=1`)
   } catch (err) {
     startError.value = unwrapError(err)
   } finally {
@@ -90,7 +90,7 @@ function openLatest(focus: 'master' | 'wechat' = 'master'): void {
 function onMetaEnter(event: KeyboardEvent): void {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
     event.preventDefault()
-    void startArticle()
+    void startArticle('review')
   }
 }
 </script>
@@ -102,7 +102,7 @@ function onMetaEnter(event: KeyboardEvent): void {
       <div class="hero-copy">
         <p class="eyebrow">个人创作</p>
         <h1>写一篇完整的图文文章。</h1>
-        <p>写下主题和想法，点一次就会生成一篇可阅读的图文草稿。不必先建项目或填研究板。</p>
+        <p>先写图文。受控路径生成文章后你再改；全自动会继续准备微信和头条稿，仍然不会真实发布。</p>
       </div>
     </header>
 
@@ -128,10 +128,13 @@ function onMetaEnter(event: KeyboardEvent): void {
         />
       </label>
       <div class="compose-actions">
-        <a-button type="primary" size="large" :loading="starting" :disabled="!canStart" @click="startArticle">
+        <a-button type="primary" size="large" :loading="starting" :disabled="!canStart" @click="startArticle('review')">
           生成文章
         </a-button>
-        <span>⌘/Ctrl + Enter</span>
+        <a-button size="large" :loading="starting" :disabled="!canStart" @click="startArticle('auto')">
+          全自动准备双平台稿
+        </a-button>
+        <span>⌘/Ctrl + Enter 走受控生成</span>
       </div>
     </a-card>
 

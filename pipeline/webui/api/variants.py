@@ -119,6 +119,55 @@ def create_variant(project_id: str, platform: str, body: dict[str, Any] | None =
     except Exception as error:
         raise _err(502, "llm_variant_failed", f"AI platform adaptation failed: {error}") from error
 
+
+def _ensure_platform_variant(project_id: str, platform: str) -> tuple[dict[str, Any], str | None]:
+    existing = next(
+        (item for item in variant_store.load_variants(project_id, projects_root=_root()).variants if item.platform == platform),
+        None,
+    )
+    if existing is not None:
+        return asdict(existing), None
+    if _llm_is_configured():
+        try:
+            prompt = _adapt_prompt(project_id, platform)
+            conn = deps.get_conn()
+            try:
+                adapted = llm.complete_json(
+                    prompt, stage=f"variant_{platform}", ref_id=project_id,
+                    model_tier="creative", max_tokens=6000, conn=conn,
+                    parse=_parse_adaptation,
+                )
+            finally:
+                conn.close()
+            created = variant_store.create_adapted(
+                project_id, platform, **adapted, now=_now(), projects_root=_root(),
+            )
+            return asdict(created), None
+        except Exception as error:
+            copied = variant_store.create_from_master(project_id, platform, now=_now(), projects_root=_root())
+            return asdict(copied), f"{platform}: AI 适配失败，已复制主稿。{error}"
+    copied = variant_store.create_from_master(project_id, platform, now=_now(), projects_root=_root())
+    return asdict(copied), f"{platform}: 未配置文本模型，已复制主稿，可再手工改。"
+
+
+@router.post("/projects/{project_id}/prepare-platforms")
+def prepare_platforms(project_id: str) -> dict[str, Any]:
+    """Create WeChat and Toutiao drafts from the current master. Never publishes."""
+    try:
+        master = master_documents.load_master(project_id, projects_root=_root())
+    except master_documents.MasterDocumentError as error:
+        raise _variant_error(project_id, variant_store.VariantsError(str(error))) from error
+    if master is None:
+        raise _err(404, "variant_record_not_found", f"master not found: {project_id}")
+    variants: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for platform in ("wechat_mp", "toutiao"):
+        item, warning = _ensure_platform_variant(project_id, platform)
+        variants.append(item)
+        if warning:
+            warnings.append(warning)
+    return {"project_id": project_id, "variants": variants, "warnings": warnings, "published": False}
+
 @router.put("/projects/{project_id}/variants/{platform}")
 def save_variant(project_id: str, platform: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if set(body) != {"title", "summary", "body", "asset_ids"}: raise _err(400, "invalid_variant_request", "variant body requires title, summary, body and asset_ids")

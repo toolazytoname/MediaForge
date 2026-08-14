@@ -105,6 +105,41 @@ def test_ai_adaptation_is_explicit_and_only_creates_a_new_variant(
     assert repeated.status_code == 200
 
 
+def test_prepare_platforms_creates_wechat_and_toutiao_without_touching_master(client, tmp_path, monkeypatch):
+    _project(tmp_path / "projects")
+    monkeypatch.setattr(variants_api, "_llm_is_configured", lambda: True)
+
+    def fake_complete(prompt, **kwargs):
+        platform = "微信" if "微信公众号" in prompt else "头条"
+        return {
+            "title": f"{platform}标题",
+            "summary": f"{platform}摘要",
+            "body": f"{platform}正文，来自主稿但不覆盖主稿。",
+        }
+
+    monkeypatch.setattr(variants_api.llm, "complete_json", fake_complete)
+    first = client.post("/api/v1/projects/prj_variant_api/prepare-platforms")
+    assert first.status_code == 200
+    payload = first.json()
+    platforms = {item["platform"]: item for item in payload["variants"]}
+    assert platforms["wechat_mp"]["title"] == "微信标题"
+    assert platforms["toutiao"]["title"] == "头条标题"
+    assert master_documents.load_master("prj_variant_api", projects_root=tmp_path / "projects").title == "主标题"
+    second = client.post("/api/v1/projects/prj_variant_api/prepare-platforms")
+    assert second.status_code == 200
+    assert {item["title"] for item in second.json()["variants"]} == {"微信标题", "头条标题"}
+
+
+def test_prepare_platforms_falls_back_to_master_copy_when_provider_missing(client, tmp_path):
+    _project(tmp_path / "projects")
+    response = client.post("/api/v1/projects/prj_variant_api/prepare-platforms")
+    assert response.status_code == 200
+    platforms = {item["platform"]: item for item in response.json()["variants"]}
+    assert platforms["wechat_mp"]["body"] == "主稿正文"
+    assert platforms["toutiao"]["title"] == "主标题"
+    assert response.json()["warnings"]
+
+
 def test_api_acknowledges_latest_master_without_overwriting_platform_copy(client, tmp_path):
     root = tmp_path / "projects"; _project(root)
     client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp")
