@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,13 @@ class ProjectExport:
     project_id: str
     file_name: str
     path: str
+    kind: str = "zip"
+
+
+_WEB_ASSET_RE = re.compile(
+    r"!\[([^\]]*)\]\(/output/projects/(?P<project>[^/]+)/(?P<rel>assets/[^)\s]+)\)"
+)
+_REL_ASSET_RE = re.compile(r"!\[([^\]]*)\]\((?P<rel>assets/[^)\s]+)\)")
 
 
 def create_export(
@@ -68,7 +76,7 @@ def create_export(
     }
     if destination.exists():
         _validate_existing(destination, manifest, set(snapshot.visual_asset_ids))
-        return ProjectExport(project.id, file_name, relative.as_posix())
+        return ProjectExport(project.id, file_name, relative.as_posix(), kind="zip")
     try:
         with ZipFile(temporary, "w", compression=ZIP_DEFLATED) as archive:
             archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
@@ -79,7 +87,101 @@ def create_export(
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
-    return ProjectExport(project.id, file_name, relative.as_posix())
+    return ProjectExport(project.id, file_name, relative.as_posix(), kind="zip")
+
+
+def create_markdown_export(
+    project_id: str,
+    *,
+    projects_root: str | Path = projects.DEFAULT_PROJECTS_ROOT,
+) -> ProjectExport:
+    """Export the confirmed master as Markdown with relative image assets.
+
+    This is the primary formal export for DL-01. It does not require platform
+    variants or approval completion, and never creates a Publication.
+    """
+    try:
+        project = projects.load_project(project_id, projects_root=projects_root)
+        master = master_documents.load_master(project_id, projects_root=projects_root)
+    except (projects.ProjectManifestError, master_documents.MasterDocumentError) as error:
+        raise ProjectExportError(str(error)) from error
+    if master is None:
+        raise ProjectExportError("master is missing")
+
+    markdown, asset_rels = render_master_markdown(project, master)
+    file_name = f"article-m{master.version}.zip"
+    relative = Path("exports") / file_name
+    destination = Path(projects_root) / project.id / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        _validate_markdown_existing(destination, markdown, asset_rels)
+        return ProjectExport(project.id, file_name, relative.as_posix(), kind="markdown")
+
+    temporary = destination.with_suffix(".zip.tmp")
+    try:
+        with ZipFile(temporary, "w", compression=ZIP_DEFLATED) as archive:
+            archive.writestr("article.md", markdown)
+            for rel in sorted(asset_rels):
+                source = Path(projects_root) / project.id / rel
+                if not source.is_file():
+                    raise ProjectExportError(f"referenced visual file is missing: {rel}")
+                archive.write(source, rel)
+        temporary.replace(destination)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return ProjectExport(project.id, file_name, relative.as_posix(), kind="markdown")
+
+
+def render_master_markdown(
+    project: projects.Project,
+    master: master_documents.MasterDocument,
+) -> tuple[str, set[str]]:
+    """Rewrite web asset URLs to package-relative paths and attach author meta."""
+    body, asset_rels = rewrite_image_paths(master.body, project.id)
+    meta = [
+        f"# {master.title}",
+        "",
+        f"> {project.idea.strip()}" if project.idea.strip() else None,
+        "",
+        f"作者：{project.voice} · 个人创作",
+        "标识：作者确认稿；AI 辅助生成与配图，事实仍由作者负责。",
+        "",
+        body.strip(),
+        "",
+    ]
+    markdown = "\n".join(item for item in meta if item is not None)
+    if not markdown.endswith("\n"):
+        markdown += "\n"
+    return markdown, asset_rels
+
+
+def rewrite_image_paths(body: str, project_id: str) -> tuple[str, set[str]]:
+    """Convert `/output/projects/...` image links to `assets/...` relative paths."""
+    assets: set[str] = set()
+
+    def _web(match: re.Match[str]) -> str:
+        if match.group("project") != project_id:
+            raise ProjectExportError(
+                f"image path belongs to a different project: {match.group('project')}"
+            )
+        rel = match.group("rel")
+        if ".." in rel or rel.startswith("/") or not rel.startswith("assets/"):
+            raise ProjectExportError(f"unsafe image path: {rel}")
+        assets.add(rel)
+        return f"![{match.group(1)}]({rel})"
+
+    rewritten = _WEB_ASSET_RE.sub(_web, body)
+
+    def _rel(match: re.Match[str]) -> str:
+        rel = match.group("rel")
+        if ".." in rel or rel.startswith("/"):
+            raise ProjectExportError(f"unsafe image path: {rel}")
+        assets.add(rel)
+        return match.group(0)
+
+    _REL_ASSET_RE.sub(_rel, rewritten)
+    return rewritten, assets
 
 
 def render_variant_markdown(
@@ -158,4 +260,29 @@ def _validate_existing(
         raise ProjectExportError("existing export belongs to a different approval snapshot; move it aside before retrying")
 
 
-__all__ = ["ProjectExport", "ProjectExportError", "create_export", "render_variant_markdown"]
+def _validate_markdown_existing(
+    destination: Path,
+    markdown: str,
+    asset_rels: set[str],
+) -> None:
+    expected_names = {"article.md", *asset_rels}
+    try:
+        with ZipFile(destination) as archive:
+            if set(archive.namelist()) != expected_names or archive.testzip() is not None:
+                raise ProjectExportError("existing export is incomplete or corrupt; move it aside before retrying")
+            stored = archive.read("article.md").decode("utf-8")
+    except (BadZipFile, OSError, UnicodeDecodeError) as error:
+        raise ProjectExportError("existing export is incomplete or corrupt; move it aside before retrying") from error
+    if stored != markdown:
+        raise ProjectExportError("existing export belongs to a different master snapshot; move it aside before retrying")
+
+
+__all__ = [
+    "ProjectExport",
+    "ProjectExportError",
+    "create_export",
+    "create_markdown_export",
+    "render_master_markdown",
+    "render_variant_markdown",
+    "rewrite_image_paths",
+]

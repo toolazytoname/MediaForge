@@ -87,3 +87,62 @@ def test_completed_approval_can_create_local_export_without_publication(tmp_path
     corrupt = client.post(f"/api/v1/projects/{project_id}/export")
     assert corrupt.status_code == 400 and "corrupt" in corrupt.text
     assert (tmp_path / "state.db").read_bytes() == before
+
+
+def test_markdown_export_endpoint_returns_downloadable_package_without_publication(tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    monkeypatch.setattr(deps, "_DB_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setattr(projects_api, "_PROJECTS_ROOT", root)
+    client = TestClient(create_app())
+    project_id = _ready(root)
+    body = (
+        f"![封面](/output/projects/{project_id}/assets/vas_export_0.png)\n\n"
+        "## 真实问题\n\n这是经过核查并准备交付的正文。\n"
+    )
+    master_documents.save_manual(
+        project_id, title="测试全绿，产品仍不能用", body=body,
+        now="2026-08-09T00:24:00+00:00", projects_root=root,
+    )
+    before = (tmp_path / "state.db").read_bytes()
+
+    response = client.post(f"/api/v1/projects/{project_id}/export/markdown")
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["kind"] == "markdown"
+    assert payload["url"].endswith(payload["path"])
+    assert payload["url"].startswith(f"/output/projects/{project_id}/")
+    archive = root / project_id / payload["path"]
+    assert archive.is_file()
+    with zipfile.ZipFile(archive) as package:
+        markdown = package.read("article.md").decode("utf-8")
+        assert "# 测试全绿，产品仍不能用" in markdown
+        assert "/output/projects/" not in markdown
+        assert "![封面](assets/vas_export_0.png)" in markdown
+        assert "assets/vas_export_0.png" in package.namelist()
+    repeated = client.post(f"/api/v1/projects/{project_id}/export/markdown")
+    assert repeated.status_code == 201
+    assert repeated.json()["file_name"] == payload["file_name"]
+    assert (tmp_path / "state.db").read_bytes() == before
+
+
+def test_markdown_export_works_without_completed_approval(tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    monkeypatch.setattr(deps, "_DB_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setattr(projects_api, "_PROJECTS_ROOT", root)
+    client = TestClient(create_app())
+    project_id = "prj_md_only"
+    projects.create_project(
+        title="仅主稿", idea="想法", audience="创作者", goal="导出", voice="克制",
+        autonomy="collaborate", now="2026-08-13T00:00:00+00:00",
+        project_id=project_id, projects_root=root,
+    )
+    master_documents.save_manual(
+        project_id, title="只要主稿就能导出", body="没有平台稿，也没有审批。\n",
+        now="2026-08-13T00:01:00+00:00", projects_root=root,
+    )
+
+    response = client.post(f"/api/v1/projects/{project_id}/export/markdown")
+
+    assert response.status_code == 201
+    assert response.json()["kind"] == "markdown"

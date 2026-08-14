@@ -13,18 +13,23 @@ interface VisualPlan { assets: VisualAsset[] }
 interface FeedbackProposal { id: string; scope: 'whole_article' | 'local_text' | 'local_image'; feedback: string; target: string | null; readership: string | null; platform: string | null; values: string | null; status: 'ready' | 'failed' | 'accepted' | 'rejected'; state: 'current' | 'obsolete'; error: string | null; proposed_title: string | null; proposed_body: string | null; decision: 'accepted' | 'rejected' | null; decided_at: string | null; accepted_title: string | null; accepted_body: string | null; annotation_id: string | null; annotation_kind: 'text' | 'image' | null; annotation_excerpt: string | null; annotation_asset_id: string | null; annotation_categories: string[] }
 interface LocalAnnotation { id: string; kind: 'text' | 'image'; feedback: string; categories: string[]; excerpt: string | null; paragraph_anchor: string | null; asset_id: string | null; status: 'active' | 'orphaned'; orphan_reason: string | null }
 interface ProjectMaterial { id: string; kind: string; source: string; original_name: string | null; status: string; error: string | null; analysis: { status: 'used' | 'not_used'; segments: Array<{ citation: string; text: string }> } | null }
+interface ProjectMeta { id: string; title: string; idea: string; voice: string }
+interface ExportResult { project_id: string; file_name: string; path: string; url: string; kind?: string }
 
 const route = useRoute(); const router = useRouter()
 const id = computed(() => String(route.params.id))
 const master = ref<Master | null>(null); const generation = ref<Generation | null>(null)
 const visualPlan = ref<VisualPlan | null>(null); const materials = ref<ProjectMaterial[]>([])
+const projectMeta = ref<ProjectMeta | null>(null)
 const working = ref(false); const error = ref<string | null>(null); const saving = ref(false)
 const secondaryError = ref<string | null>(null)
 const drawerWidth = ref(420)
 const saveStatus = ref<'saved' | 'unsaved' | 'saving' | 'failed'>('saved')
 const lastSaved = ref('')
 const editor = ref<HTMLTextAreaElement | null>(null)
-const isEditing = ref(false); const moreOpen = ref(false); const detailsOpen = ref(false)
+const isEditing = ref(false); const isFinal = ref(false); const moreOpen = ref(false); const detailsOpen = ref(false)
+const exportWorking = ref(false); const exportError = ref<string | null>(null)
+const markdownExport = ref<ExportResult | null>(null); const zipExport = ref<ExportResult | null>(null)
 const activeImage = ref<VisualAsset | null>(null); const imagePrompt = ref(''); const imageWorking = ref(false)
 const imageActionError = ref<string | null>(null)
 const feedbackOpen = ref(false); const feedbackWorking = ref(false); const feedbackError = ref<string | null>(null)
@@ -54,6 +59,23 @@ const replacementAssets = computed(() => activeImage.value
   : [])
 const diffRows = computed<DiffRow[]>(() => master.value && proposalReview.value ? lineDiff(master.value.body, proposalBody.value) : [])
 const affectedImages = computed(() => diffRows.value.filter(row => row.text.includes('](')).length)
+const authorLabel = computed(() => projectMeta.value?.voice?.trim() || '个人创作')
+const articleDek = computed(() => projectMeta.value?.idea?.trim() || '')
+const coverAsset = computed(() => {
+  const match = master.value?.body.match(/!\[[^\]]*(封面)?[^\]]*\]\(([^)]+)\)/)
+  if (!match) return selectedAssets.value.find(item => /封面/.test(item.prompt)) ?? selectedAssets.value[0] ?? null
+  const src = match[2]
+  return selectedAssets.value.find(item => item.file_path && src.includes(item.file_path)) ?? selectedAssets.value[0] ?? null
+})
+const finalArticleHtml = computed(() => {
+  if (!master.value) return ''
+  let body = master.value.body
+  if (coverAsset.value?.file_path) {
+    const escaped = coverAsset.value.file_path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    body = body.replace(new RegExp(`!\\[[^\\]]*\\]\\([^)]*${escaped}[^)]*\\)\\s*`, 'm'), '')
+  }
+  return renderMarkdown(body)
+})
 const imageConfigIssue = computed(() => {
   const texts = [
     generation.value?.error,
@@ -66,6 +88,40 @@ const imageConfigIssue = computed(() => {
 
 function imageUrl(asset: VisualAsset): string { return `/output/projects/${id.value}/${asset.file_path ?? ''}` }
 function imageMarkdown(asset: VisualAsset): string { return `![文章图片](${imageUrl(asset)})` }
+function confirmFinal(): void {
+  if (!master.value) return
+  isEditing.value = false
+  isFinal.value = true
+  exportError.value = null
+}
+function returnToEdit(): void {
+  isFinal.value = false
+  exportError.value = null
+}
+async function exportMarkdownPackage(): Promise<void> {
+  if (!master.value || exportWorking.value) return
+  exportWorking.value = true
+  exportError.value = null
+  try {
+    markdownExport.value = (await api.post<ExportResult>(`/projects/${id.value}/export/markdown`, {})).data
+  } catch (cause) {
+    exportError.value = unwrapError(cause)
+  } finally {
+    exportWorking.value = false
+  }
+}
+async function exportZipBackup(): Promise<void> {
+  if (!master.value || exportWorking.value) return
+  exportWorking.value = true
+  exportError.value = null
+  try {
+    zipExport.value = (await api.post<ExportResult>(`/projects/${id.value}/export`, {})).data
+  } catch (cause) {
+    exportError.value = unwrapError(cause)
+  } finally {
+    exportWorking.value = false
+  }
+}
 function timeLabel(value: string): string { return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(new Date(value)) }
 function versionReason(reason: string): string {
   if (reason === '当前版本') return '当前正式版本'
@@ -89,15 +145,18 @@ function warnBeforeUnload(event: BeforeUnloadEvent): void {
 }
 
 async function loadOptionalContext(): Promise<void> {
-  const [visuals, materialResponse] = await Promise.allSettled([
+  const [visuals, materialResponse, projectResponse] = await Promise.allSettled([
     api.get<VisualPlan>(`/projects/${id.value}/visuals`),
     api.get<{ items: ProjectMaterial[] }>(`/projects/${id.value}/materials`),
+    api.get<ProjectMeta>(`/projects/${id.value}`),
   ])
   const issues: string[] = []
   if (visuals.status === 'fulfilled') visualPlan.value = visuals.value.data
   else { visualPlan.value = null; issues.push('图片信息暂时不可用') }
   if (materialResponse.status === 'fulfilled') materials.value = materialResponse.value.data.items
   else { materials.value = []; issues.push('资料信息暂时不可用') }
+  if (projectResponse.status === 'fulfilled') projectMeta.value = projectResponse.value.data
+  else { projectMeta.value = null; issues.push('作者信息暂时不可用') }
   secondaryError.value = issues.length ? `${issues.join('；')}。文章仍可阅读和编辑。` : null
 }
 async function load(): Promise<void> {
@@ -418,13 +477,49 @@ onBeforeUnmount(() => {
         <span v-else-if="saveStatus === 'saved' && lastSaved" class="save-state">已保存 {{ timeLabel(lastSaved) }}</span>
         <span v-else-if="saveStatus === 'unsaved'" class="save-state unsaved">有未保存修改</span>
         <button type="button" class="quiet-button" @click="goToImageSettings">设置</button>
-        <button v-if="master" type="button" class="quiet-button" @click="moreOpen = true">资料与版本</button>
-        <button v-if="master" type="button" class="quiet-button feedback-entry" @click="feedbackOpen = true">对整篇提意见</button>
-        <button v-if="master" type="button" class="save-button" :disabled="saving || saveStatus === 'saved'" @click="save">{{ saving ? '保存中…' : '保存修改' }}</button>
+        <button v-if="master && !isFinal" type="button" class="quiet-button" @click="moreOpen = true">资料与版本</button>
+        <button v-if="master && !isFinal" type="button" class="quiet-button feedback-entry" @click="feedbackOpen = true">对整篇提意见</button>
+        <button v-if="master && !isFinal" type="button" class="quiet-button" @click="confirmFinal">确认最终稿</button>
+        <button v-if="master && isFinal" type="button" class="quiet-button" @click="returnToEdit">返回编辑</button>
+        <button v-if="master && !isFinal" type="button" class="save-button" :disabled="saving || saveStatus === 'saved'" @click="save">{{ saving ? '保存中…' : '保存修改' }}</button>
+        <button v-if="master && isFinal" type="button" class="save-button" :disabled="exportWorking" @click="exportMarkdownPackage">{{ exportWorking ? '导出中…' : '导出 Markdown' }}</button>
       </div>
     </header>
 
     <section v-if="working && !master" class="generating"><p>正在把你的想法整理成文章</p><small>正文会先出现，封面和插图随后嵌入对应段落。</small></section>
+    <section v-else-if="master && isFinal" class="final-view" aria-label="最终阅读">
+      <header class="final-header">
+        <div>
+          <p class="kicker">最终阅读</p>
+          <h1 class="final-heading">文章已经是你确认过的样子。</h1>
+        </div>
+        <div class="final-actions">
+          <button type="button" class="quiet-button" @click="returnToEdit">返回编辑</button>
+          <button type="button" class="save-button" :disabled="exportWorking" @click="exportMarkdownPackage">{{ exportWorking ? '导出中…' : '导出 Markdown' }}</button>
+        </div>
+      </header>
+      <article class="final-paper" aria-label="最终文章">
+        <p class="article-meta">{{ authorLabel }} · 个人创作 · 作者确认稿</p>
+        <h1>{{ master.title }}</h1>
+        <p v-if="articleDek" class="dek">{{ articleDek }}</p>
+        <figure v-if="coverAsset?.file_path" class="final-cover">
+          <img :src="imageUrl(coverAsset)" alt="封面" @error="imageFailed" />
+        </figure>
+        <div class="preview final-body" v-html="finalArticleHtml" />
+        <p class="ai-mark">标识：AI 辅助生成与配图；事实与表述由作者确认。</p>
+      </article>
+      <p v-if="exportError" class="inline-error" role="alert">{{ exportError }}</p>
+      <div v-if="markdownExport" class="export-result" role="status">
+        <a :href="markdownExport.url" download target="_blank" rel="noreferrer">下载 {{ markdownExport.file_name }}</a>
+        <span>包内含 article.md 与相对路径图片，可在仓库外打开。</span>
+      </div>
+      <details class="backup-panel">
+        <summary>下载与备份</summary>
+        <p>ZIP 仅作完整内容包备份；正式交付请用 Markdown。</p>
+        <button type="button" class="quiet-button" :disabled="exportWorking" @click="exportZipBackup">导出 ZIP 备份</button>
+        <a v-if="zipExport" :href="zipExport.url" download target="_blank" rel="noreferrer">下载 {{ zipExport.file_name }}</a>
+      </details>
+    </section>
     <section v-else-if="master" class="article-shell">
       <div v-if="imageConfigIssue" class="local-warning settings-warning" role="status">
         <span>图片未能生成：当前图片服务不可用，或模型名不被中转站支持（常见为 model_not_found）。请到设置配置 API Key、中转地址和图片模型，然后返回这里重试。</span>
@@ -503,4 +598,5 @@ onBeforeUnmount(() => {
 .article-workspace{min-height:100vh;background:#f5f1e9;color:#28251f}.topbar{position:sticky;top:0;z-index:5;display:flex;min-height:62px;align-items:center;justify-content:space-between;gap:16px;padding:0 clamp(18px,5vw,72px);border-bottom:1px solid #ded7cb;background:rgba(255,253,248,.94);backdrop-filter:blur(12px)}button{font:inherit;cursor:pointer}.wordmark{border:0;background:transparent;color:#342d26;font:700 20px Georgia,'Songti SC',serif}.top-actions{display:flex;align-items:center;gap:10px}.progress,.save-state{color:#72695e;font-size:13px}.unsaved{color:#9a542e}.quiet-button,.save-button,.local-warning button,.failed button,.versions button,.image-actions button,.replacement-list button{border:0;border-radius:7px;padding:8px 11px}.quiet-button{background:transparent;color:#5f584f}.feedback-entry{color:#6c432e}.save-button,.local-warning button,.failed button{background:#2f5d4f;color:#fffdf8}.save-button:disabled{cursor:not-allowed;background:#bcb4a8}.generating,.failed{max-width:620px;margin:16vh auto;padding:40px;border:1px solid #dfd8cb;border-radius:12px;background:#fffdfa}.generating p{font:32px Georgia,serif;margin:0 0 12px}.generating small{color:#756d63}.article-shell{width:min(820px,calc(100% - 36px));margin:44px auto 88px}.local-warning,.secondary-warning{display:flex;align-items:center;justify-content:space-between;gap:15px;margin-bottom:16px;padding:11px 13px;border:1px solid #e5c4ae;border-radius:8px;background:#fff8f2;color:#8c4429;font-size:13px}.secondary-warning{border-color:#d9d5cd;background:#faf9f5;color:#756b5f}.title{box-sizing:border-box;width:100%;margin:0 0 16px;border:0;border-bottom:1px solid #d8d0c5;outline:0;background:transparent;padding:0 0 15px;font:clamp(35px,5vw,58px)/1.12 Georgia,'Songti SC',serif;color:#29251e}.title:focus{border-color:#9c522f}.reading-switch{display:flex;gap:4px;margin-bottom:18px}.reading-switch button{border:0;border-radius:5px;background:transparent;padding:6px 10px;color:#777065;font-size:13px}.reading-switch button.active{background:#e7ddd0;color:#433a30;font-weight:700}.preview{min-height:460px;background:#fffdfa;border:1px solid #e2dbd0;border-radius:12px;padding:clamp(24px,6vw,70px);font:18px/1.9 Georgia,'Songti SC',serif;box-shadow:0 15px 45px rgba(79,61,38,.05)}.preview :deep(h2){margin-top:2em;font-size:28px}.preview :deep(p){margin:1em 0}.preview :deep(img){display:block;max-width:100%;margin:28px auto;border-radius:7px;cursor:pointer}.preview :deep(img.image-broken){min-height:180px;outline:1px dashed #b35b42;background:#fff5ef}.selection-comment{position:fixed;z-index:20;border:0;border-radius:999px;background:#2f5d4f;color:#fffdf8;padding:8px 13px;box-shadow:0 6px 20px rgba(38,61,49,.22)}.editor-panel{background:#fffdfa;border:1px solid #e2dbd0;border-radius:12px;padding:22px}.editor-panel label,.feedback-form label,.proposal-diff label{display:block;margin:14px 0 9px;color:#665e54;font-size:13px;font-weight:700}.editor-panel textarea,.image-actions+*,#image-prompt,.feedback-form textarea,.feedback-form input,.proposal-diff textarea,.proposal-diff input{box-sizing:border-box;width:100%;border:1px solid #d8d0c3;border-radius:8px;background:#fffdfa;padding:15px;font:14px/1.7 ui-monospace,SFMono-Regular,monospace;color:#2d2924}.editor-panel textarea:focus,#image-prompt:focus,.feedback-form textarea:focus,.feedback-form input:focus,.proposal-diff textarea:focus,.proposal-diff input:focus{outline:2px solid rgba(159,77,49,.24);border-color:#9f4d31}.editor-panel p,.feedback-form p{margin:9px 0 0;color:#776f65;font-size:12px}.feedback-form .scope,.proposal-diff .scope{font-size:14px;color:#4f453a}.feedback-form blockquote,.proposal-diff blockquote{margin:10px 0;padding:10px 13px;border-left:3px solid #b28257;background:#fbf6ef;color:#554b40}.annotation-categories{display:flex;flex-wrap:wrap;gap:7px;margin:17px 0 0;border:0;padding:0}.annotation-categories legend{margin-bottom:8px;color:#665e54;font-size:13px;font-weight:700}.annotation-categories button{border:1px solid #d8d0c3;border-radius:99px;background:#fffdfa;padding:5px 10px;color:#65594e;font-size:12px}.annotation-categories button.active{border-color:#2f5d4f;background:#e7f0ea;color:#214437}.feedback-form .save-button{margin-top:20px}.proposal-notice,.annotation-notice{margin:18px 0;padding:12px 14px;border-left:3px solid #b28257;background:#fbf6ef;color:#65594e;font-size:13px}.proposal-notice p,.annotation-notice p{margin:5px 0}.proposal-notice button,.annotation-notice button{border:0;background:transparent;color:#7c432a;text-decoration:underline}.annotation-notice .orphaned{color:#9a542e}.annotation-notice em{font-style:normal}.inline-error{margin:16px 0;color:#a44130}.failed-actions{display:flex;gap:10px}.failed button.manual,.danger-button{background:#eee4d8;color:#5b382e}.drawer-section{padding:0 0 22px;margin-bottom:20px;border-bottom:1px solid #e8e1d6}.drawer-section h3{margin:0 0 6px;font:700 19px Georgia,'Songti SC',serif}.drawer-section>p{color:#766e63;font-size:13px;line-height:1.6}.versions,.materials{display:grid;gap:9px;margin:14px 0 0;padding:0;list-style:none}.versions li{display:flex;align-items:center;justify-content:space-between;gap:12px}.versions strong,.versions small,.materials strong,.materials small{display:block}.versions small,.materials small{margin-top:3px;color:#80776c;font-size:12px}.versions button{background:#eee7db;color:#51473c}.image-row,.replacement-list button{display:block;width:100%;margin-top:8px;border:1px solid #e2dad0;border-radius:7px;background:#fffdfa;padding:10px;text-align:left;color:#51483e;font-size:12px}.detail-image{width:100%;border-radius:9px;background:#f0ebe2}.image-meta{color:#80776c;font-size:12px}.image-actions{display:flex;gap:9px;margin-top:14px}.replacement-list h3{margin:24px 0 2px;font:700 16px Georgia,'Songti SC',serif}.proposal-diff{padding:2px 4px 28px}.diff-risk{font-size:13px;color:#765e4b}.diff-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}.diff-pane{min-width:0}.diff-pane h3,.diff-legend h3{font:700 16px Georgia,'Songti SC',serif}.diff-title{min-height:1.5em;margin:0 0 8px;color:#5a5146;font-weight:700}.diff-pane pre,.diff-pane textarea{box-sizing:border-box;width:100%;height:440px;margin:0;overflow:auto;white-space:pre-wrap;tab-size:2}.diff-pane pre{border:1px solid #d8d0c3;border-radius:8px;background:#f8f4ed;padding:15px;font:14px/1.7 ui-monospace,SFMono-Regular,monospace}.diff-legend{margin-top:22px}.diff-row{display:grid;grid-template-columns:25px 1fr;padding:3px 8px;border-left:3px solid transparent;white-space:pre-wrap}.diff-row code{overflow-wrap:anywhere}.diff-row.add{border-left-color:#3f8b62;background:#edf8f0}.diff-row.remove{border-left-color:#bf5e4a;background:#fff0ec}.proposal-review-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:21px}@media(max-width:760px){.diff-columns{grid-template-columns:1fr}.diff-pane pre,.diff-pane textarea{height:280px}.proposal-review-actions{align-items:stretch;flex-direction:column}.proposal-review-actions button{width:100%}}@media(max-width:640px){.topbar{align-items:flex-start;min-height:unset;padding-top:13px;padding-bottom:13px}.top-actions{justify-content:flex-end;flex-wrap:wrap}.progress,.save-state{width:100%;text-align:right}.article-shell{margin-top:28px}.local-warning{align-items:flex-start;flex-direction:column}.local-warning button{width:100%}.preview{min-height:360px;padding:25px 21px;font-size:17px}.title{font-size:38px}.image-actions{flex-direction:column}.image-actions button{width:100%}}
 .version-notice{display:flex;align-items:center;gap:10px;margin:16px 0;padding:12px 14px;border:1px solid #b9d1c0;border-radius:8px;background:#edf7ef;color:#254c36;font-size:13px}.version-notice span{flex:1}.version-notice button{border:0;background:transparent;color:#254c36;text-decoration:underline}.proposal-recompare{margin-top:16px;padding:14px;border:1px solid #e5c4ae;border-radius:8px;background:#fff8f2;color:#7d452e}.proposal-recompare p{margin:6px 0 13px;font-size:13px}@media(max-width:640px){.version-notice{align-items:flex-start;flex-wrap:wrap}.version-notice span{flex-basis:100%}}
 .candidate-card{margin-top:12px;border:1px solid #ddd4c8;border-radius:8px;padding:10px;background:#fbf8f2}.candidate-card img{display:block;width:100%;max-height:180px;object-fit:cover;border-radius:5px}.candidate-card p{margin:8px 0 4px;font-size:13px;line-height:1.5}.candidate-card small{display:block;color:#80776c;font-size:11px}.candidate-card button{margin-top:10px;border:0;border-radius:6px;background:#2f5d4f;padding:7px 10px;color:#fffdf8}.candidate-card button:disabled{background:#bcb4a8}
+.final-view{width:min(920px,calc(100% - 36px));margin:36px auto 88px}.final-header{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:28px}.kicker{margin:0 0 8px;color:#9f4d31;font-size:12px;font-weight:700;letter-spacing:.06em}.final-heading{margin:0;font:clamp(28px,4vw,42px)/1.15 Georgia,'Songti SC',serif;color:#29251e}.final-actions{display:flex;align-items:center;gap:10px}.final-paper{max-width:720px;margin:0 auto;padding:clamp(28px,5vw,56px);border:1px solid #e2dbd0;border-radius:12px;background:#fffdfa;box-shadow:0 15px 45px rgba(79,61,38,.05)}.article-meta{margin:0 0 12px;color:#9b7969;font-size:12px;font-weight:700}.final-paper>h1{margin:0 0 14px;font:clamp(34px,4.5vw,52px)/1.12 Georgia,'Songti SC',serif;color:#29251e}.dek{margin:0 0 22px;color:#686057;font:19px/1.6 Georgia,'Songti SC',serif}.final-cover{margin:0 0 28px}.final-cover img{display:block;width:100%;max-height:360px;object-fit:cover;border-radius:6px}.final-body{border:0;padding:0;min-height:0;box-shadow:none;background:transparent}.ai-mark{margin:28px 0 0;color:#80776c;font-size:12px}.export-result{display:flex;flex-wrap:wrap;align-items:center;gap:12px;max-width:720px;margin:18px auto 0;padding:12px 14px;border:1px solid #b9d1c0;border-radius:8px;background:#edf7ef;color:#254c36;font-size:13px}.export-result a{color:#214437;font-weight:700}.backup-panel{max-width:720px;margin:20px auto 0;padding:14px 16px;border:1px solid #e2dbd0;border-radius:8px;background:#faf8f3;color:#6f675d;font-size:13px}.backup-panel summary{cursor:pointer;font-weight:700;color:#51483e}.backup-panel p{margin:10px 0}.backup-panel a{display:inline-block;margin-left:10px;color:#70412e}@media(max-width:640px){.final-header,.final-actions{align-items:stretch;flex-direction:column}.final-actions button{width:100%}.final-paper{padding:28px 20px}}
 </style>
