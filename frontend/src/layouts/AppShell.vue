@@ -20,7 +20,7 @@ import UserAvatarMenu from './components/UserAvatarMenu.vue'
 interface NavItem { path: string; label: string; icon: Component; exact?: boolean }
 
 const primaryItems: ReadonlyArray<NavItem> = [
-  { path: '/', label: '今天', icon: HomeOutlined, exact: true },
+  { path: '/', label: '写作', icon: HomeOutlined, exact: true },
   { path: '/ideas', label: '灵感', icon: BulbOutlined },
   { path: '/projects', label: '项目', icon: FolderOpenOutlined },
   { path: '/roadmap/library', label: '资产', icon: FileTextOutlined },
