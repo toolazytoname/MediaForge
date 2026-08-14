@@ -51,6 +51,8 @@ const importingSlot = ref<string | null>(null)
 const variantGenerating = ref<string | null>(null)
 const exporting = ref(false)
 const exportResult = ref<ProjectExportResult | null>(null)
+const composing = ref(false)
+const composeStage = ref('')
 
 const unverifiedFacts = computed(() => board.value?.claims.filter(item => item.kind === 'fact' && (item.status === 'unverified' || !item.source_ids.length)) ?? [])
 const openQuestions = computed(() => board.value?.claims.filter(item => item.kind === 'open_question' && item.status === 'open') ?? [])
@@ -72,8 +74,9 @@ const workflowSteps = computed(() => [
   { key: 'research' as const, label: '资料', done: researchReady.value },
   { key: 'approval' as const, label: '交付', done: Boolean(approvalStatus.value?.complete && approvalStatus.value.ready && !approvalStatus.value.stale) },
 ])
-const nextStep = computed(() => workflowSteps.value.find(item => !item.done) ?? {
-  key: 'approval' as const, label: '交付', done: true,
+const nextStep = computed(() => {
+  if (master.value?.body.trim()) return { key: 'master' as const, label: '文章', done: true }
+  return workflowSteps.value.find(item => !item.done) ?? { key: 'approval' as const, label: '交付', done: true }
 })
 
 async function loadPage(): Promise<void> {
@@ -91,16 +94,19 @@ async function loadPage(): Promise<void> {
     await variantsStore.load(projectId.value)
     await approvalsStore.load(projectId.value)
     if (master.value) masterForm.value = { title: master.value.title, body: master.value.body }
+    else if (project.value) masterForm.value = { title: project.value.title, body: project.value.idea }
     visualBible.value = Object.entries(visualPlan.value?.bible ?? {}).map(([key, value]) => `${key}: ${value}`).join('\n')
     visualSlots.value = visualPlan.value?.slots.map(slot => ({ ...slot })) ?? []
     variantForms.value = Object.fromEntries(variants.value.map(item => [item.platform, { title: item.title, summary: item.summary, body: item.body }]))
+    const shouldCompose = route.query.compose === '1' && !(master.value?.body.trim())
     const requested = typeof route.query.focus === 'string' ? route.query.focus : ''
-    if (requested === 'wechat' || requested === 'variants') activeWorkbench.value = 'variants'
-    else if (requested === 'master' || requested === 'article') activeWorkbench.value = 'master'
+    if (shouldCompose || requested === 'master' || requested === 'article' || requested === 'compose') activeWorkbench.value = 'master'
+    else if (requested === 'wechat' || requested === 'variants') activeWorkbench.value = 'variants'
     else if (requested === 'visuals' || requested === 'research' || requested === 'approval') activeWorkbench.value = requested as typeof activeWorkbench.value
     else if (variants.value.some(item => item.platform === 'wechat_mp')) activeWorkbench.value = 'variants'
     else if (master.value) activeWorkbench.value = 'master'
-    else activeWorkbench.value = workflowSteps.value.find(item => !item.done)?.key ?? 'master'
+    else activeWorkbench.value = 'master'
+    if (shouldCompose) await composeArticle()
   } catch (e) {
     detailError.value = unwrapError(e)
   }
@@ -108,6 +114,93 @@ async function loadPage(): Promise<void> {
 
 async function refreshApprovalStatus(): Promise<void> {
   if (projectId.value) await approvalsStore.load(projectId.value)
+}
+
+function firstHeading(body: string, fallback: string): string {
+  return body.split('\n').find(line => line.startsWith('## '))?.replace(/^##\s+/, '').trim() || fallback
+}
+
+function embedSelectedImages(body: string): string {
+  const slots = visualPlan.value?.slots ?? []
+  const selected = visualPlan.value?.assets.filter(asset => asset.status === 'selected' && visualAssetUrl(asset)) ?? []
+  if (!selected.length) return body
+  const cover = selected.find(asset => (slots.find(slot => slot.id === asset.slot_id)?.purpose ?? '').includes('封面'))
+  const inserts = selected.filter(asset => asset !== cover)
+  const imageLine = (asset: VisualAsset): string => {
+    const purpose = slots.find(slot => slot.id === asset.slot_id)?.purpose ?? '插图'
+    return `![${purpose}](${visualAssetUrl(asset)})`
+  }
+  const chunks = [cover ? imageLine(cover) : '', body].filter(Boolean)
+  if (!inserts.length) return chunks.join('\n\n')
+  const parts = body.split('\n## ')
+  if (parts.length < 2) return `${chunks[0] ? `${chunks[0]}\n\n` : ''}${body}\n\n${inserts.map(imageLine).join('\n\n')}`
+  const rebuilt: string[] = [cover ? `${imageLine(cover)}\n\n${parts[0].trim()}` : parts[0].trim()]
+  parts.slice(1).forEach((part, index) => {
+    const image = inserts[index] ? `${imageLine(inserts[index])}\n\n` : ''
+    rebuilt.push(`${image}## ${part.trim()}`)
+  })
+  return rebuilt.join('\n\n')
+}
+
+async function generateStandardVisualsForArticle(): Promise<void> {
+  if (!projectId.value || !visualProvider.value?.available) return
+  setupStandardVisuals()
+  visualBible.value = '风格: 克制的编辑插画\n色彩: 暖白纸张与墨色\n文字: 画面内不要出现可阅读文字'
+  await saveVisualPlan()
+  const title = masterForm.value.title || project.value?.title || '文章'
+  const first = firstHeading(masterForm.value.body, '开头的问题')
+  const prompts = [
+    { match: '封面', prompt: `Editorial illustration, no readable text. Warm cream paper, restrained earth tones. Visual metaphor for: ${title}` },
+    { match: '插图一', prompt: `Editorial illustration, no readable text. Warm cream paper. Visualize the article's opening tension: ${first}` },
+    { match: '插图二', prompt: `Editorial illustration, no readable text. Warm cream paper. Visualize the article's core judgment: ${title}` },
+  ]
+  for (const slot of visualSlots.value) {
+    const prompt = prompts.find(item => slot.purpose.includes(item.match))?.prompt || slot.direction
+    visualPrompts.value = { ...visualPrompts.value, [slot.id]: prompt }
+    try {
+      const asset = await visualsStore.generate(projectId.value, slot.id, prompt)
+      if (asset.status !== 'failed') await visualsStore.select(projectId.value, asset.id, '首页一次生成选用的插图', 4)
+    } catch {
+      // Keep the article visible; image failure is not a full-page error.
+    }
+  }
+  await visualsStore.load(projectId.value)
+  const withImages = embedSelectedImages(masterForm.value.body)
+  if (withImages !== masterForm.value.body) {
+    masterForm.value = { ...masterForm.value, body: withImages }
+    await masterStore.save(projectId.value, masterForm.value)
+  }
+}
+
+async function composeArticle(): Promise<void> {
+  if (!projectId.value || composing.value) return
+  composing.value = true
+  detailError.value = null
+  composeStage.value = '正在根据你的想法起草文章'
+  try {
+    const article = await masterStore.compose(projectId.value)
+    masterForm.value = { title: article.title, body: article.body }
+    composeStage.value = '正文已写出，正在生成封面和插图'
+    await generateStandardVisualsForArticle()
+    composeStage.value = ''
+    activeWorkbench.value = 'master'
+    await refreshApprovalStatus()
+  } catch (error) {
+    const message = unwrapError(error)
+    if (message.includes('master_already_exists') && projectId.value) {
+      await masterStore.load(projectId.value)
+      if (master.value) masterForm.value = { title: master.value.title, body: master.value.body }
+    } else {
+      detailError.value = message
+      if (project.value) {
+        if (!masterForm.value.title.trim()) masterForm.value.title = project.value.title
+        if (!masterForm.value.body.trim()) masterForm.value.body = project.value.idea
+      }
+    }
+  } finally {
+    composing.value = false
+    composeStage.value = ''
+  }
 }
 
 async function saveMaster(): Promise<void> {
@@ -299,7 +392,7 @@ watch(projectId, loadPage)
     <template v-if="projectId">
       <a-button type="link" class="back" @click="router.push('/projects')"><ArrowLeftOutlined /> 全部项目</a-button>
       <a-alert v-if="detailError" type="error" :message="detailError" show-icon />
-      <article v-else-if="project" class="project-workspace">
+      <article v-if="project" class="project-workspace">
         <header>
           <p class="eyebrow">主题项目</p>
           <h1>{{ project.title }}</h1>
@@ -309,8 +402,8 @@ watch(projectId, loadPage)
           <a-card title="创作意图" :bordered="false"><dl><dt>写给谁</dt><dd>{{ project.audience }}</dd><dt>这次要完成什么</dt><dd>{{ project.goal }}</dd><dt>声音</dt><dd>{{ project.voice }}</dd></dl></a-card>
           <a-card title="目前的材料" :bordered="false"><p>已关联 {{ project.content_ids.length }} 篇内容，{{ project.asset_paths.length }} 项资产。</p><p class="muted">来源、判断和待确认项均由你明确录入，不会自动抓取或改写。</p></a-card>
         </div>
-        <nav class="workflow-cockpit" aria-label="创作流程">
-          <div><p class="eyebrow">当前文章</p><h2>{{ nextStep.done ? '可以阅读和交付微信稿' : `现在看：${nextStep.label}` }}</h2><p>正文始终在中间。资料、配图和审批都是这篇文章的附件，不会把你带回流水线。</p></div>
+        <nav v-show="!composing" class="workflow-cockpit" aria-label="创作流程">
+          <div><p class="eyebrow">当前文章</p><h2>{{ master?.body.trim() ? '先读这篇草稿' : `现在看：${nextStep.label}` }}</h2><p>正文始终在中间。资料、配图和审批都是这篇文章的附件，不会把你带回流水线。</p></div>
           <div class="workflow-steps"><button v-for="step in workflowSteps" :key="step.key" :class="{ active: activeWorkbench === step.key, done: step.done }" @click="activeWorkbench = step.key"><span>{{ step.done ? '✓' : '○' }}</span>{{ step.label }}</button></div>
         </nav>
         <section v-show="activeWorkbench === 'research'" class="research-board">
@@ -336,11 +429,18 @@ watch(projectId, loadPage)
           </a-spin>
         </section>
         <section v-show="activeWorkbench === 'master'" class="master-workbench">
-          <header class="section-heading"><div><p class="eyebrow">主稿</p><h2>在这里写作，AI 只提出可审阅的修改。</h2><p>保存会创建新版本。AI 只有在你点击后才会生成建议，接受前不会改动正文。</p></div><a-tag v-if="master" color="blue">版本 {{ master.version }}</a-tag></header>
+          <header class="section-heading"><div><p class="eyebrow">文章</p><h2>{{ composing ? (composeStage || '正在生成这篇文章') : '先读这篇，再决定改哪里。' }}</h2><p>{{ composing ? '正文会先出现，封面和插图随后补上。你可以停在这一页等。' : '这是根据你在首页写下的主题和想法生成的草稿。可以直接改，不会静默覆盖上一版。' }}</p></div><a-tag v-if="master" color="blue">版本 {{ master.version }}</a-tag></header>
           <a-alert v-if="masterError" type="error" :message="masterError" show-icon class="notice" />
-          <div class="draft-actions">
-            <div><strong>从研究板生成第一稿</strong><p class="muted">AI 会区分已核查事实、个人判断和限制；结果先进入审阅区，不会自动覆盖主稿。</p></div>
-            <a-button type="primary" :loading="draftGenerating" :disabled="!researchReady" @click="proposeDraft">AI 提出主稿初稿</a-button>
+          <div v-if="composing" class="compose-progress">
+            <a-spin />
+            <div>
+              <strong>{{ composeStage || '正在生成文章' }}</strong>
+              <p class="muted">标题和你的想法已经留下。生成失败也不会清空它们。</p>
+            </div>
+          </div>
+          <div v-else class="draft-actions">
+            <div><strong>这篇还不够？</strong><p class="muted">正文已经在下面。只有这篇还是空的时候，才会再生成一版。</p></div>
+            <a-button type="primary" :loading="draftGenerating" :disabled="Boolean(master?.body.trim()) || composing" @click="composeArticle">重新生成文章</a-button>
           </div>
           <a-card v-if="draftProposal" title="待审阅的 AI 初稿" :bordered="false" class="draft-proposal"><h3>{{ draftProposal.title }}</h3><p class="proposal-copy">{{ draftProposal.body }}</p><div class="proposal-actions"><a-button type="primary" @click="useDraftProposal">放入编辑器继续修改</a-button><a-button @click="draftProposal = null">丢弃</a-button></div></a-card>
           <p class="master-count">当前编辑器 {{ masterForm.body.trim().length }} 字；进入审批前至少需要 800 字。</p>
@@ -415,7 +515,8 @@ h1, h2 { color: #292522; font-family: Georgia, 'Songti SC', serif; } h1 { margin
 .project-list { border-top: 1px solid #ded7cd; }.project-row { width: 100%; display: flex; justify-content: space-between; gap: 24px; padding: 22px 4px; text-align: left; border: 0; border-bottom: 1px solid #ded7cd; background: transparent; cursor: pointer; }.project-row:hover h2 { color: #886d4b; }.project-row p { max-width: 700px; margin: 0 0 6px; }.project-row span, .row-meta { color: #948d84; font-size: 13px; }.row-meta { display: flex; align-items: center; gap: 16px; white-space: nowrap; }.empty-icon { color: #b39b79; font-size: 44px; }.count { color: #948d84; font-size: 13px; }.back { margin-bottom: 12px; padding-left: 0; }.project-workspace > header { max-width: 760px; margin-bottom: 28px; }.idea { font-size: 18px; }.project-grid, .research-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.project-grid :deep(.ant-card), .research-grid :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.project-grid dd { margin: 4px 0 16px; color: #4e4943; }.project-grid dt { color: #948d84; font-size: 12px; }.muted { color: #948d84 !important; }.research-board { margin-top: 34px; max-width: 1000px; }.section-heading { margin-bottom: 18px; }.section-heading p { max-width: 680px; }.research-alerts { display: grid; gap: 8px; margin-bottom: 16px; }.record-list { display: grid; gap: 10px; margin-bottom: 20px; }.record-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.record-list p { margin: 6px 0; color: #5e5851; }.record-list small { color: #897f75; word-break: break-word; }.claim-meta { display: flex; gap: 6px; }.claim-list .unverified { border-left-color: #d89614; }.claim-list .unresolved { border-left-color: #7f59b0; }.caveat { color: #7a5d3d !important; }.research-form { padding-top: 12px; border-top: 1px solid #e8e1d5; }.form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .workflow-cockpit { position: sticky; top: 12px; z-index: 4; display: grid; grid-template-columns: minmax(240px, .7fr) 1.3fr; gap: 20px; margin: 26px 0 6px; padding: 18px; border: 1px solid #ded7cd; border-radius: 12px; background: rgba(255, 253, 248, .96); box-shadow: 0 10px 30px rgba(75, 60, 40, .08); backdrop-filter: blur(8px); }.workflow-cockpit h2 { font-size: 18px; }.workflow-cockpit p { margin: 0; font-size: 13px; }.workflow-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: stretch; gap: 6px; }.workflow-steps button { display: grid; place-content: center; gap: 3px; min-height: 62px; padding: 7px; border: 1px solid #ded7cd; border-radius: 8px; color: #706b65; background: #fff; cursor: pointer; }.workflow-steps button.active { color: #60482d; border-color: #a6845b; background: #f5eee3; }.workflow-steps button.done { color: #39704b; }.workflow-steps span { font-weight: 700; }
 .master-workbench { margin-top: 34px; }.master-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 16px; }.master-grid :deep(.ant-card), .version-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.suggestion-actions, .proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; }.proposal-list { display: grid; gap: 10px; margin-top: 16px; }.proposal-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.proposal-meta { display: flex; justify-content: space-between; gap: 8px; color: #948d84; font-size: 12px; }.proposal-copy { max-height: 160px; overflow: auto; white-space: pre-wrap; color: #4e4943; }.version-card { margin-top: 16px; }.version-list { display: grid; gap: 8px; }.version-list article { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #e8e1d5; }.version-list span { margin-left: 8px; color: #948d84; font-size: 12px; }.version-list p { margin: 4px 0 0; color: #706b65; }.selection-note { color: #7a6650; font-size: 13px; }
-.draft-actions, .export-panel, .variant-adapt, .local-imports { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; padding: 14px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fffdf8; }.draft-actions p, .export-panel p { margin: 4px 0 0; }.draft-proposal { margin-bottom: 16px; border-color: #c7b497; background: #fbf6ed; }.draft-proposal .proposal-copy { max-height: 360px; }.master-count { color: #7a6650 !important; font-size: 13px; }.master-read { margin: 0 0 18px; padding: 22px 24px; border: 1px solid #e8e1d5; border-radius: 10px; background: #fff; color: #2f2b28; line-height: 1.8; }.master-read :deep(h1) { margin-top: 0; font-size: 28px; }.master-read :deep(img) { max-width: 100%; }.variant-adapt > div { display: flex; align-items: center; gap: 10px; }.variant-adapt > p { flex-basis: 100%; margin: 0; }.local-imports { justify-content: flex-start; }.import-button { display: inline-flex; padding: 6px 11px; border: 1px dashed #a6845b; border-radius: 6px; color: #60482d; cursor: pointer; background: #fff; }.import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.visual-bootstrap { margin-bottom: 12px; }
+.draft-actions, .export-panel, .variant-adapt, .local-imports { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; padding: 14px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fffdf8; }.compose-progress { display: flex; align-items: center; gap: 16px; margin: 0 0 18px; padding: 18px; border: 1px solid #e8e1d5; border-radius: 10px; background: #fffdf8; }.compose-progress strong { display: block; color: #292522; }.compose-progress p { margin: 6px 0 0; }
+.draft-actions p, .export-panel p { margin: 4px 0 0; }.draft-proposal { margin-bottom: 16px; border-color: #c7b497; background: #fbf6ed; }.draft-proposal .proposal-copy { max-height: 360px; }.master-count { color: #7a6650 !important; font-size: 13px; }.master-read { margin: 0 0 18px; padding: 22px 24px; border: 1px solid #e8e1d5; border-radius: 10px; background: #fff; color: #2f2b28; line-height: 1.8; }.master-read :deep(h1) { margin-top: 0; font-size: 28px; }.master-read :deep(img) { max-width: 100%; }.variant-adapt > div { display: flex; align-items: center; gap: 10px; }.variant-adapt > p { flex-basis: 100%; margin: 0; }.local-imports { justify-content: flex-start; }.import-button { display: inline-flex; padding: 6px 11px; border: 1px dashed #a6845b; border-radius: 6px; color: #60482d; cursor: pointer; background: #fff; }.import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.visual-bootstrap { margin-bottom: 12px; }
 .asset-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }.asset-gallery figure { margin: 0; padding: 8px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fff; }.asset-gallery img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 5px; }.asset-gallery figcaption { padding-top: 7px; color: #706b65; font-size: 12px; }
 .visual-workbench { margin-top: 34px; }.visual-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.visual-slot-list { display: grid; gap: 14px; }.visual-slot { padding: 14px; border: 1px solid #e8e1d5; background: #faf7f1; }.slot-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }.visual-actions, .visual-plan-actions, .asset-actions { display: flex; flex-wrap: wrap; gap: 8px; }.visual-plan-actions { margin-top: 16px; }.asset-list { display: grid; gap: 8px; margin-top: 12px; }.visual-asset { padding: 10px; border-left: 3px solid #9db7cc; background: #fffdf8; }.visual-asset.selected { border-left-color: #52a36b; }.visual-asset.failed { border-left-color: #cf5d50; }.visual-asset span { margin-left: 8px; color: #897f75; font-size: 12px; }.visual-asset p { margin: 7px 0; color: #5e5851; white-space: pre-wrap; }.failure { color: #b44336 !important; }
 .variants-workbench { margin-top: 34px; }.variant-create, .variant-actions, .wechat-actions { display: flex; flex-wrap: wrap; gap: 8px; }.variant-create { margin-bottom: 12px; }.wechat-layout { display: grid; grid-template-columns: minmax(280px, 400px) minmax(0, 1fr); gap: 20px; align-items: start; margin-bottom: 20px; }.wechat-stage { margin-bottom: 0; }.wechat-actions { align-items: center; margin-top: 10px; }.variant-list { display: grid; grid-template-columns: 1fr; gap: 16px; }.variant-list :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }

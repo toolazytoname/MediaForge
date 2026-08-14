@@ -71,7 +71,7 @@ async function startArticle(): Promise<void> {
       autonomy: 'draft',
     })
     localStorage.removeItem(DRAFT_KEY)
-    await router.push(`/projects/${project.id}?focus=master`)
+    await router.push(`/projects/${project.id}?compose=1`)
   } catch (err) {
     startError.value = unwrapError(err)
   } finally {
@@ -102,7 +102,7 @@ function onMetaEnter(event: KeyboardEvent): void {
       <div class="hero-copy">
         <p class="eyebrow">个人创作</p>
         <h1>写一篇完整的图文文章。</h1>
-        <p>先写下主题和你自己的想法。不必先建项目、选模式或维护研究板。</p>
+        <p>写下主题和想法，点一次就会生成一篇可阅读的图文草稿。不必先建项目或填研究板。</p>
       </div>
     </header>
 
@@ -129,7 +129,7 @@ function onMetaEnter(event: KeyboardEvent): void {
       </label>
       <div class="compose-actions">
         <a-button type="primary" size="large" :loading="starting" :disabled="!canStart" @click="startArticle">
-          开始写这篇文章
+          生成文章
         </a-button>
         <span>⌘/Ctrl + Enter</span>
       </div>

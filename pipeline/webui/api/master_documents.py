@@ -99,12 +99,14 @@ def _draft_prompt(project_id: str) -> str:
         f" | limitation={item.limitation or 'none'} | counterpoint={item.counterpoint or 'none'}"
         for item in board.claims
     ) or "（无声明）"
-    return f"""你是中文资深编辑。为下面的真实创作项目提出一份可审阅初稿，不要发布，也不要声称已替作者确认。
-项目想法：{project.idea}
+    return f"""你是中文资深编辑。根据作者自己写下的主题和想法，写成一篇可直接阅读的图文初稿。不要发布，也不要声称已替作者确认。
+项目标题：{project.title}
+作者写下的主题和想法：{project.idea}
 目标读者：{project.audience}
 发布目的：{project.goal}
 声音：{project.voice}
 自主程度：{project.autonomy}
+作者口吻参考：前大厂程序员，用做产品和真实生活验证普通人如何与 AI 一起重建工作。不要写成人生导师或行业权威。
 
 来源：
 {sources}
@@ -114,15 +116,14 @@ def _draft_prompt(project_id: str) -> str:
 
 规则：
 1. 只把 status=verified 且有来源的 fact 当作确定事实；judgment 必须写成作者判断；open_question 不得伪装成结论。
-2. 不虚构数字、引语、案例或个人经历；保留限制与有力反方观点。
-3. 外部事实首次出现时使用来源区提供的 Markdown 链接 `[来源标题](URL)`，文末附精简参考资料；不得虚构 URL，也不要为 local: 引用创建链接。
-4. 写成 1500—2500 字、结构清楚、有真实问题和明确主张的中文长文，使用 Markdown 二级标题。
-5. 只返回严格 JSON：{{"title":"...","body":"..."}}，不要代码围栏或额外文字。"""
+2. 若没有已核查来源，以作者写下的主题和想法为唯一依据；把它们写成作者的观察、问题和判断，不要编造成已经发生的具体经历、数据、引语或他人案例。
+3. 不虚构数字、引语、案例或个人经历；保留限制与有力反方观点。不得展开想法里没有出现的家庭、财务或私密细节。
+4. 外部事实首次出现时使用来源区提供的 Markdown 链接 `[来源标题](URL)`，文末附精简参考资料；不得虚构 URL，也不要为 local: 引用创建链接。
+5. 写成 1500—2500 字、结构清楚、有真实问题和明确主张的中文长文，使用 Markdown 二级标题。不要输出 [IMAGE: ...] 占位符。
+6. 只返回严格 JSON：{{"title":"...","body":"..."}}，不要代码围栏或额外文字。"""
 
 
-@router.post("/projects/{project_id}/master/draft")
-def propose_draft(project_id: str) -> dict[str, str]:
-    """Generate a review-only first draft; never persist or overwrite the master."""
+def _generate_article(project_id: str) -> dict[str, str]:
     try:
         prompt = _draft_prompt(project_id)
     except (master_store.MasterDocumentError, research_store.ResearchManifestError,
@@ -144,6 +145,35 @@ def propose_draft(project_id: str) -> dict[str, str]:
             conn.close()
     except Exception as error:
         raise _error(502, "llm_draft_failed", f"AI draft failed: {error}") from error
+
+
+@router.post("/projects/{project_id}/master/draft")
+def propose_draft(project_id: str) -> dict[str, str]:
+    """Generate a review-only first draft; never persist or overwrite the master."""
+    return _generate_article(project_id)
+
+
+@router.post("/projects/{project_id}/compose")
+def compose_article(project_id: str) -> dict[str, Any]:
+    """Turn an explicit homepage click into a readable first article.
+
+    The click is the authorization to write the master once. An existing
+    article is never overwritten.
+    """
+    try:
+        existing = master_store.load_master(project_id, projects_root=_root())
+    except master_store.MasterDocumentError as error:
+        raise _master_error(project_id, error) from error
+    if existing is not None and existing.body.strip():
+        raise _error(409, "master_already_exists", "this project already has an article; it was not overwritten")
+    draft = _generate_article(project_id)
+    try:
+        master = master_store.save_manual(
+            project_id, title=draft["title"], body=draft["body"], now=_now(), projects_root=_root(),
+        )
+    except master_store.MasterDocumentError as error:
+        raise _master_error(project_id, error) from error
+    return _master_dict(master) or {}
 
 
 @router.get("/projects/{project_id}/master")

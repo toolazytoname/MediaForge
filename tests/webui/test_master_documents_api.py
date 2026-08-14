@@ -107,6 +107,61 @@ def test_ai_draft_is_a_reviewable_proposal_and_does_not_write_master(
     assert client.get("/api/v1/projects/prj_master/master").json() == {"master": None}
 
 
+def test_compose_writes_master_from_author_idea_when_empty(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    seen = {}
+
+    def fake_complete(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return {
+            "title": "工具更快了，人为什么更喘不过气",
+            "body": "## 问题\n\n这是根据作者想法写成的初稿。\n\n## 主张\n\n先把判断写清楚。",
+        }
+
+    monkeypatch.setattr(master_api.llm, "complete_json", fake_complete)
+
+    response = client.post("/api/v1/projects/prj_master/compose")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["title"] == "工具更快了，人为什么更喘不过气"
+    assert payload["version"] == 1
+    assert "作者写下的主题和想法" in seen["prompt"]
+    stored = client.get("/api/v1/projects/prj_master/master").json()["master"]
+    assert stored["body"].startswith("## 问题")
+
+
+def test_compose_does_not_overwrite_existing_master(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "已有标题", "body": "已经写过的正文，至少要保留。"})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    monkeypatch.setattr(
+        master_api.llm,
+        "complete_json",
+        lambda *args, **kwargs: pytest.fail("compose must not call LLM when master exists"),
+    )
+
+    response = client.post("/api/v1/projects/prj_master/compose")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "master_already_exists"
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["title"] == "已有标题"
+
+
+def test_compose_provider_failure_does_not_create_master(client, tmp_path):
+    root = tmp_path / "projects"
+    _project(root)
+
+    response = client.post("/api/v1/projects/prj_master/compose")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"]["code"] == "llm_provider_unavailable"
+    assert client.get("/api/v1/projects/prj_master/master").json() == {"master": None}
+
+
 import pytest
 
 @pytest.fixture

@@ -319,6 +319,14 @@ export const useMasterStore = defineStore('master', () => {
     )).data
   }
 
+  async function compose(projectId: string): Promise<MasterDocument> {
+    const response = await api.post<MasterDocument>(
+      `/projects/${projectId}/compose`, {}, { timeout: GENERATION_TIMEOUT_MS },
+    )
+    master.value = response.data
+    return response.data
+  }
+
   async function request(projectId: string, input: Pick<MasterSuggestion, 'action' | 'selection'>): Promise<MasterSuggestion> {
     const response = await apiPost<MasterSuggestion>(`/projects/${projectId}/master/suggestions`, input.selection ? input : { action: input.action })
     suggestions.value = [...suggestions.value, response.data]
@@ -344,7 +352,7 @@ export const useMasterStore = defineStore('master', () => {
     return response.data
   }
 
-  return { master, suggestions, loading, error, load, save, proposeDraft, request, accept, reject, restore }
+  return { master, suggestions, loading, error, load, save, proposeDraft, compose, request, accept, reject, restore }
 })
 
 export const useVisualsStore = defineStore('visuals', () => {
@@ -371,7 +379,7 @@ export const useVisualsStore = defineStore('visuals', () => {
     return response.data
   }
   async function generate(projectId: string, slotId: string, prompt: string): Promise<VisualAsset> {
-    const response = await apiPost<VisualAsset>(`/projects/${projectId}/visuals/assets`, { slot_id: slotId, prompt })
+    const response = await api.post<VisualAsset>(`/projects/${projectId}/visuals/assets`, { slot_id: slotId, prompt }, { timeout: GENERATION_TIMEOUT_MS })
     if (plan.value?.project_id === projectId) plan.value = { ...plan.value, assets: [...plan.value.assets, response.data] }
     return response.data
   }
