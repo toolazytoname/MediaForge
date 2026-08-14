@@ -20,11 +20,16 @@ const openaiImageBaseUrlSaving = ref(false)
 const openaiImageModelInput = ref('')
 const openaiImageModelSaving = ref(false)
 
-onMounted(() => {
-  store.load()
-  store.loadKeys()
-  store.loadOpenAIImageBaseUrl()
-  store.loadOpenAIImageModel()
+onMounted(async () => {
+  await Promise.all([
+    store.load(),
+    store.loadKeys(),
+    store.loadOpenAIImageBaseUrl(),
+    store.loadOpenAIImageModel(),
+  ])
+  if (window.location.hash === '#openai-image') {
+    document.getElementById('openai-image')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 })
 
 async function onSave(name: string) {
@@ -219,7 +224,7 @@ async function onSavePlatforms() {
       <a-empty v-if="keyGroups.length === 0" description="无 key 分组" />
     </a-card>
 
-    <a-card title="GPT Image 2 中转站" style="margin-bottom: 16px">
+    <a-card id="openai-image" title="GPT Image 2 中转站" style="margin-bottom: 16px">
       <a-alert
         type="info"
         show-icon

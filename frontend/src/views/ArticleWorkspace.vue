@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, GENERATION_TIMEOUT_MS, unwrapError } from '../api/client'
 import { renderMarkdown } from '../utils/markdown'
@@ -7,7 +7,7 @@ import { lineDiff, type DiffRow } from '../utils/articleDiff'
 
 interface MasterVersion { version: number; title: string; body: string; saved_at: string; reason: string }
 interface Master { title: string; body: string; version: number; updated_at: string; history: MasterVersion[] }
-interface Generation { status: string; completed_images: number; failed_images: number; error: string | null }
+interface Generation { status: string; completed_images: number; failed_images: number; error: string | null; title?: string | null; body?: string | null }
 interface VisualAsset { id: string; slot_id: string; prompt: string; model: string; file_path: string | null; status: 'candidate' | 'failed' | 'selected'; failure: string | null; created_at: string; reference_asset_id?: string | null; cost_usd?: number; version?: number }
 interface VisualPlan { assets: VisualAsset[] }
 interface FeedbackProposal { id: string; scope: 'whole_article' | 'local_text' | 'local_image'; feedback: string; target: string | null; readership: string | null; platform: string | null; values: string | null; status: 'ready' | 'failed' | 'accepted' | 'rejected'; state: 'current' | 'obsolete'; error: string | null; proposed_title: string | null; proposed_body: string | null; decision: 'accepted' | 'rejected' | null; decided_at: string | null; accepted_title: string | null; accepted_body: string | null; annotation_id: string | null; annotation_kind: 'text' | 'image' | null; annotation_excerpt: string | null; annotation_asset_id: string | null; annotation_categories: string[] }
@@ -41,9 +41,12 @@ const annotationOpen = ref(false); const annotationWorking = ref(false); const a
 const annotationKind = ref<'text' | 'image'>('text'); const annotationExcerpt = ref(''); const annotationAssetId = ref<string | null>(null)
 const annotationFeedback = ref(''); const annotationCategories = ref<string[]>([])
 const selectionMenu = ref<{ visible: boolean; x: number; y: number }>({ visible: false, x: 0, y: 0 })
+let autosaveTimer: ReturnType<typeof setTimeout> | null = null
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+let generateRequest: Promise<void> | null = null
 
 const articleHtml = computed(() => master.value ? renderMarkdown(master.value.body) : '')
-const progress = computed(() => generation.value?.status === 'preparing_images' ? '正在准备与正文对应的图片…' : '正在理解你的想法并起草文章…')
+const progress = computed(() => generation.value?.status === 'preparing_images' ? '正文已就绪，正在准备与正文对应的图片…' : '正在理解你的想法并起草文章…')
 const versions = computed(() => master.value ? [...master.value.history, { version: master.value.version, title: master.value.title, body: master.value.body, saved_at: master.value.updated_at, reason: '当前版本' }] : [])
 const selectedAssets = computed(() => visualPlan.value?.assets.filter(item => item.status === 'selected' && item.file_path) ?? [])
 const replacementAssets = computed(() => activeImage.value
@@ -51,6 +54,15 @@ const replacementAssets = computed(() => activeImage.value
   : [])
 const diffRows = computed<DiffRow[]>(() => master.value && proposalReview.value ? lineDiff(master.value.body, proposalBody.value) : [])
 const affectedImages = computed(() => diffRows.value.filter(row => row.text.includes('](')).length)
+const imageConfigIssue = computed(() => {
+  const texts = [
+    generation.value?.error,
+    error.value,
+    imageActionError.value,
+    ...(visualPlan.value?.assets.filter(item => item.status === 'failed').map(item => item.failure) ?? []),
+  ].filter((value): value is string => Boolean(value))
+  return texts.some(text => /image_provider_unavailable|model_not_found|ImageProviderError|图片服务不可用|不支持该模型|model not found/i.test(text))
+})
 
 function imageUrl(asset: VisualAsset): string { return `/output/projects/${id.value}/${asset.file_path ?? ''}` }
 function imageMarkdown(asset: VisualAsset): string { return `![文章图片](${imageUrl(asset)})` }
@@ -58,9 +70,22 @@ function timeLabel(value: string): string { return new Intl.DateTimeFormat('zh-C
 function versionReason(reason: string): string {
   if (reason === '当前版本') return '当前正式版本'
   if (reason === 'manual') return '手动保存'
+  if (reason === 'autosave') return '自动保存'
   if (reason.startsWith('feedback:')) return '接受修改提案'
   if (reason.startsWith('restore:')) return `从版本 ${reason.slice('restore:'.length)} 恢复`
   return '保存的文章版本'
+}
+function goToImageSettings(): void { void router.push({ path: '/settings', hash: '#openai-image' }) }
+function clearAutosaveTimer(): void {
+  if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null }
+}
+function clearPollTimer(): void {
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
+}
+function warnBeforeUnload(event: BeforeUnloadEvent): void {
+  if (saveStatus.value !== 'unsaved') return
+  event.preventDefault()
+  event.returnValue = ''
 }
 
 async function loadOptionalContext(): Promise<void> {
@@ -198,15 +223,67 @@ async function rejectProposal(): Promise<void> {
 }
 
 async function generate(): Promise<void> {
-  if (working.value) return
+  if (working.value || generateRequest) return
   working.value = true; error.value = null
+  if (route.query.generate === '1') {
+    const nextQuery = { ...route.query }
+    delete nextQuery.generate
+    void router.replace({ query: nextQuery })
+  }
+  clearPollTimer()
+  pollGeneration()
+  generateRequest = (async () => {
+    try {
+      generation.value = (await api.post<Generation>(`/projects/${id.value}/article/generate`, {}, { timeout: GENERATION_TIMEOUT_MS })).data
+      await load()
+    } catch (cause) {
+      error.value = unwrapError(cause)
+      await load().catch(() => undefined)
+    } finally {
+      working.value = false
+      generateRequest = null
+      clearPollTimer()
+    }
+  })()
+  await generateRequest
+}
+async function pollGeneration(): Promise<void> {
+  clearPollTimer()
   try {
-    generation.value = (await api.post<Generation>(`/projects/${id.value}/article/generate`, {}, { timeout: GENERATION_TIMEOUT_MS })).data
-    await load()
-  } catch (cause) { error.value = unwrapError(cause) } finally { working.value = false }
+    const [state, article] = await Promise.all([
+      api.get<{ generation: Generation | null }>(`/projects/${id.value}/article/generation`),
+      api.get<{ master: Master | null }>(`/projects/${id.value}/master`),
+    ])
+    const outcome = state.data.generation
+    if (outcome) generation.value = outcome
+    if (article.data.master) {
+      master.value = article.data.master
+      lastSaved.value = article.data.master.updated_at
+      saveStatus.value = 'saved'
+    } else if (outcome?.title && outcome.body && !master.value) {
+      master.value = {
+        title: outcome.title,
+        body: outcome.body,
+        version: 1,
+        updated_at: new Date().toISOString(),
+        history: [],
+      }
+    }
+    if (outcome && ['preparing_images', 'completed', 'completed_with_errors'].includes(outcome.status)) {
+      await loadOptionalContext()
+    }
+    if (outcome && ['completed', 'completed_with_errors', 'failed_text', 'manual_article_exists'].includes(outcome.status)) {
+      working.value = false
+      return
+    }
+  } catch {
+    /* keep polling while the long POST is still running */
+  }
+  pollTimer = setTimeout(() => { void pollGeneration() }, 1200)
 }
 async function save(): Promise<boolean> {
   if (!master.value || saving.value) return false
+  if (saveStatus.value === 'saved') return true
   saving.value = true; saveStatus.value = 'saving'; error.value = null
   try {
     master.value = (await api.put<Master>(`/projects/${id.value}/master`, { title: master.value.title, body: master.value.body })).data
@@ -219,7 +296,17 @@ async function save(): Promise<boolean> {
 }
 function noteChange(): void {
   saveStatus.value = 'unsaved'
+  clearAutosaveTimer()
+  autosaveTimer = setTimeout(() => { void save() }, 1800)
 }
+function scheduleAutosave(): void {
+  if (saveStatus.value !== 'unsaved') return
+  clearAutosaveTimer()
+  autosaveTimer = setTimeout(() => { void save() }, 1800)
+}
+watch(saveStatus, (status) => {
+  if (status === 'unsaved') scheduleAutosave()
+})
 async function enterEditor(): Promise<void> { isEditing.value = true; await nextTick(); editor.value?.focus() }
 async function retryImages(): Promise<void> {
   if (working.value) return
@@ -302,7 +389,23 @@ async function removeImage(): Promise<void> {
   noteChange(); await save(); detailsOpen.value = false; activeImage.value = null
 }
 function viewImageDetails(): void { if (activeImage.value) detailsOpen.value = true }
-onMounted(async () => { drawerWidth.value = Math.max(280, Math.min(420, window.innerWidth - 24)); try { await load(); if (route.query.generate === '1' && !master.value) await generate() } catch (cause) { error.value = unwrapError(cause) } })
+onMounted(async () => {
+  drawerWidth.value = Math.max(280, Math.min(420, window.innerWidth - 24))
+  window.addEventListener('beforeunload', warnBeforeUnload)
+  try {
+    await load()
+    if (route.query.generate === '1' && !master.value) await generate()
+    else if (generation.value && ['drafting', 'preparing_images'].includes(generation.value.status)) {
+      working.value = true
+      pollGeneration()
+    }
+  } catch (cause) { error.value = unwrapError(cause) }
+})
+onBeforeUnmount(() => {
+  clearAutosaveTimer()
+  clearPollTimer()
+  window.removeEventListener('beforeunload', warnBeforeUnload)
+})
 </script>
 
 <template>
@@ -311,23 +414,30 @@ onMounted(async () => { drawerWidth.value = Math.max(280, Math.min(420, window.i
       <button type="button" class="wordmark" @click="router.push('/')">MediaForge</button>
       <div class="top-actions">
         <span v-if="working" class="progress">{{ progress }}</span>
+        <span v-else-if="saveStatus === 'saving'" class="save-state">自动保存中…</span>
         <span v-else-if="saveStatus === 'saved' && lastSaved" class="save-state">已保存 {{ timeLabel(lastSaved) }}</span>
         <span v-else-if="saveStatus === 'unsaved'" class="save-state unsaved">有未保存修改</span>
+        <button type="button" class="quiet-button" @click="goToImageSettings">设置</button>
         <button v-if="master" type="button" class="quiet-button" @click="moreOpen = true">资料与版本</button>
         <button v-if="master" type="button" class="quiet-button feedback-entry" @click="feedbackOpen = true">对整篇提意见</button>
         <button v-if="master" type="button" class="save-button" :disabled="saving || saveStatus === 'saved'" @click="save">{{ saving ? '保存中…' : '保存修改' }}</button>
       </div>
     </header>
 
-    <section v-if="working && !master" class="generating"><p>正在把你的想法整理成文章</p><small>正文先完成，封面和插图会接着嵌入对应段落。</small></section>
+    <section v-if="working && !master" class="generating"><p>正在把你的想法整理成文章</p><small>正文会先出现，封面和插图随后嵌入对应段落。</small></section>
     <section v-else-if="master" class="article-shell">
+      <div v-if="imageConfigIssue" class="local-warning settings-warning" role="status">
+        <span>图片未能生成：当前图片服务不可用，或模型名不被中转站支持（常见为 model_not_found）。请到设置配置 API Key、中转地址和图片模型，然后返回这里重试。</span>
+        <button type="button" @click="goToImageSettings">前往设置</button>
+      </div>
       <div v-if="generation?.error" class="local-warning" role="status"><span>{{ generation.error }}</span><button type="button" @click="retryImages">重试未完成图片</button></div>
+      <div v-if="working && generation?.status === 'preparing_images'" class="secondary-warning" role="status">正文已可阅读；图片仍在准备中。</div>
       <div v-if="secondaryError" class="secondary-warning" role="status">{{ secondaryError }}</div>
       <input v-model="master.title" aria-label="文章标题" class="title" @input="noteChange" @mouseup="captureTextSelection" @contextmenu.prevent="openTextAnnotation" />
       <div class="reading-switch"><button type="button" :class="{ active: !isEditing }" @click="isEditing = false">阅读</button><button type="button" :class="{ active: isEditing }" @click="enterEditor">编辑</button></div>
       <article v-if="!isEditing" class="preview" aria-label="文章阅读" v-html="articleHtml" @mouseup="captureTextSelection" @contextmenu.prevent="openTextAnnotation" @click="selectImage" @error.capture="imageFailed" />
       <button v-if="selectionMenu.visible && !isEditing" type="button" class="selection-comment" :style="{ left: `${selectionMenu.x}px`, top: `${selectionMenu.y}px` }" @click="openTextAnnotation()">评论所选内容</button>
-      <section v-else class="editor-panel"><label for="article-body">编辑 Markdown</label><textarea id="article-body" ref="editor" v-model="master.body" rows="24" @input="noteChange" /><p>你可以直接写；保存失败，内容仍在编辑器中。</p></section>
+      <section v-if="isEditing" class="editor-panel"><label for="article-body">编辑 Markdown</label><textarea id="article-body" ref="editor" v-model="master.body" rows="24" @input="noteChange" /><p>你可以直接写；保存失败，内容仍在编辑器中。</p></section>
       <p v-if="saveStatus === 'failed'" class="inline-error" role="alert">保存失败，内容仍在编辑器中。{{ error }}</p>
       <p v-else-if="error" class="inline-error" role="alert">{{ error }}</p>
       <aside v-if="versionNotice" class="version-notice" role="status" aria-live="polite">

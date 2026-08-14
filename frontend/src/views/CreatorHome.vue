@@ -29,6 +29,7 @@ interface CreatorMaterial {
 }
 
 const DRAFT_KEY = 'mediaforge.creator-home.draft.v1'
+const MATERIAL_DRAFT_KEY = 'mediaforge.creator-home.material-draft-id.v1'
 const canStart = computed(() => prompt.value.trim().length > 0)
 const materialDraftId = ref('')
 
@@ -41,15 +42,40 @@ function restoreDraft(): void {
 }
 
 function clearDraft(): void {
-  try { localStorage.removeItem(DRAFT_KEY) } catch { /* ignore unavailable storage */ }
+  try {
+    localStorage.removeItem(DRAFT_KEY)
+    localStorage.removeItem(MATERIAL_DRAFT_KEY)
+  } catch { /* ignore unavailable storage */ }
 }
 
 function newDraftId(): string {
   return `draft_${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`
 }
 
+function persistMaterialDraftId(id: string): void {
+  materialDraftId.value = id
+  try { localStorage.setItem(MATERIAL_DRAFT_KEY, id) } catch { /* ignore unavailable storage */ }
+}
+
 function restoreMaterialDraftId(): void {
-  materialDraftId.value = newDraftId()
+  try {
+    const saved = localStorage.getItem(MATERIAL_DRAFT_KEY)
+    if (saved && /^draft_[a-z0-9]{8}$/.test(saved)) {
+      materialDraftId.value = saved
+      return
+    }
+  } catch { /* ignore unavailable storage */ }
+  persistMaterialDraftId(newDraftId())
+}
+
+async function loadDraftMaterials(): Promise<void> {
+  if (!materialDraftId.value) return
+  try {
+    const response = await api.get<{ items: CreatorMaterial[] }>(`/creator-materials/drafts/${materialDraftId.value}`)
+    materials.value = response.data.items
+  } catch {
+    materials.value = []
+  }
 }
 
 async function loadRecent(): Promise<void> {
@@ -65,7 +91,8 @@ async function startArticle(): Promise<void> {
       prompt: prompt.value.trim(), draft_id: materialDraftId.value, material_ids: materials.value.filter(item => item.status !== 'failed').map(item => item.id),
     })
     clearDraft()
-    materialDraftId.value = newDraftId()
+    materials.value = []
+    persistMaterialDraftId(newDraftId())
     // The following page performs the authorized generation and immediately
     // shows its real progress.  There is still only one creator click here.
     await router.push(`/projects/${response.data.id}?generate=1`)
@@ -116,14 +143,22 @@ function materialStatus(item: CreatorMaterial): string {
 }
 
 watch(prompt, saveDraft)
-onMounted(() => { restoreDraft(); restoreMaterialDraftId(); void loadRecent() })
+onMounted(() => {
+  restoreDraft()
+  restoreMaterialDraftId()
+  void loadDraftMaterials()
+  void loadRecent()
+})
 </script>
 
 <template>
   <main class="creator-home" aria-label="开始创作">
     <header class="home-bar">
       <button class="wordmark" type="button" @click="router.push('/')">MediaForge <span>创作</span></button>
-      <button class="automation-link" type="button" @click="router.push('/roadmap/automation')">自动化创作 <ArrowRightOutlined /></button>
+      <div class="home-links">
+        <button class="automation-link" type="button" @click="router.push({ path: '/settings', hash: '#openai-image' })">设置</button>
+        <button class="automation-link" type="button" @click="router.push('/roadmap/automation')">自动化创作 <ArrowRightOutlined /></button>
+      </div>
     </header>
 
     <section class="home-main">
@@ -185,5 +220,5 @@ onMounted(() => { restoreDraft(); restoreMaterialDraftId(); void loadRecent() })
 </template>
 
 <style scoped>
-.creator-home { min-height: 100vh; background: #f5f2eb; color: #25231f; }.home-bar { display:flex; height:66px; align-items:center; justify-content:space-between; padding:0 40px; border-bottom:1px solid #ded8cb; background:#fbfaf6; }.wordmark,.automation-link,.generate-button,.all-projects,.recent-item,.file-button,.add-material,.remove-material { border:0; font:inherit; cursor:pointer; }.wordmark { background:transparent; color:#25231f; font-family:Georgia,'Songti SC',serif; font-size:20px; font-weight:700; }.wordmark span { margin-left:5px; color:#a14f32; font-size:12px; }.automation-link,.all-projects { background:transparent; color:#665e54; font-size:14px; }.automation-link :deep(.anticon),.all-projects :deep(.anticon) { margin-left:5px; font-size:11px; }.home-main { width:min(100% - 48px, 880px); margin:0 auto; padding:76px 0 72px; }.intro { max-width:690px; }.kicker { margin:0 0 10px; color:#9f4d31; font-size:12px; font-weight:700; letter-spacing:.07em; }.intro h1 { max-width:700px; margin:0; font-family:Georgia,'Songti SC',serif; font-size:clamp(39px,5vw,62px); line-height:1.1; letter-spacing:-.04em; }.intro > p:last-child { max-width:590px; color:#655f57; font-size:17px; line-height:1.7; }.idea-composer { margin-top:42px; padding:28px; border:1px solid #dcd4c7; border-radius:12px; background:#fffdf8; box-shadow:0 16px 40px rgba(69,58,42,.07); }.idea-composer label { display:block; margin-bottom:9px; color:#3e3a34; font-size:15px; font-weight:700; }.idea-composer textarea { box-sizing:border-box; width:100%; resize:vertical; padding:14px; border:1px solid #cfc7ba; border-radius:8px; outline:0; background:#fffefa; color:#2d2924; font:16px/1.7 -apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif; }.idea-composer textarea:focus { border-color:#9f4d31; box-shadow:0 0 0 3px rgba(159,77,49,.12); }.input-help { margin:8px 0 0; color:#81796f; font-size:12px; }.materials { margin-top:25px; padding-top:21px; border-top:1px solid #e6dfd4; }.materials-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:11px; font-size:13px; color:#514c44; }.materials-heading span { color:#837a6e; font-size:12px; }.material-actions { display:grid; grid-template-columns:auto 105px minmax(160px,1fr) auto; gap:8px; }.file-button,.add-material { min-height:36px; border-radius:6px; background:#eee8dd; color:#524c43; font-size:12px; padding:0 11px; }.file-button:hover,.add-material:hover:not(:disabled) { background:#e2d9ca; }.add-material:disabled { color:#9d9589; cursor:not-allowed; }.material-actions select,.material-actions input { min-width:0; border:1px solid #d4ccbf; border-radius:6px; background:#fffefa; padding:0 9px; color:#39352f; font:13px -apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif; }.file-input { display:none; }.material-list { display:grid; gap:7px; margin-top:12px; }.material-row { display:flex; min-width:0; align-items:center; gap:9px; padding:8px 9px; border:1px solid #e4ddd1; border-radius:7px; background:#fbfaf6; }.material-kind { flex:0 0 auto; padding:2px 5px; border-radius:4px; background:#eee8dd; color:#6c6257; font-size:10px; font-weight:700; }.material-copy { min-width:0; flex:1; }.material-copy strong,.material-copy small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.material-copy strong { color:#403b34; font-size:12px; }.material-copy small { margin-top:2px; color:#7f776d; font-size:11px; }.material-failed small { color:#a24938; }.remove-material { flex:0 0 auto; padding:4px; background:transparent; color:#80776b; }.remove-material:hover { color:#a24938; }.form-error { margin:13px 0 0; color:#a13e2e; font-size:13px; }.composer-footer { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-top:24px; color:#81796f; font-size:13px; }.generate-button { display:inline-flex; min-height:42px; align-items:center; gap:8px; padding:0 17px; border-radius:7px; background:#2f5d4f; color:#fffdf8; font-weight:700; white-space:nowrap; }.generate-button:hover:not(:disabled) { background:#24493e; }.generate-button:active:not(:disabled) { transform:translateY(1px); }.generate-button:disabled { cursor:not-allowed; background:#bdb7ac; color:#f7f4ed; }.secondary { margin-top:58px; padding-top:25px; border-top:1px solid #dcd4c7; }.section-heading { display:flex; align-items:end; justify-content:space-between; gap:16px; }.section-heading h2 { margin:0; font-family:Georgia,'Songti SC',serif; font-size:25px; }.recent-list { display:grid; margin-top:20px; border-top:1px solid #e5dfd5; }.recent-item { display:grid; grid-template-columns:20px minmax(0,1fr) 16px; align-items:center; gap:13px; padding:15px 2px; border-bottom:1px solid #e5dfd5; background:transparent; color:#454038; text-align:left; }.recent-item:hover { color:#7d4934; }.recent-item span { min-width:0; }.recent-item strong,.recent-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.recent-item strong { font-size:14px; }.recent-item small { margin-top:4px; color:#81796f; font-size:12px; }.empty-recent { display:flex; align-items:center; gap:10px; margin-top:20px; color:#81796f; font-size:14px; }@media (max-width:640px) { .home-bar { padding:0 17px; }.home-main { width:min(100% - 34px,880px); padding-top:48px; }.intro h1 { font-size:39px; }.idea-composer { padding:19px; }.material-actions { grid-template-columns:1fr 1fr; }.material-actions input { grid-column:1 / -1; min-height:36px; }.composer-footer { align-items:flex-start; flex-direction:column; }.generate-button { width:100%; justify-content:center; }.section-heading { align-items:flex-start; flex-direction:column; gap:8px; } }
+.creator-home { min-height: 100vh; background: #f5f2eb; color: #25231f; }.home-bar { display:flex; height:66px; align-items:center; justify-content:space-between; padding:0 40px; border-bottom:1px solid #ded8cb; background:#fbfaf6; }.home-links { display:flex; align-items:center; gap:14px; }.wordmark,.automation-link,.generate-button,.all-projects,.recent-item,.file-button,.add-material,.remove-material { border:0; font:inherit; cursor:pointer; }.wordmark { background:transparent; color:#25231f; font-family:Georgia,'Songti SC',serif; font-size:20px; font-weight:700; }.wordmark span { margin-left:5px; color:#a14f32; font-size:12px; }.automation-link,.all-projects { background:transparent; color:#665e54; font-size:14px; }.automation-link :deep(.anticon),.all-projects :deep(.anticon) { margin-left:5px; font-size:11px; }.home-main { width:min(100% - 48px, 880px); margin:0 auto; padding:76px 0 72px; }.intro { max-width:690px; }.kicker { margin:0 0 10px; color:#9f4d31; font-size:12px; font-weight:700; letter-spacing:.07em; }.intro h1 { max-width:700px; margin:0; font-family:Georgia,'Songti SC',serif; font-size:clamp(39px,5vw,62px); line-height:1.1; letter-spacing:-.04em; }.intro > p:last-child { max-width:590px; color:#655f57; font-size:17px; line-height:1.7; }.idea-composer { margin-top:42px; padding:28px; border:1px solid #dcd4c7; border-radius:12px; background:#fffdf8; box-shadow:0 16px 40px rgba(69,58,42,.07); }.idea-composer label { display:block; margin-bottom:9px; color:#3e3a34; font-size:15px; font-weight:700; }.idea-composer textarea { box-sizing:border-box; width:100%; resize:vertical; padding:14px; border:1px solid #cfc7ba; border-radius:8px; outline:0; background:#fffefa; color:#2d2924; font:16px/1.7 -apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif; }.idea-composer textarea:focus { border-color:#9f4d31; box-shadow:0 0 0 3px rgba(159,77,49,.12); }.input-help { margin:8px 0 0; color:#81796f; font-size:12px; }.materials { margin-top:25px; padding-top:21px; border-top:1px solid #e6dfd4; }.materials-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:11px; font-size:13px; color:#514c44; }.materials-heading span { color:#837a6e; font-size:12px; }.material-actions { display:grid; grid-template-columns:auto 105px minmax(160px,1fr) auto; gap:8px; }.file-button,.add-material { min-height:36px; border-radius:6px; background:#eee8dd; color:#524c43; font-size:12px; padding:0 11px; }.file-button:hover,.add-material:hover:not(:disabled) { background:#e2d9ca; }.add-material:disabled { color:#9d9589; cursor:not-allowed; }.material-actions select,.material-actions input { min-width:0; border:1px solid #d4ccbf; border-radius:6px; background:#fffefa; padding:0 9px; color:#39352f; font:13px -apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif; }.file-input { display:none; }.material-list { display:grid; gap:7px; margin-top:12px; }.material-row { display:flex; min-width:0; align-items:center; gap:9px; padding:8px 9px; border:1px solid #e4ddd1; border-radius:7px; background:#fbfaf6; }.material-kind { flex:0 0 auto; padding:2px 5px; border-radius:4px; background:#eee8dd; color:#6c6257; font-size:10px; font-weight:700; }.material-copy { min-width:0; flex:1; }.material-copy strong,.material-copy small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.material-copy strong { color:#403b34; font-size:12px; }.material-copy small { margin-top:2px; color:#7f776d; font-size:11px; }.material-failed small { color:#a24938; }.remove-material { flex:0 0 auto; padding:4px; background:transparent; color:#80776b; }.remove-material:hover { color:#a24938; }.form-error { margin:13px 0 0; color:#a13e2e; font-size:13px; }.composer-footer { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-top:24px; color:#81796f; font-size:13px; }.generate-button { display:inline-flex; min-height:42px; align-items:center; gap:8px; padding:0 17px; border-radius:7px; background:#2f5d4f; color:#fffdf8; font-weight:700; white-space:nowrap; }.generate-button:hover:not(:disabled) { background:#24493e; }.generate-button:active:not(:disabled) { transform:translateY(1px); }.generate-button:disabled { cursor:not-allowed; background:#bdb7ac; color:#f7f4ed; }.secondary { margin-top:58px; padding-top:25px; border-top:1px solid #dcd4c7; }.section-heading { display:flex; align-items:end; justify-content:space-between; gap:16px; }.section-heading h2 { margin:0; font-family:Georgia,'Songti SC',serif; font-size:25px; }.recent-list { display:grid; margin-top:20px; border-top:1px solid #e5dfd5; }.recent-item { display:grid; grid-template-columns:20px minmax(0,1fr) 16px; align-items:center; gap:13px; padding:15px 2px; border-bottom:1px solid #e5dfd5; background:transparent; color:#454038; text-align:left; }.recent-item:hover { color:#7d4934; }.recent-item span { min-width:0; }.recent-item strong,.recent-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.recent-item strong { font-size:14px; }.recent-item small { margin-top:4px; color:#81796f; font-size:12px; }.empty-recent { display:flex; align-items:center; gap:10px; margin-top:20px; color:#81796f; font-size:14px; }@media (max-width:640px) { .home-bar { padding:0 17px; }.home-main { width:min(100% - 34px,880px); padding-top:48px; }.intro h1 { font-size:39px; }.idea-composer { padding:19px; }.material-actions { grid-template-columns:1fr 1fr; }.material-actions input { grid-column:1 / -1; min-height:36px; }.composer-footer { align-items:flex-start; flex-direction:column; }.generate-button { width:100%; justify-content:center; }.section-heading { align-items:flex-start; flex-direction:column; gap:8px; } }
 </style>
