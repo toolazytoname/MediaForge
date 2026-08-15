@@ -29,6 +29,7 @@ from pipeline.webui.api import (
     variants,
     approvals,
     project_exports,
+    wechat_draft,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -52,5 +53,6 @@ api_router.include_router(visuals.router)
 api_router.include_router(variants.router)
 api_router.include_router(approvals.router)
 api_router.include_router(project_exports.router)
+api_router.include_router(wechat_draft.router)
 
 __all__ = ["api_router"]

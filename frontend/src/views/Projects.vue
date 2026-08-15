@@ -83,6 +83,9 @@ const claimStatusOptions = computed(() => claimForm.value.kind === 'open_questio
 const wechatVariant = computed(() => variants.value.find(item => item.platform === 'wechat_mp') ?? null)
 const focusedPlatform = ref<'wechat_mp'>('wechat_mp')
 const preparingPlatforms = ref(false)
+const sendingDraft = ref(false)
+const draftReceipt = ref<{ media_id: string; title: string; message: string; sent_at: string } | null>(null)
+const draftSendError = ref<string | null>(null)
 const activeTab = computed(() => {
   if (activeWorkbench.value === 'master') return 'article'
   if (activeWorkbench.value === 'variants') return 'wechat'
@@ -111,6 +114,7 @@ async function loadPage(): Promise<void> {
     await masterStore.load(projectId.value)
     await visualsStore.load(projectId.value)
     await variantsStore.load(projectId.value)
+    draftReceipt.value = await variantsStore.loadWechatDraft(projectId.value)
     await approvalsStore.load(projectId.value)
     if (master.value) masterForm.value = { title: master.value.title, body: master.value.body }
     else if (project.value) masterForm.value = { title: project.value.title, body: project.value.idea }
@@ -133,6 +137,20 @@ async function loadPage(): Promise<void> {
 
 async function refreshApprovalStatus(): Promise<void> {
   if (projectId.value) await approvalsStore.load(projectId.value)
+}
+
+async function sendWechatDraft(): Promise<void> {
+  if (!projectId.value || sendingDraft.value) return
+  if (!window.confirm('只送进公众号草稿箱，不会群发。确定现在送吗？')) return
+  sendingDraft.value = true
+  draftSendError.value = null
+  try {
+    draftReceipt.value = await variantsStore.sendWechatDraft(projectId.value)
+  } catch (e) {
+    draftSendError.value = unwrapError(e)
+  } finally {
+    sendingDraft.value = false
+  }
 }
 
 async function preparePlatformDrafts(): Promise<void> {
@@ -566,10 +584,12 @@ watch(projectId, loadPage)
             <div>
               <WechatArticlePreview :html="variantPreviewHtml(wechatVariant)" caption="微信公众号阅读预览 · 封面和插图来自已选视觉资产" />
               <div class="wechat-actions">
-                <a-button type="primary" @click="previewVariant(wechatVariant)">全屏预览</a-button>
+                <a-button type="primary" :loading="sendingDraft" :disabled="!wechatVariant" @click="sendWechatDraft">送进草稿箱</a-button>
+                <a-button @click="previewVariant(wechatVariant)">全屏预览</a-button>
                 <a-button @click="downloadVariantMarkdown(wechatVariant)">导出 Markdown</a-button>
-                <a-button @click="activeWorkbench = 'approval'">去安全交付</a-button>
               </div>
+              <p v-if="draftSendError" class="banner bad">{{ draftSendError }}</p>
+              <p v-else-if="draftReceipt" class="banner">{{ draftReceipt.message }} 草稿 media_id：{{ draftReceipt.media_id }}</p>
             </div>
           </div>
           <div>

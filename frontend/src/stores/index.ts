@@ -561,8 +561,24 @@ export const useVariantsStore = defineStore('variants', () => {
     variants.value = response.data.variants
     return response.data
   }
-  return { variants, loading, error, load, create, save, lock, checkUpstream, acknowledgeMaster, restore, prepare }
+  async function sendWechatDraft(projectId: string): Promise<WechatDraftReceipt> {
+    return (await api.post<WechatDraftReceipt>(`/projects/${projectId}/wechat-draft`, {}, { timeout: GENERATION_TIMEOUT_MS })).data
+  }
+  async function loadWechatDraft(projectId: string): Promise<WechatDraftReceipt | null> {
+    return (await api.get<{ receipt: WechatDraftReceipt | null }>(`/projects/${projectId}/wechat-draft`)).data.receipt
+  }
+  return { variants, loading, error, load, create, save, lock, checkUpstream, acknowledgeMaster, restore, prepare, sendWechatDraft, loadWechatDraft }
 })
+
+export interface WechatDraftReceipt {
+  project_id: string
+  title: string
+  media_id: string
+  destination: 'wechat_draft'
+  published: boolean
+  sent_at: string
+  message: string
+}
 
 export interface ApprovalCheck { id: 'master' | 'visuals' | 'wechat_mp' | 'toutiao'; status: 'pending' | 'approved'; note: string | null; approved_by: string | null; approved_at: string | null }
 export interface ApprovalEvent { action: 'rechecked' | 'approved' | 'revoked'; check_id: ApprovalCheck['id'] | null; note: string | null; actor: string; at: string }
