@@ -554,7 +554,7 @@ watch(projectId, loadPage)
           </a-spin>
         </section>
         <section v-if="activeWorkbench === 'master'" class="master-workbench">
-          <header v-if="composing || !master?.body.trim()" class="section-heading"><div><h2>{{ composing ? (composeStage || '正在生成这篇文章') : '文章' }}</h2><p>{{ composing ? '正文会先出现，封面和插图随后补上。' : '点一段文字就地改。不会静默覆盖上一版。' }}</p></div><span v-if="master" class="meta-chip">v{{ master.version }}</span></header>
+          <header v-if="composing || !master?.body.trim()" class="section-heading"><div><h2>{{ composing ? (composeStage || '正在生成这篇文章') : '文章' }}</h2><p>{{ composing ? '正文会先出现，封面和插图随后补上。' : '点一段文字就地改。不会静默覆盖上一版。' }}</p></div></header>
           <a-alert v-if="masterError" type="error" :message="masterError" show-icon class="notice" />
           <div v-if="composing" class="compose-progress">
             <a-spin />
@@ -568,11 +568,6 @@ watch(projectId, loadPage)
             <a-button type="primary" :loading="draftGenerating" :disabled="composing" @click="composeArticle">生成文章</a-button>
           </div>
           <a-card v-if="draftProposal" title="待审阅的 AI 初稿" :bordered="false" class="draft-proposal"><h3>{{ draftProposal.title }}</h3><p class="proposal-copy">{{ draftProposal.body }}</p><div class="proposal-actions"><a-button type="primary" @click="useDraftProposal">放入编辑器继续修改</a-button><a-button @click="draftProposal = null">丢弃</a-button></div></a-card>
-          <p class="master-count">{{ masterForm.body.trim().length }} 字 · {{ saveStatus || (masterSaving ? '保存中' : '已保存') }}</p>
-          <div v-if="master?.body.trim() && !wechatVariant" class="draft-actions">
-            <div><strong>准备微信公众号稿</strong><p class="muted">从这篇主稿生成公众号阅读版。只进预览和草稿箱，不会群发。</p></div>
-            <a-button type="primary" :loading="preparingPlatforms" @click="preparePlatformDrafts().then(() => openTab('wechat'))">生成微信稿</a-button>
-          </div>
           <ArticleWorkbench
             :title="masterForm.title"
             :body="masterForm.body"
@@ -591,6 +586,13 @@ watch(projectId, loadPage)
             @request-titles="suggestTitles"
             @apply-title="applyGeneratedTitle"
           />
+          <footer v-if="master?.body.trim()" class="article-foot">
+            <span>{{ masterForm.body.trim().length }} 字 · {{ saveStatus || (masterSaving ? '保存中' : '已保存') }}</span>
+            <button v-if="!wechatVariant" type="button" class="text-btn" :disabled="preparingPlatforms" @click="preparePlatformDrafts().then(() => openTab('wechat'))">
+              {{ preparingPlatforms ? '正在准备微信稿…' : '去微信稿' }}
+            </button>
+            <button v-else type="button" class="text-btn" @click="openTab('wechat')">看微信预览</button>
+          </footer>
           <details v-if="master" class="version-card">
             <summary>历史版本</summary>
             <p class="muted">恢复会生成新版本，不会抹掉现在这篇。</p>
@@ -1017,9 +1019,27 @@ h3 {
   max-height: 360px;
 }
 
-.master-count {
-  color: var(--faint) !important;
+.article-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 18px 0 8px;
+  color: var(--faint);
   font-size: 13px;
+}
+
+.article-foot .text-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
 }
 
 .variant-adapt > div {

@@ -26,6 +26,7 @@ const emit = defineEmits<{
 }>()
 
 const customTitle = ref('')
+const titlesOpen = ref(false)
 
 type ArticleBlock = { id: string; text: string; kind: 'heading' | 'paragraph' | 'image' }
 
@@ -35,7 +36,13 @@ const wholeNote = ref('')
 const wholeOpen = ref(false)
 const showSource = ref(false)
 
-const blocks = computed(() => splitBlocks(props.body))
+const blocks = computed(() => {
+  const all = splitBlocks(props.body)
+  if (all[0]?.kind === 'heading' && all[0].text.replace(/^#\s+/, '').trim() === props.title.trim()) {
+    return all.slice(1)
+  }
+  return all
+})
 const pending = computed(() => props.suggestions.filter(item => item.status === 'pending'))
 const selected = computed(() => blocks.value.find(item => item.id === selectedId.value) ?? null)
 
@@ -88,20 +95,59 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
   change_voice: '换口吻',
   add_counterpoint: '补反方',
 }
+
+const imageCount = computed(() => blocks.value.filter(item => item.kind === 'image').length)
+
+function requestTitles(): void {
+  titlesOpen.value = true
+  emit('request-titles')
+}
 </script>
 
 <template>
   <section class="workbench">
     <header class="toolbar">
-      <p>点一段文字，就地改。</p>
+      <p>{{ imageCount ? `${imageCount} 张图 · 点一段文字可改` : '点一段文字可改 · 封面和插图还没补上' }}</p>
       <div class="toolbar-actions">
-        <button type="button" class="text" @click="showSource = !showSource">{{ showSource ? '看文章' : '改原文' }}</button>
+        <button type="button" class="text" :class="{ on: titlesOpen }" :disabled="!body.trim()" @click="titlesOpen ? titlesOpen = false : requestTitles()">
+          {{ titlesLoading ? '正在起标题…' : '换标题' }}
+        </button>
         <button type="button" class="text" :class="{ on: wholeOpen }" @click="wholeOpen = !wholeOpen">整篇意见</button>
+        <button type="button" class="text" @click="showSource = !showSource">{{ showSource ? '看排版' : '改原文' }}</button>
         <button type="button" class="primary" :disabled="saving" @click="emit('save')">{{ saving ? '保存中' : '保存' }}</button>
       </div>
     </header>
 
     <p v-if="error" class="banner">{{ error }}</p>
+
+    <div v-if="titlesOpen" class="title-picker">
+      <header>
+        <p>按这篇正文起标题</p>
+        <button type="button" class="text" :disabled="titlesLoading || !body.trim()" @click="emit('request-titles')">
+          {{ titlesLoading ? '正在起标题…' : titleOptions?.length ? '换一批' : '起几个标题' }}
+        </button>
+      </header>
+      <div v-if="titleOptions?.length" class="title-options">
+        <button
+          v-for="option in titleOptions"
+          :key="option"
+          type="button"
+          :class="{ on: title === option }"
+          @click="emit('apply-title', option)"
+        >
+          {{ option }}
+        </button>
+        <label>
+          <input
+            v-model="customTitle"
+            type="text"
+            placeholder="自己写一个"
+            @keydown.enter="customTitle.trim() && emit('apply-title', customTitle.trim())"
+          />
+          <button type="button" :disabled="!customTitle.trim()" @click="emit('apply-title', customTitle.trim())">用这个</button>
+        </label>
+      </div>
+    </div>
 
     <div v-if="wholeOpen" class="whole-box">
       <label>
@@ -133,35 +179,8 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
     </div>
 
     <article v-else class="article">
-      <div class="title-picker">
-        <header>
-          <p>按这篇正文起标题</p>
-          <button type="button" class="text" :disabled="titlesLoading || !body.trim()" @click="emit('request-titles')">
-            {{ titlesLoading ? '正在起标题…' : titleOptions?.length ? '换一批' : '按正文起几个标题' }}
-          </button>
-        </header>
-        <div v-if="titleOptions?.length" class="title-options">
-          <button
-            v-for="option in titleOptions"
-            :key="option"
-            type="button"
-            :class="{ on: title === option }"
-            @click="emit('apply-title', option)"
-          >
-            {{ option }}
-          </button>
-          <label>
-            <input
-              v-model="customTitle"
-              type="text"
-              placeholder="自己写一个"
-              @keydown.enter="customTitle.trim() && emit('apply-title', customTitle.trim())"
-            />
-            <button type="button" :disabled="!customTitle.trim()" @click="emit('apply-title', customTitle.trim())">用这个</button>
-          </label>
-        </div>
-      </div>
-      <h1 v-if="!body.trimStart().startsWith('# ')">{{ title }}</h1>
+      <h1>{{ title }}</h1>
+      <p v-if="!imageCount" class="missing-art">封面和插图还没有。出图接口失败时，正文会先出来；图可以稍后补上。</p>
       <section
         v-for="block in blocks"
         :key="block.id"
@@ -279,18 +298,27 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
 }
 
 .article {
-  max-width: 68ch;
-  padding: 8px 0 32px;
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 8px 0 48px;
 }
 
 .article h1 {
-  margin: 0 0 22px;
+  margin: 8px 0 18px;
   color: var(--ink);
   font-family: var(--font-read);
-  font-size: clamp(28px, 4vw, 36px);
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.25;
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 620;
+  letter-spacing: -0.035em;
+  line-height: 1.22;
+  text-wrap: balance;
+}
+
+.missing-art {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .title-picker {
@@ -378,7 +406,11 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
 
 .block.image .block-body {
   cursor: default;
-  padding: 12px 0;
+  padding: 8px 0 20px;
+}
+
+.block.image:first-of-type .block-body :deep(img) {
+  border-radius: 8px;
 }
 
 .block.active .block-body,
