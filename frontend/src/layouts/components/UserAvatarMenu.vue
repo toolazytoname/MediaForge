@@ -1,7 +1,4 @@
 <script setup lang="ts">
-// 阶段 H（amend）：左上角 32×32 圆头像 + a-dropdown 菜单
-// 菜单：用户名（disabled） / 设置 → /settings / 退出 → alert "功能即将上线"
-// 用 a-avatar + a-dropdown（trigger=click）+ a-modal 弹提示
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -10,7 +7,7 @@ interface MenuClickEvent {
 }
 
 const router = useRouter()
-const logoutModalOpen = ref<boolean>(false)
+const logoutModalOpen = ref(false)
 const username = 'lazy'
 
 function onMenuClick(event: MenuClickEvent): void {
@@ -25,7 +22,7 @@ function onMenuClick(event: MenuClickEvent): void {
 <template>
   <a-dropdown :trigger="['click']">
     <a class="avatar-trigger" @click.prevent>
-      <a-avatar :size="32" class="user-avatar">{{ username.charAt(0).toUpperCase() }}</a-avatar>
+      <span class="user-avatar">{{ username.charAt(0).toUpperCase() }}</span>
     </a>
     <template #overlay>
       <a-menu @click="onMenuClick">
@@ -37,40 +34,32 @@ function onMenuClick(event: MenuClickEvent): void {
     </template>
   </a-dropdown>
 
-  <a-modal
-    v-model:open="logoutModalOpen"
-    title="退出登录"
-    :footer="null"
-    width="400px"
-  >
-    <a-alert
-      message="功能即将上线"
-      description="退出登录功能将在后续版本提供。"
-      type="warning"
-      show-icon
-    />
+  <a-modal v-model:open="logoutModalOpen" title="退出登录" :footer="null" width="400px">
+    <p class="logout-note">退出还没接上。这台机器上的稿和密钥都还在本地。</p>
   </a-modal>
 </template>
 
 <style scoped>
 .avatar-trigger {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px;
-  border-radius: 50%;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.avatar-trigger:hover {
-  background-color: rgba(124, 77, 255, 0.08);
+  border-radius: 6px;
 }
 
 .user-avatar {
-  background: #7c4dff;
-  color: #fff;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 12px;
   font-weight: 600;
-  cursor: pointer;
+}
+
+.logout-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
 }
 </style>

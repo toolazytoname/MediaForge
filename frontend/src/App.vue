@@ -1,23 +1,32 @@
 <script setup lang="ts">
-// M10 P2 阶段 F: 全局主题（蚁小二紫 #7C4DFF）+ 中文字体 + zhCN locale
-// a-config-provider 已在 ant-design-vue 全局注册，无需导入 ConfigProvider 组件本身
 import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import AppShell from './layouts/AppShell.vue'
 
-// 蚁小二风格：紫色主色 + 中文字体栈 + 菜单 active pill 颜色
 const theme = {
   token: {
-    colorPrimary: '#7C4DFF',
-    colorInfo: '#7C4DFF',
+    colorPrimary: '#1c1c1a',
+    colorInfo: '#1c1c1a',
+    colorSuccess: '#2a5a3d',
+    colorWarning: '#7a5a20',
+    colorError: '#8c2f28',
+    colorText: '#1c1c1a',
+    colorTextSecondary: '#6e6e68',
+    colorBorder: '#e4e4df',
+    colorBgLayout: '#f2f2f0',
+    colorBgContainer: '#ffffff',
     borderRadius: 6,
     fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
+      '"PingFang SC", "Hiragino Sans GB", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
   components: {
     Menu: {
-      itemSelectedBg: '#F3EEFF',
-      itemSelectedColor: '#7C4DFF',
-      itemHoverBg: '#F8F8FA',
+      itemSelectedBg: '#ecece8',
+      itemSelectedColor: '#1c1c1a',
+      itemHoverBg: '#f2f2f0',
+    },
+    Button: {
+      primaryShadow: 'none',
+      defaultShadow: 'none',
     },
   },
 }
@@ -25,6 +34,7 @@ const theme = {
 
 <template>
   <a-config-provider :theme="theme" :locale="zhCN">
+    <a href="#main" class="skip-link">跳到正文</a>
     <AppShell />
   </a-config-provider>
 </template>

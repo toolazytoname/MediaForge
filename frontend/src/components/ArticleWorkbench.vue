@@ -87,24 +87,24 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
 <template>
   <section class="workbench">
     <header class="toolbar">
-      <div>
-        <p class="hint">点一段文字，就地改。整篇意见在右边。</p>
-      </div>
+      <p>点一段文字，就地改。</p>
       <div class="toolbar-actions">
-        <a-button @click="showSource = !showSource">{{ showSource ? '看文章' : '改原文' }}</a-button>
-        <a-button type="primary" :loading="saving" @click="emit('save')">保存</a-button>
-        <a-button :type="wholeOpen ? 'primary' : 'default'" @click="wholeOpen = !wholeOpen">整篇意见</a-button>
+        <button type="button" class="text" @click="showSource = !showSource">{{ showSource ? '看文章' : '改原文' }}</button>
+        <button type="button" class="text" :class="{ on: wholeOpen }" @click="wholeOpen = !wholeOpen">整篇意见</button>
+        <button type="button" class="primary" :disabled="saving" @click="emit('save')">{{ saving ? '保存中' : '保存' }}</button>
       </div>
     </header>
 
-    <a-alert v-if="error" type="error" :message="error" show-icon class="notice" />
+    <p v-if="error" class="banner">{{ error }}</p>
 
     <div v-if="wholeOpen" class="whole-box">
       <label>
         对整篇说一句
-        <a-textarea v-model:value="wholeNote" :auto-size="{ minRows: 2, maxRows: 5 }" placeholder="例如：少说教，保留真实失败；开头再具体一点。" />
+        <textarea v-model="wholeNote" rows="3" placeholder="例如：少说教，保留真实失败；开头再具体一点。" />
       </label>
-      <a-button type="primary" :loading="suggesting" :disabled="!body.trim()" @click="requestWhole">生成整篇建议</a-button>
+      <button type="button" class="primary" :disabled="suggesting || !body.trim()" @click="requestWhole">
+        {{ suggesting ? '生成中…' : '生成整篇建议' }}
+      </button>
       <article v-if="wholePending()" class="compare whole">
         <div>
           <strong>现在</strong>
@@ -115,15 +115,15 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
           <pre>{{ replacementText(wholePending()!).slice(0, 600) }}{{ replacementText(wholePending()!).length > 600 ? '…' : '' }}</pre>
         </div>
         <div class="compare-actions">
-          <a-button type="primary" @click="emit('accept', wholePending()!)">采用整篇建议</a-button>
-          <a-button @click="emit('reject', wholePending()!)">不用</a-button>
+          <button type="button" class="primary" @click="emit('accept', wholePending()!)">采用整篇建议</button>
+          <button type="button" class="ghost" @click="emit('reject', wholePending()!)">不用</button>
         </div>
       </article>
     </div>
 
     <div v-if="showSource" class="source">
-      <a-input :value="title" placeholder="标题" @update:value="emit('update:title', $event)" />
-      <a-textarea :value="body" :auto-size="{ minRows: 12, maxRows: 28 }" placeholder="正文" @update:value="emit('update:body', $event)" />
+      <input :value="title" placeholder="标题" @input="emit('update:title', ($event.target as HTMLInputElement).value)" />
+      <textarea :value="body" rows="16" placeholder="正文" @input="emit('update:body', ($event.target as HTMLTextAreaElement).value)" />
     </div>
 
     <article v-else class="article">
@@ -136,18 +136,18 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
         <div class="block-body" v-html="renderMarkdown(block.text)" @click="selectBlock(block)" />
         <div v-if="selectedId === block.id && block.kind !== 'image'" class="inline-bar">
           <span>改这一段</span>
-          <a-button size="small" :loading="suggesting" @click="requestBlock('clarify')">改清楚</a-button>
-          <a-button size="small" :loading="suggesting" @click="requestBlock('shorten')">写短些</a-button>
-          <a-button size="small" :loading="suggesting" @click="requestBlock('change_voice')">换口吻</a-button>
-          <a-input
-            v-model:value="customNote"
-            size="small"
+          <button type="button" :disabled="suggesting" @click="requestBlock('clarify')">改清楚</button>
+          <button type="button" :disabled="suggesting" @click="requestBlock('shorten')">写短些</button>
+          <button type="button" :disabled="suggesting" @click="requestBlock('change_voice')">换口吻</button>
+          <input
+            v-model="customNote"
+            type="text"
             placeholder="或写一句：少说教 / 更具体"
-            @press-enter="requestBlock('clarify', customNote)"
+            @keydown.enter="requestBlock('clarify', customNote)"
           />
-          <a-button size="small" type="primary" :loading="suggesting" :disabled="!customNote.trim()" @click="requestBlock('clarify', customNote)">
+          <button type="button" class="primary" :disabled="suggesting || !customNote.trim()" @click="requestBlock('clarify', customNote)">
             按这句话改
-          </a-button>
+          </button>
         </div>
         <div v-if="pendingFor(block)" class="compare">
           <div>
@@ -159,8 +159,8 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
             <pre>{{ replacementText(pendingFor(block)!) }}</pre>
           </div>
           <div class="compare-actions">
-            <a-button type="primary" size="small" aria-label="采用这段建议" @click="emit('accept', pendingFor(block)!)">采用</a-button>
-            <a-button size="small" aria-label="不用这段建议" @click="emit('reject', pendingFor(block)!)">不用</a-button>
+            <button type="button" class="primary" aria-label="采用这段建议" @click="emit('accept', pendingFor(block)!)">采用</button>
+            <button type="button" class="ghost" aria-label="不用这段建议" @click="emit('reject', pendingFor(block)!)">不用</button>
           </div>
         </div>
       </section>
@@ -170,30 +170,248 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
 </template>
 
 <style scoped>
-.workbench { display: grid; gap: 14px; }
-.toolbar, .toolbar-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.hint { margin: 0; color: #7a6650; font-size: 13px; }
-.notice { margin: 0; }
-.whole-box, .source, .inline-bar, .compare { padding: 12px; border: 1px solid #e8e1d5; border-radius: 10px; background: #fffdf8; }
-.whole-box { display: grid; gap: 10px; }
-.whole-box label { display: grid; gap: 6px; color: #5c564f; font-size: 13px; font-weight: 600; }
-.source { display: grid; gap: 10px; }
-.article { padding: 8px 4px 24px; }
-.article h1 { margin: 0 0 18px; color: #1f1c1a; font-family: Georgia, 'Songti SC', serif; font-size: 32px; line-height: 1.25; }
-.block { margin: 0 0 8px; border-radius: 8px; }
-.block-body { padding: 6px 10px; border-radius: 8px; cursor: pointer; }
-.block-body :deep(p), .block-body :deep(h2), .block-body :deep(li) { margin: 0; line-height: 1.85; }
-.block-body :deep(img) { display: block; width: 100%; height: auto; border-radius: 6px; }
-.block.image .block-body { cursor: default; padding: 0; }
-.block.active .block-body, .block-body:hover { background: #f6efe4; }
-.block.pending { outline: 1px solid #c7b497; }
-.inline-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 10px 12px; }
-.inline-bar span { color: #7a6650; font-size: 12px; font-weight: 700; }
-.inline-bar :deep(.ant-input) { max-width: 240px; }
-.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 10px 14px; }
-.compare.whole { margin: 0; }
-.compare pre { margin: 8px 0 0; max-height: 240px; overflow: auto; white-space: pre-wrap; color: #3f3a35; font-family: inherit; font-size: 14px; line-height: 1.7; }
-.compare-actions { grid-column: 1 / -1; display: flex; gap: 8px; }
-.empty { color: #948d84; }
-@media (max-width: 760px) { .compare { grid-template-columns: 1fr; } }
+.workbench {
+  display: grid;
+  gap: 16px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.toolbar p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.banner {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--bad-wash);
+  color: var(--bad);
+}
+
+.whole-box,
+.source {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+}
+
+.whole-box label {
+  display: grid;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.source input,
+.source textarea,
+.whole-box textarea,
+.inline-bar input {
+  width: 100%;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink);
+}
+
+.source input {
+  font-family: var(--font-read);
+  font-size: 28px;
+  letter-spacing: -0.03em;
+}
+
+.source textarea,
+.whole-box textarea {
+  line-height: 1.75;
+  resize: vertical;
+}
+
+.article {
+  max-width: 68ch;
+  padding: 8px 0 32px;
+}
+
+.article h1 {
+  margin: 0 0 22px;
+  color: var(--ink);
+  font-family: var(--font-read);
+  font-size: clamp(28px, 4vw, 36px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+}
+
+.block {
+  margin: 0 0 4px;
+}
+
+.block-body {
+  padding: 8px 0;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.block-body :deep(p),
+.block-body :deep(h2),
+.block-body :deep(li) {
+  margin: 0;
+  line-height: 1.85;
+}
+
+.block-body :deep(h2) {
+  font-family: var(--font-read);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.block-body :deep(img) {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.block.image .block-body {
+  cursor: default;
+  padding: 12px 0;
+}
+
+.block.active .block-body,
+.block-body:hover {
+  border-left-color: var(--ink);
+  padding-left: 10px;
+}
+
+.block.pending .block-body {
+  border-left-color: var(--warn);
+}
+
+.inline-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 16px;
+}
+
+.inline-bar span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inline-bar input {
+  max-width: 240px;
+  padding: 6px 0;
+}
+
+.inline-bar button,
+.text,
+.primary,
+.ghost {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 200ms var(--ease), transform 200ms var(--ease), opacity 200ms var(--ease);
+}
+
+.inline-bar button,
+.ghost,
+.text {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink);
+}
+
+.text {
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.text.on,
+.text:hover {
+  color: var(--ink);
+  background: var(--wash);
+}
+
+.primary {
+  border: 0;
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.primary:disabled,
+.inline-bar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.primary:active,
+.ghost:active,
+.inline-bar button:active {
+  transform: scale(0.98);
+}
+
+.compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 8px 0 18px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.compare strong {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.compare pre {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.compare-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+}
+
+.empty {
+  color: var(--faint);
+}
+
+@media (max-width: 760px) {
+  .toolbar,
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}
 </style>

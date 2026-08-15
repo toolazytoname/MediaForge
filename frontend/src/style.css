@@ -1,25 +1,35 @@
-/* MediaForge 全局基座样式（M11 修正：清掉 Vite 脚手架落地页残留）
- *
- * 旧文件是 create-vite 生成的 landing-page 样式，两处致命项导致「两边都是黑的」：
- *   1. #app { width: 1126px; margin: 0 auto; text-align: center; border-inline } —— 把整个后台
- *      锁到 1126px 居中，宽屏两侧留空带；
- *   2. color-scheme: light dark + @media(prefers-color-scheme: dark) 把 --bg 翻成 #16171d，
- *      OS 处于深色模式时，那两条空带 + 原生滚动条全被渲染成近黑。
- *
- * 本后台按浅色设计，不跟随系统深色。这里只保留最小全局基座：
- *   - 不锁宽、不居中（占满视口，布局交给 AppShell）
- *   - color-scheme: light 锁定浅色原生控件（滚动条/输入框不再发黑）
- *   - 字体/背景与 App.vue 的 AntD token 对齐
- * 组件级样式一律放各 .vue 的 scoped 里；AntD reset.css 已在 main.ts 先于本文件导入。
- */
+/* MediaForge writer chrome.
+   Light-locked on purpose: a previous dark-scheme follow turned the layout bands black.
+   Tokens are cool stone + ink, not Ant Design purple and not craft-paper beige. */
 
 :root {
   color-scheme: light;
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  font-size: 14px;
-  line-height: 1.5715;
+  --canvas: #f2f2f0;
+  --surface: #ffffff;
+  --ink: #1c1c1a;
+  --muted: #6e6e68;
+  --faint: #9a9a94;
+  --line: #e4e4df;
+  --line-strong: #d4d4ce;
+  --wash: #ecece8;
+  --ok: #2a5a3d;
+  --ok-wash: #e8f0ea;
+  --bad: #8c2f28;
+  --bad-wash: #f6e8e6;
+  --warn: #7a5a20;
+  --warn-wash: #f4eedc;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-ui: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-read: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "Iowan Old Style", Georgia, serif;
+  --font-mono: "SF Mono", "Menlo", "JetBrains Mono", ui-monospace, monospace;
+  --radius: 8px;
+  --nav-h: 56px;
+  --z-nav: 30;
+  --z-overlay: 40;
+  --z-grain: 60;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -31,12 +41,214 @@ body {
   padding: 0;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
-  min-height: 100vh;
-  background: #f8f8fa;
-  color: rgba(0, 0, 0, 0.88);
+  min-height: 100dvh;
+  background: var(--canvas);
+  color: var(--ink);
 }
 
 #app {
-  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: 8px;
+  z-index: 80;
+  padding: 8px 12px;
+  background: var(--ink);
+  color: var(--surface);
+  text-decoration: none;
+  transform: translateY(-140%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-grain);
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Ant Design: flatten the leftover purple cockpit into the writer tokens. */
+.ant-btn {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 6px;
+  box-shadow: none !important;
+  transition: background-color 200ms var(--ease), border-color 200ms var(--ease), color 200ms var(--ease), transform 200ms var(--ease);
+}
+
+.ant-btn:active {
+  transform: scale(0.98);
+}
+
+.ant-btn-lg {
+  height: 42px;
+  padding: 0 18px;
+}
+
+.ant-btn-primary {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+  color: var(--surface) !important;
+}
+
+.ant-btn-primary:hover,
+.ant-btn-primary:focus {
+  background: #33332f !important;
+  border-color: #33332f !important;
+  color: var(--surface) !important;
+}
+
+.ant-btn-primary:disabled,
+.ant-btn-primary[disabled] {
+  background: #c8c8c2 !important;
+  border-color: #c8c8c2 !important;
+  color: #f7f7f4 !important;
+}
+
+.ant-btn-default,
+.ant-btn-dashed {
+  background: var(--surface) !important;
+  border-color: var(--line-strong) !important;
+  color: var(--ink) !important;
+}
+
+.ant-btn-default:hover,
+.ant-btn-dashed:hover {
+  border-color: var(--ink) !important;
+  color: var(--ink) !important;
+}
+
+.ant-btn-dangerous,
+.ant-btn-dangerous.ant-btn-default {
+  color: var(--bad) !important;
+  border-color: #e4c4c1 !important;
+  background: var(--surface) !important;
+}
+
+.ant-btn-link {
+  color: var(--ink) !important;
+  padding-inline: 0;
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-password,
+.ant-select-selector,
+.ant-input-textarea textarea {
+  border-color: var(--line-strong) !important;
+  border-radius: 6px !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-affix-wrapper-focused,
+.ant-input-affix-wrapper:focus,
+.ant-select-focused .ant-select-selector {
+  border-color: var(--ink) !important;
+  box-shadow: none !important;
+}
+
+.ant-input::placeholder,
+.ant-input-textarea textarea::placeholder {
+  color: var(--faint) !important;
+}
+
+.ant-card {
+  background: var(--surface) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: none !important;
+}
+
+.ant-card-head {
+  border-bottom-color: var(--line) !important;
+  color: var(--ink) !important;
+}
+
+.ant-alert {
+  border-radius: var(--radius);
+  border-color: var(--line);
+  background: var(--wash);
+  color: var(--ink);
+}
+
+.ant-alert-info {
+  background: var(--wash);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.ant-alert-warning {
+  background: var(--warn-wash);
+  border-color: #ead9b0;
+  color: var(--warn);
+}
+
+.ant-alert-error {
+  background: var(--bad-wash);
+  border-color: #e4c4c1;
+  color: var(--bad);
+}
+
+.ant-alert-success {
+  background: var(--ok-wash);
+  border-color: #c6dccb;
+  color: var(--ok);
+}
+
+.ant-tag {
+  border: 0;
+  border-radius: 4px;
+  background: var(--wash);
+  color: var(--muted);
+}
+
+.ant-spin-dot-item {
+  background-color: var(--ink) !important;
+}
+
+.ant-empty-description {
+  color: var(--muted);
 }

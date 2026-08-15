@@ -2,7 +2,6 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
 import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult } from '../stores'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
@@ -18,10 +17,10 @@ const masterStore = useMasterStore()
 const visualsStore = useVisualsStore()
 const variantsStore = useVariantsStore()
 const approvalsStore = useApprovalsStore()
-const { items, total, loading, error } = storeToRefs(store)
+const { items, loading, error } = storeToRefs(store)
 const listItems = computed(() => {
   const titled = items.value
-  return titled.filter((item, index) => {
+  return titled.filter((item) => {
     const sameTitle = titled.filter(other => other.title === item.title)
     if (sameTitle.length === 1) return true
     const withBody = sameTitle.filter(other => other.has_master)
@@ -30,7 +29,7 @@ const listItems = computed(() => {
   })
 })
 const { board, loading: researchLoading, error: researchError } = storeToRefs(researchStore)
-const { master, suggestions, loading: masterLoading, error: masterError } = storeToRefs(masterStore)
+const { master, suggestions, error: masterError } = storeToRefs(masterStore)
 const { plan: visualPlan, provider: visualProvider, loading: visualsLoading, error: visualsError } = storeToRefs(visualsStore)
 const { variants, loading: variantsLoading, error: variantsError } = storeToRefs(variantsStore)
 const { status: approvalStatus, loading: approvalsLoading, error: approvalsError } = storeToRefs(approvalsStore)
@@ -81,14 +80,7 @@ const openQuestions = computed(() => board.value?.claims.filter(item => item.kin
 const claimStatusOptions = computed(() => claimForm.value.kind === 'open_question'
   ? [{ value: 'open', label: '待解决' }, { value: 'resolved', label: '已解决' }]
   : [{ value: 'unverified', label: '待核查' }, { value: 'verified', label: '已核查' }])
-const researchReady = computed(() => (board.value?.sources.length ?? 0) >= 3
-  && (board.value?.claims.some(item => item.kind === 'judgment') ?? false)
-  && !unverifiedFacts.value.length && !openQuestions.value.length)
-const masterReady = computed(() => (master.value?.body.trim().length ?? 0) >= 800)
-const visualsReady = computed(() => (visualPlan.value?.slots.length ?? 0) >= 3
-  && (visualPlan.value?.slots.every(slot => visualPlan.value?.assets.some(asset => asset.slot_id === slot.id && asset.status === 'selected')) ?? false))
 const wechatVariant = computed(() => variants.value.find(item => item.platform === 'wechat_mp') ?? null)
-const wechatReady = computed(() => Boolean(wechatVariant.value && wechatVariant.value.body.trim().length >= 600))
 const focusedPlatform = ref<'wechat_mp'>('wechat_mp')
 const preparingPlatforms = ref(false)
 const activeTab = computed(() => {
@@ -269,13 +261,6 @@ async function saveMaster(): Promise<void> {
     saveStatus.value = '保存失败'
     detailError.value = unwrapError(e)
   } finally { masterSaving.value = false }
-}
-async function proposeDraft(): Promise<void> {
-  if (!projectId.value) return
-  draftGenerating.value = true; detailError.value = null
-  try { draftProposal.value = await masterStore.proposeDraft(projectId.value) }
-  catch (e) { detailError.value = unwrapError(e) }
-  finally { draftGenerating.value = false }
 }
 function useDraftProposal(): void {
   if (!draftProposal.value) return
@@ -469,17 +454,27 @@ watch(projectId, loadPage)
 <template>
   <section class="projects-page">
     <template v-if="projectId">
-      <a-button type="link" class="back" @click="router.push('/projects')"><ArrowLeftOutlined /> 全部项目</a-button>
-      <a-alert v-if="detailError" type="error" :message="detailError" show-icon />
+      <button type="button" class="back" @click="router.push('/projects')">全部文章</button>
+      <p v-if="detailError" class="banner bad">{{ detailError }}</p>
       <article v-if="project" class="project-workspace">
-        <header v-if="activeWorkbench !== 'master' && activeWorkbench !== 'variants'">
-          <p class="eyebrow">主题项目</p>
+        <header v-if="activeWorkbench !== 'master' && activeWorkbench !== 'variants'" class="workspace-head">
           <h1>{{ project.title }}</h1>
           <p class="idea">{{ project.idea }}</p>
         </header>
         <div v-show="activeWorkbench !== 'variants' && activeWorkbench !== 'master'" class="project-grid">
-          <a-card title="创作意图" :bordered="false"><dl><dt>写给谁</dt><dd>{{ project.audience }}</dd><dt>这次要完成什么</dt><dd>{{ project.goal }}</dd><dt>声音</dt><dd>{{ project.voice }}</dd></dl></a-card>
-          <a-card title="目前的材料" :bordered="false"><p>已关联 {{ project.content_ids.length }} 篇内容，{{ project.asset_paths.length }} 项资产。</p><p class="muted">来源、判断和待确认项均由你明确录入，不会自动抓取或改写。</p></a-card>
+          <section>
+            <h3>写给谁</h3>
+            <p>{{ project.audience }}</p>
+            <h3>这次要完成什么</h3>
+            <p>{{ project.goal }}</p>
+            <h3>声音</h3>
+            <p>{{ project.voice }}</p>
+          </section>
+          <section>
+            <h3>目前的材料</h3>
+            <p>已关联 {{ project.content_ids.length }} 篇内容，{{ project.asset_paths.length }} 项资产。</p>
+            <p class="muted">来源、判断和待确认项都由你录入，不会自动抓取或改写。</p>
+          </section>
         </div>
         <nav v-show="!composing" class="surface-tabs" aria-label="文章和平台">
           <button :class="{ active: activeTab === 'article' }" @click="openTab('article')">文章</button>
@@ -492,7 +487,7 @@ watch(projectId, loadPage)
           <button :class="{ active: activeWorkbench === 'approval' }" @click="activeWorkbench = 'approval'">交付</button>
         </div>
         <section v-show="activeWorkbench === 'research'" class="research-board">
-          <header class="section-heading"><div><p class="eyebrow">研究板</p><h2>先把依据、判断和未知写清楚。</h2><p>来源不会自动核查。标记为“已核查”前，请自行确认原始材料。</p></div></header>
+          <header class="section-heading"><div><h2>资料</h2><p>来源不会自动核查。标记为“已核查”前，请自行确认原始材料。</p></div></header>
           <a-alert v-if="researchError" type="error" :message="researchError" show-icon class="notice" />
           <a-spin :spinning="researchLoading">
             <div class="research-alerts" v-if="unverifiedFacts.length || openQuestions.length">
@@ -514,7 +509,7 @@ watch(projectId, loadPage)
           </a-spin>
         </section>
         <section v-if="activeWorkbench === 'master'" class="master-workbench">
-          <header class="section-heading"><div><p class="eyebrow">文章</p><h2>{{ composing ? (composeStage || '正在生成这篇文章') : '先读这篇，再决定改哪里。' }}</h2><p>{{ composing ? '正文会先出现，封面和插图随后补上。你可以停在这一页等。' : '这是根据你在首页写下的主题和想法生成的草稿。可以直接改，不会静默覆盖上一版。' }}</p></div><a-tag v-if="master" color="blue">版本 {{ master.version }}</a-tag></header>
+          <header v-if="composing || !master?.body.trim()" class="section-heading"><div><h2>{{ composing ? (composeStage || '正在生成这篇文章') : '文章' }}</h2><p>{{ composing ? '正文会先出现，封面和插图随后补上。' : '点一段文字就地改。不会静默覆盖上一版。' }}</p></div><span v-if="master" class="meta-chip">v{{ master.version }}</span></header>
           <a-alert v-if="masterError" type="error" :message="masterError" show-icon class="notice" />
           <div v-if="composing" class="compose-progress">
             <a-spin />
@@ -554,7 +549,7 @@ watch(projectId, loadPage)
           </details>
         </section>
         <section v-show="activeWorkbench === 'visuals'" class="visual-workbench">
-          <header class="section-heading"><div><p class="eyebrow">视觉计划</p><h2>先定义意图，再生成候选。</h2><p>候选不会写入主稿或平台版本。成本显示为请求前预估，实际账单以 OpenAI 用量账单为准。</p></div></header>
+          <header class="section-heading"><div><h2>配图</h2><p>候选不会写入主稿或平台版本。成本是请求前预估。</p></div></header>
           <a-alert v-if="visualsError" type="error" :message="visualsError" show-icon class="notice" />
           <a-alert v-if="visualProvider && !visualProvider.available" type="warning" show-icon class="notice" :message="visualProvider.reason || 'GPT Image 2 暂不可用'" description="可以继续完成视觉计划，并为每个槽位导入本地 PNG；导入会保留提示词、版本和选择记录。" />
           <div class="visual-bootstrap"><a-button v-if="!visualSlots.length" type="primary" @click="setupStandardVisuals">建立 1 张封面 + 2 张插图</a-button><p v-else class="muted">已规划 {{ visualSlots.length }} 个槽位；保存计划后，可以生成或导入候选。</p></div>
@@ -563,7 +558,7 @@ watch(projectId, loadPage)
           <a-spin :spinning="visualsLoading"><a-card :bordered="false" class="visual-card"><a-form layout="vertical"><a-form-item label="视觉圣经"><a-textarea v-model:value="visualBible" :rows="3" placeholder="例如：风格: 克制的编辑插画\n色彩: 暖白纸张与墨蓝" /></a-form-item><div class="visual-slot-list"><article v-for="(slot, index) in visualSlots" :key="slot.id" class="visual-slot"><div class="slot-heading"><strong>{{ slot.purpose || `槽位 ${index + 1}` }}</strong><a-button type="link" danger size="small" @click="visualSlots.splice(index, 1)">移除</a-button></div><div class="form-pair"><a-form-item label="用途"><a-input v-model:value="slot.purpose" placeholder="封面 / 正文插图" /></a-form-item><a-form-item label="比例"><a-select v-model:value="slot.aspect_ratio"><a-select-option value="16:9">16:9 横图</a-select-option><a-select-option value="1:1">1:1 方图</a-select-option><a-select-option value="9:16">9:16 竖图</a-select-option><a-select-option value="4:3">4:3</a-select-option><a-select-option value="3:4">3:4</a-select-option></a-select></a-form-item></div><a-form-item label="对应段落（可选）"><a-input v-model:value="slot.paragraph_anchor" placeholder="例如：开头的核心问题" /></a-form-item><a-form-item label="画面方向"><a-textarea v-model:value="slot.direction" :rows="2" placeholder="这张图要帮助读者理解什么？" /></a-form-item><a-form-item label="生成或编辑提示词"><a-textarea v-model:value="visualPrompts[slot.id]" :rows="2" placeholder="显式点击后才会调用 GPT Image 2" /></a-form-item><div class="visual-actions"><a-button :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot)">生成候选</a-button></div><div v-if="visualPlan?.assets.filter(asset => asset.slot_id === slot.id).length" class="asset-list"><article v-for="asset in visualPlan.assets.filter(item => item.slot_id === slot.id).slice().reverse()" :key="asset.id" :class="['visual-asset', asset.status]"><div><a-tag :color="asset.status === 'selected' ? 'green' : asset.status === 'failed' ? 'red' : 'blue'">{{ asset.status === 'selected' ? '已选择' : asset.status === 'failed' ? '失败' : '候选' }}</a-tag><span>v{{ asset.version }} · {{ asset.model }} · 预估 ${{ asset.cost_usd.toFixed(2) }}</span></div><p>{{ asset.prompt }}</p><p v-if="asset.failure" class="failure">{{ asset.failure }}</p><div v-if="asset.status !== 'failed'" class="asset-actions"><a-button v-if="asset.status !== 'selected'" size="small" @click="selectVisual(asset.id)">选择</a-button><a-button size="small" :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot, asset.id)">基于此编辑</a-button></div></article></div></article></div><div class="visual-plan-actions"><a-button @click="addVisualSlot">添加插图槽位</a-button><a-button type="primary" :loading="visualSaving" @click="saveVisualPlan">保存视觉计划</a-button></div></a-form></a-card></a-spin>
         </section>
         <section v-if="activeWorkbench === 'variants'" class="variants-workbench">
-          <header class="section-heading"><div><p class="eyebrow">微信公众号</p><h2>先把这篇当成读者打开的文章。</h2><p>确认后可以检查公众号配置，再送进草稿箱。不会群发。</p></div></header>
+          <header class="section-heading"><div><h2>微信公众号</h2><p>先看读者会打开的样子。确认后检查配置，再送进草稿箱。不会群发。</p></div></header>
           <a-alert v-if="variantsError" type="error" :message="variantsError" show-icon class="notice" />
           <a-alert type="info" show-icon class="notice" message="公众号只进草稿箱，不会群发。先在本页或设置里保存 AppID / AppSecret，再检查当前 IP 是否在白名单。" />
           <div class="wechat-layout">
@@ -597,7 +592,7 @@ watch(projectId, loadPage)
           </div>
         </section>
         <section v-show="activeWorkbench === 'approval'" class="approval-workbench">
-          <header class="section-heading"><div><p class="eyebrow">内容包审批</p><h2>逐项确认，再进入安全交付。</h2><p>批准只记录你的人工判断，不会发布、创建平台草稿或调用任何发布器。</p></div><a-tag v-if="approvalStatus?.complete" color="green">已完成审批</a-tag></header>
+          <header class="section-heading"><div><h2>交付</h2><p>批准只记录你的判断，不会发布或调用微信接口。</p></div><span v-if="approvalStatus?.complete" class="meta-chip on">已完成审批</span></header>
           <a-alert v-if="approvalsError" type="error" :message="approvalsError" show-icon class="notice" />
           <div class="approval-actor"><label for="approval-actor">真实审批人或角色</label><a-input id="approval-actor" v-model:value="approvalActor" placeholder="例如：张三 / Codex 自测（受用户委托）" /></div>
           <a-spin :spinning="approvalsLoading"><a-card :bordered="false" class="approval-card"><a-alert v-if="approvalStatus?.blockers.length" type="warning" show-icon :message="`尚不可审批：${approvalStatus?.blockers.join('；')}`" class="notice"/><a-alert v-else-if="approvalStatus?.stale" type="warning" show-icon message="上游内容已改变，请重新检查。历史批准不会被静默沿用；所有批准与撤回动作已暂停。" class="notice"/><div class="approval-actions"><a-button type="primary" @click="recheckApproval">重新检查内容包</a-button></div><div v-if="approvalStatus?.approval.checks.length" class="approval-list"><article v-for="check in approvalStatus.approval.checks" :key="check.id"><div><strong>{{ approvalLabel[check.id] }}</strong><p>{{ check.status === 'approved' ? `已由 ${check.approved_by} 批准` : '待人工检查' }}</p><small v-if="check.note">当前备注：{{ check.note }}</small></div><div class="approval-decision"><a-input v-model:value="approvalNotes[check.id]" :disabled="!approvalStatus.ready || approvalStatus.stale" placeholder="可选审批备注" size="small"/><a-button v-if="check.status !== 'approved'" type="primary" size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, true)">批准</a-button><a-button v-else size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, false)">撤回批准</a-button></div></article></div><a-empty v-else description="先重新检查，生成当前内容包的审批清单。" :image-style="{ height: '40px' }"/><p v-if="approvalStatus?.complete" class="approval-complete">所有项目已批准。下一步仅可进入草稿箱或安全导出，仍不等于真实发布。</p><div v-if="approvalStatus?.approval.history.length" class="approval-history"><strong>审批历史</strong><p v-for="event in approvalStatus.approval.history.slice().reverse().slice(0, 8)" :key="`${event.at}-${event.action}-${event.check_id}`">{{ event.at }} · {{ event.actor }} · {{ event.action }}{{ event.check_id ? ` (${approvalLabel[event.check_id]})` : '' }}{{ event.note ? ` · ${event.note}` : '' }}</p></div></a-card></a-spin>
@@ -628,31 +623,573 @@ watch(projectId, loadPage)
     </template>
 
     <template v-else>
-      <header class="list-header"><div><p class="eyebrow">项目</p><h1>每一个主题，都有一张自己的工作台。</h1><p>项目把想法、资料、主稿、视觉与平台版本放在同一条创作路径上。</p></div><a-button type="primary" @click="router.push('/projects/new')">新建项目</a-button></header>
-      <a-alert v-if="error" type="error" :message="error" show-icon class="notice" />
+      <header class="list-header">
+        <h1>文章</h1>
+        <a-button type="primary" @click="router.push('/projects/new')">新文章</a-button>
+      </header>
+      <p v-if="error" class="banner bad">{{ error }}</p>
       <a-spin :spinning="loading">
-        <div v-if="listItems.length" class="project-list"><button v-for="item in listItems" :key="item.id" class="project-row" @click="router.push(`/projects/${item.id}`)"><div><h2>{{ item.title }}</h2><p>{{ item.idea.length > 90 ? `${item.idea.slice(0, 90)}…` : item.idea }}</p><span>{{ item.has_master ? '已有正文' : '还没写成文章' }} · {{ formatDateTime(item.updated_at) }}</span></div><div class="row-meta"><ArrowRightOutlined /></div></button></div>
-        <a-empty v-else-if="!loading" description="还没有项目。下一步可以从一个真实主题开始。"><template #image><FolderOpenOutlined class="empty-icon" /></template></a-empty>
+        <div v-if="listItems.length" class="project-list">
+          <button v-for="item in listItems" :key="item.id" class="project-row" @click="router.push(`/projects/${item.id}`)">
+            <div>
+              <h2>{{ item.title }}</h2>
+              <p>{{ item.idea.length > 90 ? `${item.idea.slice(0, 90)}…` : item.idea }}</p>
+              <span>{{ item.has_master ? '已有正文' : '还没写成文章' }} · {{ formatDateTime(item.updated_at) }}</span>
+            </div>
+          </button>
+        </div>
+        <p v-else-if="!loading" class="empty-copy">还没有文章。回首页写一个主题即可。</p>
       </a-spin>
-      <p class="count" v-if="listItems.length">共 {{ listItems.length }} 个项目</p>
     </template>
   </section>
 </template>
 
 <style scoped>
-.projects-page { max-width: 1020px; padding: 24px 0 56px; }
-.eyebrow { margin: 0 0 8px; color: #7a6650; font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
-h1, h2 { color: #292522; font-family: Georgia, 'Songti SC', serif; } h1 { margin: 0 0 12px; font-size: clamp(30px, 4vw, 44px); line-height: 1.2; } h2 { margin: 0 0 8px; font-size: 22px; }
-.list-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-bottom: 28px; }.list-header > div { max-width: 720px; }.list-header p, .idea, .project-row p, .project-row span, .project-workspace p { color: #706b65; line-height: 1.7; }.notice { margin-bottom: 16px; }
-.project-list { border-top: 1px solid #ded7cd; }.project-row { width: 100%; display: flex; justify-content: space-between; gap: 24px; padding: 22px 4px; text-align: left; border: 0; border-bottom: 1px solid #ded7cd; background: transparent; cursor: pointer; }.project-row:hover h2 { color: #886d4b; }.project-row p { max-width: 700px; margin: 0 0 6px; }.project-row span, .row-meta { color: #948d84; font-size: 13px; }.row-meta { display: flex; align-items: center; gap: 16px; white-space: nowrap; }.empty-icon { color: #b39b79; font-size: 44px; }.count { color: #948d84; font-size: 13px; }.back { margin-bottom: 12px; padding-left: 0; }.project-workspace > header { max-width: 760px; margin-bottom: 28px; }.idea { font-size: 18px; }.project-grid, .research-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.project-grid :deep(.ant-card), .research-grid :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.project-grid dd { margin: 4px 0 16px; color: #4e4943; }.project-grid dt { color: #948d84; font-size: 12px; }.muted { color: #948d84 !important; }.research-board { margin-top: 34px; max-width: 1000px; }.section-heading { margin-bottom: 18px; }.section-heading p { max-width: 680px; }.research-alerts { display: grid; gap: 8px; margin-bottom: 16px; }.record-list { display: grid; gap: 10px; margin-bottom: 20px; }.record-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.record-list p { margin: 6px 0; color: #5e5851; }.record-list small { color: #897f75; word-break: break-word; }.claim-meta { display: flex; gap: 6px; }.claim-list .unverified { border-left-color: #d89614; }.claim-list .unresolved { border-left-color: #7f59b0; }.caveat { color: #7a5d3d !important; }.research-form { padding-top: 12px; border-top: 1px solid #e8e1d5; }.form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.surface-tabs, .more-sub { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 8px; }.more-sub { margin-top: 0; }.surface-tabs button, .more-sub button { padding: 8px 14px; border: 1px solid #ded7cd; border-radius: 999px; color: #706b65; background: #fff; cursor: pointer; }.surface-tabs button.active, .more-sub button.active { color: #fffdf8; border-color: #2d2926; background: #2d2926; }
-.master-workbench { margin-top: 34px; }.master-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 16px; }.master-grid :deep(.ant-card), .version-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.suggestion-actions, .proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; }.proposal-list { display: grid; gap: 10px; margin-top: 16px; }.proposal-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.proposal-meta { display: flex; justify-content: space-between; gap: 8px; color: #948d84; font-size: 12px; }.proposal-copy { max-height: 160px; overflow: auto; white-space: pre-wrap; color: #4e4943; }.version-card { margin-top: 16px; padding: 12px 14px; border: 1px solid #e8e1d5; border-radius: 10px; background: #fffdf8; }.version-card summary { cursor: pointer; color: #706b65; }.version-list { display: grid; gap: 8px; }.version-list article { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #e8e1d5; }.version-list span { margin-left: 8px; color: #948d84; font-size: 12px; }.version-list p { margin: 4px 0 0; color: #706b65; }.selection-note { color: #7a6650; font-size: 13px; }
-.draft-actions, .export-panel, .variant-adapt, .local-imports { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; padding: 14px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fffdf8; }.compose-progress { display: flex; align-items: center; gap: 16px; margin: 0 0 18px; padding: 18px; border: 1px solid #e8e1d5; border-radius: 10px; background: #fffdf8; }.compose-progress strong { display: block; color: #292522; }.compose-progress p { margin: 6px 0 0; }
-.draft-actions p, .export-panel p { margin: 4px 0 0; }.draft-proposal { margin-bottom: 16px; border-color: #c7b497; background: #fbf6ed; }.draft-proposal .proposal-copy { max-height: 360px; }.master-count { color: #7a6650 !important; font-size: 13px; }.master-read { margin: 0 0 18px; padding: 22px 24px; border: 1px solid #e8e1d5; border-radius: 10px; background: #fff; color: #2f2b28; line-height: 1.8; }.master-read :deep(h1) { margin-top: 0; font-size: 28px; }.master-read :deep(img) { max-width: 100%; }.variant-adapt > div { display: flex; align-items: center; gap: 10px; }.variant-adapt > p { flex-basis: 100%; margin: 0; }.local-imports { justify-content: flex-start; }.import-button { display: inline-flex; padding: 6px 11px; border: 1px dashed #a6845b; border-radius: 6px; color: #60482d; cursor: pointer; background: #fff; }.import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.visual-bootstrap { margin-bottom: 12px; }
-.asset-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }.asset-gallery figure { margin: 0; padding: 8px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fff; }.asset-gallery img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 5px; }.asset-gallery figcaption { padding-top: 7px; color: #706b65; font-size: 12px; }
-.visual-workbench { margin-top: 34px; }.visual-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.visual-slot-list { display: grid; gap: 14px; }.visual-slot { padding: 14px; border: 1px solid #e8e1d5; background: #faf7f1; }.slot-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }.visual-actions, .visual-plan-actions, .asset-actions { display: flex; flex-wrap: wrap; gap: 8px; }.visual-plan-actions { margin-top: 16px; }.asset-list { display: grid; gap: 8px; margin-top: 12px; }.visual-asset { padding: 10px; border-left: 3px solid #9db7cc; background: #fffdf8; }.visual-asset.selected { border-left-color: #52a36b; }.visual-asset.failed { border-left-color: #cf5d50; }.visual-asset span { margin-left: 8px; color: #897f75; font-size: 12px; }.visual-asset p { margin: 7px 0; color: #5e5851; white-space: pre-wrap; }.failure { color: #b44336 !important; }
-.variants-workbench { margin-top: 34px; }.variant-create, .variant-actions, .wechat-actions { display: flex; flex-wrap: wrap; gap: 8px; }.variant-create { margin-bottom: 12px; }.wechat-layout { display: grid; grid-template-columns: minmax(280px, 400px) minmax(0, 1fr); gap: 20px; align-items: start; margin-bottom: 20px; }.wechat-stage { margin-bottom: 0; }.wechat-actions { align-items: center; margin-top: 10px; }.variant-list { display: grid; grid-template-columns: 1fr; gap: 16px; }.variant-list :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }
-.approval-workbench { margin-top: 34px; }.approval-actor { display: grid; grid-template-columns: 150px minmax(220px, 420px); align-items: center; gap: 10px; margin-bottom: 14px; color: #706b65; font-size: 13px; }.approval-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.approval-actions { margin-bottom: 14px; }.approval-list { display: grid; gap: 8px; }.approval-list article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid #e8e1d5; }.approval-list p, .approval-list small { margin: 4px 0 0; color: #706b65; }.approval-decision { display: grid; grid-template-columns: minmax(130px, 220px) auto; gap: 8px; align-items: center; }.approval-complete { margin-top: 16px; color: #39704b !important; }.approval-history { margin-top: 18px; padding-top: 14px; border-top: 1px solid #e8e1d5; }.approval-history p { margin: 5px 0; color: #897f75; font-size: 12px; }
-.xhs-preview { margin: 0 0 16px; padding: 14px; border: 1px solid #e8e1d5; border-radius: 10px; background: #fffdf8; }.xhs-preview p { margin: 4px 0 10px; color: #706b65; }.xhs-card { padding: 12px; border-radius: 8px; background: #fff; }.xhs-card h3 { margin: 0 0 8px; }.xhs-photos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }.xhs-photos img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; }
-@media (max-width: 760px) { .list-header, .project-row { align-items: flex-start; flex-direction: column; }.project-grid, .research-grid, .form-pair, .variant-list, .wechat-stage, .wechat-layout { grid-template-columns: 1fr; }.row-meta { width: 100%; justify-content: space-between; } }
+.projects-page {
+  padding-top: 4px;
+}
+
+h1, h2, h3 {
+  margin: 0;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+}
+
+h1 {
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.15;
+}
+
+h2 {
+  font-size: 20px;
+}
+
+h3 {
+  margin-bottom: 4px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.idea,
+.project-row p,
+.project-row span,
+.project-workspace p,
+.section-heading p,
+.muted,
+.empty-copy {
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.banner {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+}
+
+.banner.bad {
+  background: var(--bad-wash);
+  color: var(--bad);
+}
+
+.notice {
+  margin-bottom: 16px;
+}
+
+.project-list {
+  border-top: 1px solid var(--line);
+}
+
+.project-row {
+  width: 100%;
+  padding: 20px 0;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+}
+
+.project-row h2 {
+  margin-bottom: 6px;
+  font-size: 18px;
+}
+
+.project-row p {
+  max-width: 68ch;
+  margin: 0 0 6px;
+}
+
+.project-row span {
+  font-size: 13px;
+}
+
+.project-row:hover h2 {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.empty-copy {
+  margin-top: 28px;
+}
+
+.back {
+  margin-bottom: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.back:hover {
+  color: var(--ink);
+}
+
+.workspace-head {
+  max-width: 68ch;
+  margin-bottom: 24px;
+}
+
+.workspace-head h1 {
+  margin-bottom: 8px;
+}
+
+.idea {
+  font-size: 16px;
+}
+
+.project-grid,
+.research-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px;
+  margin-bottom: 8px;
+}
+
+.project-grid p {
+  margin: 0 0 16px;
+}
+
+.research-board,
+.master-workbench,
+.visual-workbench,
+.variants-workbench,
+.approval-workbench {
+  margin-top: 28px;
+}
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+.section-heading p {
+  max-width: 52ch;
+  margin: 6px 0 0;
+}
+
+.meta-chip {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--wash);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.meta-chip.on {
+  background: var(--ok-wash);
+  color: var(--ok);
+}
+
+.research-alerts {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.record-list {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.record-list article {
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.record-list p {
+  margin: 6px 0;
+}
+
+.record-list small {
+  color: var(--faint);
+  word-break: break-word;
+}
+
+.claim-meta {
+  display: flex;
+  gap: 6px;
+}
+
+.caveat {
+  color: var(--warn) !important;
+}
+
+.research-form {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.form-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.surface-tabs,
+.more-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.surface-tabs button,
+.more-sub button {
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.surface-tabs button.active,
+.more-sub button.active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+.more-sub {
+  margin-top: 0;
+  border-bottom: 0;
+}
+
+.suggestion-actions,
+.proposal-actions,
+.variant-actions,
+.wechat-actions,
+.visual-actions,
+.visual-plan-actions,
+.asset-actions,
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.proposal-copy {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.version-card {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.version-card summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.version-list article {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.version-list span {
+  margin-left: 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.draft-actions,
+.export-panel,
+.variant-adapt,
+.local-imports,
+.compose-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.compose-progress strong {
+  display: block;
+}
+
+.draft-actions p,
+.export-panel p,
+.compose-progress p {
+  margin: 4px 0 0;
+}
+
+.draft-proposal .proposal-copy {
+  max-height: 360px;
+}
+
+.master-count {
+  color: var(--faint) !important;
+  font-size: 13px;
+}
+
+.variant-adapt > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.variant-adapt > p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.local-imports {
+  justify-content: flex-start;
+}
+
+.import-button {
+  display: inline-flex;
+  padding: 6px 11px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.import-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.visual-bootstrap {
+  margin-bottom: 12px;
+}
+
+.asset-gallery {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.asset-gallery figure {
+  margin: 0;
+}
+
+.asset-gallery img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
+.asset-gallery figcaption {
+  padding-top: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.visual-slot-list {
+  display: grid;
+  gap: 18px;
+}
+
+.visual-slot {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.slot-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.visual-plan-actions {
+  margin-top: 16px;
+}
+
+.asset-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.visual-asset {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.visual-asset span {
+  margin-left: 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.visual-asset p {
+  margin: 7px 0;
+  white-space: pre-wrap;
+}
+
+.failure {
+  color: var(--bad) !important;
+}
+
+.wechat-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 400px) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+  margin-bottom: 20px;
+}
+
+.wechat-actions {
+  align-items: center;
+  margin-top: 12px;
+}
+
+.variant-list {
+  display: grid;
+  gap: 16px;
+}
+
+.approval-actor {
+  display: grid;
+  grid-template-columns: 150px minmax(220px, 420px);
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.approval-actions {
+  margin-bottom: 14px;
+}
+
+.approval-list article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.approval-list p,
+.approval-list small {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.approval-decision {
+  display: grid;
+  grid-template-columns: minmax(130px, 220px) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.approval-complete {
+  margin-top: 16px;
+  color: var(--ok) !important;
+}
+
+.approval-history {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.approval-history p {
+  margin: 5px 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.xhs-preview {
+  margin: 0 0 16px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.xhs-preview p {
+  margin: 4px 0 10px;
+}
+
+.xhs-card h3 {
+  margin: 0 0 8px;
+}
+
+.xhs-photos {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.xhs-photos img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+}
+
+@media (max-width: 760px) {
+  .list-header,
+  .project-row,
+  .section-heading,
+  .approval-list article {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .project-grid,
+  .research-grid,
+  .form-pair,
+  .wechat-layout,
+  .approval-actor,
+  .approval-decision {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

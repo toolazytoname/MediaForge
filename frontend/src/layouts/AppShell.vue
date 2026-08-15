@@ -1,78 +1,375 @@
 <script setup lang="ts">
-// R3：普通创作导航与内部运行工具分层，旧路由继续保留。
-import { ref } from 'vue'
-import type { Component } from 'vue'
-import {
-  BarChartOutlined,
-  BulbOutlined,
-  CodeOutlined,
-  DatabaseOutlined,
-  FileTextOutlined,
-  FolderOpenOutlined,
-  HomeOutlined,
-  SendOutlined,
-  SettingOutlined,
-  AuditOutlined,
-} from '@ant-design/icons-vue'
-import SidebarNavItem from './components/SidebarNavItem.vue'
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import UserAvatarMenu from './components/UserAvatarMenu.vue'
 
-interface NavItem { path: string; label: string; icon: Component; exact?: boolean }
+interface NavItem {
+  path: string
+  label: string
+  exact?: boolean
+}
 
 const primaryItems: ReadonlyArray<NavItem> = [
-  { path: '/', label: '写作', icon: HomeOutlined, exact: true },
-  { path: '/ideas', label: '灵感', icon: BulbOutlined },
-  { path: '/projects', label: '项目', icon: FolderOpenOutlined },
-  { path: '/roadmap/library', label: '资产', icon: FileTextOutlined },
-  { path: '/publish', label: '发布', icon: SendOutlined },
-  { path: '/analytics', label: '复盘', icon: BarChartOutlined },
-  { path: '/settings', label: '设置', icon: SettingOutlined },
+  { path: '/', label: '写作', exact: true },
+  { path: '/projects', label: '文章' },
+  { path: '/settings', label: '设置' },
+]
+
+const moreItems: ReadonlyArray<NavItem> = [
+  { path: '/ideas', label: '灵感' },
+  { path: '/publish', label: '发布' },
+  { path: '/analytics', label: '复盘' },
 ]
 
 const developerItems: ReadonlyArray<NavItem> = [
-  { path: '/creation', label: '旧创作向导', icon: FileTextOutlined },
-  { path: '/creation/video', label: '视频向导', icon: FileTextOutlined },
-  { path: '/topics', label: '选题状态', icon: BulbOutlined },
-  { path: '/contents', label: '内容记录', icon: DatabaseOutlined },
-  { path: '/review', label: '审核状态', icon: AuditOutlined },
-  { path: '/runs', label: '运行状态', icon: CodeOutlined },
-  { path: '/accounts', label: '账号状态', icon: FileTextOutlined },
+  { path: '/creation', label: '旧创作向导' },
+  { path: '/creation/video', label: '视频向导' },
+  { path: '/topics', label: '选题状态' },
+  { path: '/contents', label: '内容记录' },
+  { path: '/review', label: '审核状态' },
+  { path: '/runs', label: '运行状态' },
+  { path: '/accounts', label: '账号状态' },
 ]
 
+const route = useRoute()
+const router = useRouter()
+const moreOpen = ref(false)
+const mobileOpen = ref(false)
 const developerOpen = ref(false)
+
+const moreActive = computed(() =>
+  [...moreItems, ...developerItems].some(item => isActive(item)),
+)
+
+function isActive(item: NavItem): boolean {
+  if (item.exact) return route.path === item.path
+  return route.path === item.path || route.path.startsWith(`${item.path}/`)
+}
+
+function go(path: string): void {
+  moreOpen.value = false
+  mobileOpen.value = false
+  developerOpen.value = false
+  if (route.fullPath !== path) void router.push(path)
+}
+
+function onMoreBlur(event: FocusEvent): void {
+  const next = event.relatedTarget as Node | null
+  const root = event.currentTarget as HTMLElement
+  if (!next || !root.contains(next)) moreOpen.value = false
+}
 </script>
 
 <template>
   <div class="shell">
-    <aside class="app-sider">
-      <div class="sidebar-logo"><div class="logo-mark">M</div><div class="logo-text">MediaForge</div></div>
-      <nav class="sidebar-nav" aria-label="主导航">
-        <p class="nav-caption">创作工作台</p>
-        <SidebarNavItem v-for="item in primaryItems" :key="item.path" v-bind="item" :exact="item.exact === true" />
+    <header class="topbar">
+      <a class="brand" href="/" @click.prevent="go('/')">
+        <span class="mark" aria-hidden="true"></span>
+        MediaForge
+      </a>
+      <nav class="primary" aria-label="主导航">
+        <button
+          v-for="item in primaryItems"
+          :key="item.path"
+          type="button"
+          :class="['nav-link', { active: isActive(item) }]"
+          :aria-current="isActive(item) ? 'page' : undefined"
+          @click="go(item.path)"
+        >
+          {{ item.label }}
+        </button>
+        <div class="more" @focusout="onMoreBlur">
+          <button
+            type="button"
+            :class="['nav-link', { active: moreActive || moreOpen }]"
+            :aria-expanded="moreOpen"
+            aria-haspopup="true"
+            @click="moreOpen = !moreOpen"
+          >
+            更多
+          </button>
+          <div v-if="moreOpen" class="menu" role="menu">
+            <button
+              v-for="item in moreItems"
+              :key="item.path"
+              type="button"
+              role="menuitem"
+              :class="{ active: isActive(item) }"
+              @click="go(item.path)"
+            >
+              {{ item.label }}
+            </button>
+            <button type="button" class="quiet" @click="developerOpen = !developerOpen">
+              {{ developerOpen ? '收起开发者' : '开发者工具' }}
+            </button>
+            <template v-if="developerOpen">
+              <button
+                v-for="item in developerItems"
+                :key="item.path"
+                type="button"
+                role="menuitem"
+                :class="{ active: isActive(item) }"
+                @click="go(item.path)"
+              >
+                {{ item.label }}
+              </button>
+            </template>
+          </div>
+        </div>
       </nav>
-      <div class="sidebar-footer">
-        <a-button type="text" class="developer-trigger" @click="developerOpen = true"><CodeOutlined /> 开发者 / 运行状态</a-button>
-        <div class="profile"><UserAvatarMenu /><span>lazy</span></div>
+      <div class="end">
+        <UserAvatarMenu />
+        <button
+          type="button"
+          class="burger"
+          :aria-expanded="mobileOpen"
+          aria-label="打开菜单"
+          @click="mobileOpen = !mobileOpen"
+        >
+          <span :class="{ open: mobileOpen }"></span>
+        </button>
       </div>
-    </aside>
-    <main class="app-content"><div class="content-inner"><router-view /></div></main>
-    <a-drawer v-model:open="developerOpen" title="开发者 / 运行状态" placement="left" width="280">
-      <p class="drawer-note">这里保留旧流水线工具和运行状态。它们不会占用日常创作入口。</p>
-      <nav aria-label="开发者工具">
-        <SidebarNavItem v-for="item in developerItems" :key="item.path" v-bind="item" @click="developerOpen = false" />
-      </nav>
-    </a-drawer>
+    </header>
+
+    <div v-if="mobileOpen" class="sheet" role="dialog" aria-label="站点菜单">
+      <button
+        v-for="item in primaryItems"
+        :key="item.path"
+        type="button"
+        :class="{ active: isActive(item) }"
+        @click="go(item.path)"
+      >
+        {{ item.label }}
+      </button>
+      <p>其余入口</p>
+      <button
+        v-for="item in moreItems"
+        :key="item.path"
+        type="button"
+        :class="{ active: isActive(item) }"
+        @click="go(item.path)"
+      >
+        {{ item.label }}
+      </button>
+      <button type="button" class="quiet" @click="developerOpen = !developerOpen">
+        {{ developerOpen ? '收起开发者' : '开发者工具' }}
+      </button>
+      <template v-if="developerOpen">
+        <button
+          v-for="item in developerItems"
+          :key="item.path"
+          type="button"
+          :class="{ active: isActive(item) }"
+          @click="go(item.path)"
+        >
+          {{ item.label }}
+        </button>
+      </template>
+    </div>
+
+    <main id="main" class="stage">
+      <router-view />
+    </main>
   </div>
 </template>
 
 <style scoped>
-.shell { min-height: 100vh; }
-.app-sider { position: fixed; inset: 0 auto 0 0; z-index: 20; display: flex; width: 224px; height: 100vh; flex-direction: column; border-right: 1px solid #e7e0d7; background: #fbfaf7; }
-.sidebar-logo { display: flex; height: 66px; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid #e7e0d7; }.logo-mark { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; background: #2d2926; color: #fffdf8; font-family: Georgia, serif; font-weight: 700; }.logo-text { color: #292522; font-family: Georgia, 'Songti SC', serif; font-size: 17px; font-weight: 700; }
-.sidebar-nav { flex: 1; overflow-y: auto; padding: 18px 0; }.nav-caption { margin: 0; padding: 0 20px 8px; color: #968b7e; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.sidebar-footer { padding: 12px; border-top: 1px solid #e7e0d7; }.developer-trigger { width: 100%; justify-content: flex-start; color: #6f6962; font-size: 12px; }.profile { display: flex; align-items: center; gap: 9px; padding: 8px; color: #59534d; font-size: 13px; }
-.app-content { min-height: 100vh; margin-left: 224px; padding: 0 32px; background: #f6f4ef; box-sizing: border-box; }.content-inner { min-width: 0; max-width: 1280px; margin: 0 auto; }.drawer-note { margin: 0 0 14px; color: #706b65; font-size: 13px; line-height: 1.65; }
-:deep(.ant-card-head-title), :deep(.ant-card-body) { word-break: break-word; white-space: normal; }
-@media (max-width: 1024px) { .app-sider { width: 64px; }.logo-text, .nav-caption, .developer-trigger :deep(span:not(.anticon)), .profile span { display: none; }.sidebar-logo { justify-content: center; padding: 0; }.developer-trigger, .profile { justify-content: center; padding-inline: 0; }.app-content { margin-left: 64px; padding: 0 16px; } }
-@media (max-width: 640px) { .app-content { padding: 0 12px; } }
+.shell {
+  min-height: 100dvh;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-nav);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  height: var(--nav-h);
+  padding: 0 28px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--canvas) 88%, transparent);
+  backdrop-filter: saturate(1.2) blur(16px);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+
+.mark {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--ink);
+  border-radius: 2px 8px 2px 8px;
+}
+
+.primary {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+}
+
+.nav-link {
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.nav-link:hover,
+.nav-link.active {
+  color: var(--ink);
+  background: var(--wash);
+}
+
+.end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
+}
+
+.more {
+  position: relative;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  min-width: 168px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transform: translateX(-50%);
+}
+
+.menu p,
+.sheet p {
+  margin: 10px 8px 4px;
+  color: var(--faint);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.menu button,
+.sheet button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu button:hover,
+.menu button.active,
+.sheet button:hover,
+.sheet button.active {
+  background: var(--wash);
+}
+
+.menu button.quiet,
+.sheet button.quiet {
+  color: var(--faint);
+}
+
+.burger {
+  display: none;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.burger span,
+.burger span::before,
+.burger span::after {
+  display: block;
+  width: 16px;
+  height: 1.5px;
+  margin: 0 auto;
+  background: var(--ink);
+  transition: transform 200ms var(--ease), opacity 200ms var(--ease);
+}
+
+.burger span::before,
+.burger span::after {
+  content: "";
+}
+
+.burger span::before {
+  transform: translateY(-5px);
+}
+
+.burger span::after {
+  transform: translateY(3.5px);
+}
+
+.burger span.open {
+  background: transparent;
+}
+
+.burger span.open::before {
+  transform: translateY(0) rotate(45deg);
+}
+
+.burger span.open::after {
+  transform: translateY(-1.5px) rotate(-45deg);
+}
+
+.sheet {
+  display: none;
+  padding: 8px 16px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas);
+}
+
+.stage {
+  width: min(1120px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 28px 0 80px;
+}
+
+@media (max-width: 768px) {
+  .topbar {
+    padding: 0 16px;
+  }
+
+  .primary {
+    display: none;
+  }
+
+  .burger,
+  .sheet {
+    display: block;
+  }
+
+  .stage {
+    width: min(1120px, calc(100% - 32px));
+    padding-top: 20px;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .topbar {
+    background: var(--canvas);
+    backdrop-filter: none;
+  }
+}
 </style>

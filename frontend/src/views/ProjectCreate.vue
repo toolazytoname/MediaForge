@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeftOutlined } from '@ant-design/icons-vue'
 import { useIdeasStore, useProjectsStore, type ProjectInput } from '../stores'
 import { unwrapError } from '../api/client'
 
@@ -45,8 +44,8 @@ async function createProject(): Promise<void> {
 
 <template>
   <section class="create-page">
-    <a-button type="link" class="back" @click="router.push(ideaId ? '/ideas' : '/projects')"><ArrowLeftOutlined /> 返回</a-button>
-    <header><p class="eyebrow">新建项目</p><h1>{{ sourceIdea ? '让这条灵感成为一个主题项目。' : '从一个你愿意持续思考的主题开始。' }}</h1><p>项目不绑定平台。现在只确定这次表达的对象、目的和你希望 AI 参与到什么程度。</p></header>
+    <button type="button" class="back" @click="router.push(ideaId ? '/ideas' : '/projects')">返回</button>
+    <header><h1>{{ sourceIdea ? '把这条灵感写成文章' : '新文章' }}</h1><p>先确定写给谁、这次要完成什么。还不绑定平台。</p></header>
     <a-card :bordered="false" class="form-card"><a-form layout="vertical" @finish="createProject">
       <a-form-item label="项目标题" required><a-input v-model:value="form.title" placeholder="给这次创作一个清晰的名字" /></a-form-item>
       <a-form-item label="核心想法或材料" required><a-textarea v-model:value="form.idea" :auto-size="{ minRows: 3, maxRows: 8 }" placeholder="一句想法、链接，或一段你已经写下来的材料" /></a-form-item>
@@ -60,5 +59,14 @@ async function createProject(): Promise<void> {
 </template>
 
 <style scoped>
-.create-page { max-width: 800px; padding: 20px 0 56px; }.back { margin-bottom: 12px; padding-left: 0; }.create-page header { max-width: 720px; margin-bottom: 26px; }.eyebrow { margin: 0 0 8px; color: #7a6650; font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }h1 { margin: 0 0 12px; color: #292522; font-family: Georgia, 'Songti SC', serif; font-size: clamp(30px, 4vw, 44px); line-height: 1.2; }.create-page header > p { color: #706b65; line-height: 1.7; }.form-card { border: 1px solid #e8e1d5; background: #fffdf8; box-shadow: none; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }.form-error { margin-bottom: 16px; }@media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; gap: 0; } }
+.create-page { max-width: 680px; padding-top: 4px; }
+.back { margin-bottom: 18px; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.back:hover { color: var(--ink); }
+.create-page header { margin-bottom: 24px; }
+h1 { margin: 0 0 8px; font-size: clamp(28px, 4vw, 40px); font-weight: 560; letter-spacing: -0.03em; line-height: 1.15; }
+.create-page header > p { margin: 0; color: var(--muted); line-height: 1.7; }
+.form-card { border: 1px solid var(--line); background: var(--surface); box-shadow: none; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-error { margin-bottom: 16px; }
+@media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; gap: 0; } }
 </style>

@@ -41,7 +41,7 @@ function createProject(idea: IdeaItem): void {
 
 <template>
   <section class="ideas-page">
-    <header><p class="eyebrow">灵感</p><h1>先收下，不急着决定它要发到哪里。</h1><p>这里保存还在生长的观察、链接和材料。准备好了，再把其中一个变成主题项目。</p></header>
+    <header><h1>灵感</h1><p>先收下还没成形的观察、链接和材料。准备好了，再把它写成文章。</p></header>
     <a-card :bordered="false" class="capture-card">
       <a-form layout="vertical" @finish="saveIdea">
         <a-form-item label="这是什么材料？"><a-radio-group v-model:value="form.input_type"><a-radio-button value="thought">一句想法</a-radio-button><a-radio-button value="url">URL</a-radio-button><a-radio-button value="text">粘贴文本</a-radio-button></a-radio-group></a-form-item>
@@ -57,5 +57,20 @@ function createProject(idea: IdeaItem): void {
 </template>
 
 <style scoped>
-.ideas-page { max-width: 900px; padding: 24px 0 56px; }.ideas-page > header { max-width: 720px; margin-bottom: 28px; }.eyebrow, .kind { margin: 0 0 8px; color: #7a6650; font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }h1, h2 { color: #292522; font-family: Georgia, 'Songti SC', serif; }h1 { margin: 0 0 12px; font-size: clamp(30px, 4vw, 44px); line-height: 1.2; }.ideas-page > header > p, .content { color: #706b65; line-height: 1.7; }.capture-card { margin-bottom: 28px; border: 1px solid #e8e1d5; background: #fffdf8; box-shadow: none; }.form-error, .notice { margin-bottom: 14px; }.idea-list { border-top: 1px solid #ded7cd; }.idea-row { display: flex; justify-content: space-between; gap: 20px; padding: 20px 4px; border-bottom: 1px solid #ded7cd; }.idea-row > div { min-width: 0; }.idea-row h2 { margin: 0 0 6px; font-size: 21px; }.content { max-width: 660px; margin: 0 0 8px; overflow-wrap: anywhere; }time { color: #948d84; font-size: 13px; }.empty-icon { color: #b39b79; font-size: 44px; }@media (max-width: 640px) { .idea-row { align-items: flex-start; flex-direction: column; } }
+.ideas-page { max-width: 720px; padding-top: 8px; }
+.ideas-page > header { margin-bottom: 24px; }
+.kind { margin: 0 0 6px; color: var(--faint); font-size: 12px; }
+h1, h2 { margin: 0; font-weight: 560; letter-spacing: -0.03em; }
+h1 { margin-bottom: 8px; font-size: clamp(28px, 4vw, 40px); line-height: 1.15; }
+.ideas-page > header > p, .content { color: var(--muted); line-height: 1.7; }
+.capture-card { margin-bottom: 28px; border: 1px solid var(--line); background: var(--surface); box-shadow: none; }
+.form-error, .notice { margin-bottom: 14px; }
+.idea-list { border-top: 1px solid var(--line); }
+.idea-row { display: flex; justify-content: space-between; gap: 20px; padding: 20px 0; border-bottom: 1px solid var(--line); }
+.idea-row > div { min-width: 0; }
+.idea-row h2 { margin: 0 0 6px; font-size: 18px; }
+.content { max-width: 66ch; margin: 0 0 8px; overflow-wrap: anywhere; }
+time { color: var(--faint); font-size: 13px; }
+.empty-icon { color: var(--faint); font-size: 32px; }
+@media (max-width: 640px) { .idea-row { align-items: flex-start; flex-direction: column; } }
 </style>
