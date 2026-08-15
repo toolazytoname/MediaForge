@@ -37,7 +37,6 @@ const developerItems: ReadonlyArray<NavItem> = [
   { path: '/review', label: '审核状态', icon: AuditOutlined },
   { path: '/runs', label: '运行状态', icon: CodeOutlined },
   { path: '/accounts', label: '账号状态', icon: FileTextOutlined },
-  { path: '/settings', label: '设置', icon: SettingOutlined },
 ]
 
 const developerOpen = ref(false)

@@ -1,27 +1,25 @@
 <script setup lang="ts">
-// M10-8 Settings：脱敏 config + doctor 报告
-// API Key 配置改造：新增可写的全局服务 key（LLM/image-gen）表单
-// 发布总开关 publish.enabled + allowed_platforms 白名单改为可从本页操作
-// （用户明确要求，见 TASKS.md「待评估事项（用户临场提需求，2026-07-16）」），
-// 不必手改 config.yaml
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { Modal } from 'ant-design-vue'
-import { useSettingsStore } from '../stores'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useSettingsStore } from '../stores'
 
 const store = useSettingsStore()
-const { config, doctor, keyGroups, openaiImageBaseUrl, wechatMp, loading } = storeToRefs(store)
+const { keyGroups, openaiImageBaseUrl, wechatMp, loading } = storeToRefs(store)
+
 const wechatAppId = ref('')
 const wechatAppSecret = ref('')
 const wechatSaving = ref(false)
 const wechatProbing = ref(false)
 const wechatProbe = ref<{ ok: boolean; message: string } | null>(null)
 
-// 每个 key 名对应的输入框暂存值（不回填已保存的明文，只在提交时读取）
-const pendingValues = reactive<Record<string, string>>({})
-const saving = reactive<Record<string, boolean>>({})
+const openaiKeyInput = ref('')
+const openaiSaving = ref(false)
 const openaiImageBaseUrlInput = ref('')
 const openaiImageBaseUrlSaving = ref(false)
+
+const openaiKey = computed(() =>
+  keyGroups.value.flatMap(group => group.keys).find(item => item.name === 'OPENAI_API_KEY') ?? null,
+)
 
 onMounted(() => {
   store.load()
@@ -30,7 +28,7 @@ onMounted(() => {
   store.loadWechatMp()
 })
 
-async function onSaveWechat() {
+async function onSaveWechat(): Promise<void> {
   if (!wechatAppId.value.trim() || !wechatAppSecret.value.trim()) return
   wechatSaving.value = true
   wechatProbe.value = null
@@ -45,7 +43,7 @@ async function onSaveWechat() {
   }
 }
 
-async function onClearWechat() {
+async function onClearWechat(): Promise<void> {
   wechatSaving.value = true
   wechatProbe.value = null
   try {
@@ -55,7 +53,7 @@ async function onClearWechat() {
   }
 }
 
-async function onProbeWechat() {
+async function onProbeWechat(): Promise<void> {
   wechatProbing.value = true
   try {
     wechatProbe.value = await store.probeWechatMp()
@@ -64,28 +62,28 @@ async function onProbeWechat() {
   }
 }
 
-async function onSave(name: string) {
-  const value = pendingValues[name]?.trim()
+async function onSaveOpenAI(): Promise<void> {
+  const value = openaiKeyInput.value.trim()
   if (!value) return
-  saving[name] = true
+  openaiSaving.value = true
   try {
-    const ok = await store.saveKey(name, value)
-    if (ok) pendingValues[name] = ''
+    const ok = await store.saveKey('OPENAI_API_KEY', value)
+    if (ok) openaiKeyInput.value = ''
   } finally {
-    saving[name] = false
+    openaiSaving.value = false
   }
 }
 
-async function onClear(name: string) {
-  saving[name] = true
+async function onClearOpenAI(): Promise<void> {
+  openaiSaving.value = true
   try {
-    await store.clearKey(name)
+    await store.clearKey('OPENAI_API_KEY')
   } finally {
-    saving[name] = false
+    openaiSaving.value = false
   }
 }
 
-async function onSaveOpenAIImageBaseUrl() {
+async function onSaveRelay(): Promise<void> {
   const value = openaiImageBaseUrlInput.value.trim()
   if (!value) return
   openaiImageBaseUrlSaving.value = true
@@ -97,7 +95,7 @@ async function onSaveOpenAIImageBaseUrl() {
   }
 }
 
-async function onClearOpenAIImageBaseUrl() {
+async function onClearRelay(): Promise<void> {
   openaiImageBaseUrlSaving.value = true
   try {
     await store.clearOpenAIImageBaseUrl()
@@ -105,202 +103,95 @@ async function onClearOpenAIImageBaseUrl() {
     openaiImageBaseUrlSaving.value = false
   }
 }
-
-// ── 发布总开关 ────────────────────────────────────────────
-const publishEnabled = computed(() => config.value?.publish?.enabled === true)
-const knownPlatforms = computed(() => Object.keys(config.value?.platforms ?? {}))
-const publishEnabledSaving = ref(false)
-const platformsSaving = ref(false)
-const pendingPlatforms = ref<string[]>([])
-
-watch(
-  config,
-  (c) => {
-    pendingPlatforms.value = [...((c?.publish?.allowed_platforms as string[]) ?? [])]
-  },
-  { immediate: true },
-)
-
-async function onTogglePublishEnabled(checked: boolean) {
-  if (!checked) {
-    publishEnabledSaving.value = true
-    try {
-      await store.setPublishEnabled(false)
-    } finally {
-      publishEnabledSaving.value = false
-    }
-    return
-  }
-  Modal.confirm({
-    title: '确认开启真实发布',
-    content:
-      '开启后，allowed_platforms 白名单内的 queued 发布可被真实触发（含「立即发布」按钮与命令行 publish 命令），会真实发出内容且不可撤销，确定开启吗？',
-    okText: '确定开启',
-    okType: 'danger',
-    cancelText: '取消',
-    onOk: async () => {
-      publishEnabledSaving.value = true
-      try {
-        await store.setPublishEnabled(true)
-      } finally {
-        publishEnabledSaving.value = false
-      }
-    },
-  })
-}
-
-async function onSavePlatforms() {
-  platformsSaving.value = true
-  try {
-    await store.setPublishAllowedPlatforms(pendingPlatforms.value)
-  } finally {
-    platformsSaving.value = false
-  }
-}
 </script>
 
 <template>
-  <h2>设置</h2>
-  <a-spin :spinning="loading">
-    <a-card title="发布总开关" style="margin-bottom: 16px">
-      <a-alert
-        type="warning"
-        show-icon
-        style="margin-bottom: 16px"
-        message="publish.enabled + allowed_platforms 是真实发布的总闸门；关闭时任何路径（含命令行）都无法真实发布，只能 dry-run。"
-      />
-      <a-space align="center" style="margin-bottom: 16px">
-        <a-switch
-          :checked="publishEnabled"
-          :loading="publishEnabledSaving"
-          @change="onTogglePublishEnabled"
-        />
-        <span>{{ publishEnabled ? '已开启真实发布' : '已关闭（仅 dry-run）' }}</span>
-      </a-space>
-      <div>
-        <h4>平台白名单（allowed_platforms）</h4>
-        <a-checkbox-group v-model:value="pendingPlatforms" :options="knownPlatforms" />
-        <a-empty v-if="knownPlatforms.length === 0" description="config.yaml 里未配置任何 platforms" />
-        <div style="margin-top: 12px">
-          <a-button type="primary" size="small" :loading="platformsSaving" @click="onSavePlatforms">
-            保存白名单
-          </a-button>
+  <section class="settings">
+    <header>
+      <p class="eyebrow">设置</p>
+      <h1>只留现在用得上的配置。</h1>
+      <p>密钥只存在这台电脑上，页面不会再显示明文。</p>
+    </header>
+
+    <a-spin :spinning="loading">
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">1 · 微信公众号</p>
+            <h2>送进草稿箱，不群发。</h2>
+          </div>
+          <span :class="['status', wechatMp?.configured ? 'on' : 'off']">
+            {{ wechatMp?.configured ? `已配置 ${wechatMp.app_id_masked}` : '还没填' }}
+          </span>
         </div>
-      </div>
-    </a-card>
-
-    <a-card title="微信公众号" style="margin-bottom: 16px">
-      <a-alert
-        type="info"
-        show-icon
-        style="margin-bottom: 16px"
-        message="只进草稿箱，不会群发。AppID / AppSecret 保存在本机 secrets/wechat_mp_main.json（权限 0600），不会写入 Git。家庭宽带需要把当前公网 IP 加进公众号后台的 IP 白名单。"
-      />
-      <p style="margin-bottom: 12px">
-        当前：
-        <a-tag v-if="wechatMp?.configured" color="green">已配置（{{ wechatMp.app_id_masked }}）</a-tag>
-        <a-tag v-else>未配置</a-tag>
-      </p>
-      <a-space direction="vertical" style="width: 100%">
-        <a-input v-model:value="wechatAppId" placeholder="AppID，wx 开头" autocomplete="off" />
-        <a-input-password v-model:value="wechatAppSecret" placeholder="AppSecret" autocomplete="new-password" />
-        <a-space>
-          <a-button type="primary" :loading="wechatSaving" :disabled="!wechatAppId.trim() || !wechatAppSecret.trim()" @click="onSaveWechat">保存凭据</a-button>
-          <a-button :loading="wechatProbing" :disabled="!wechatMp?.configured" @click="onProbeWechat">检查连通和白名单</a-button>
+        <p class="help">在公众号后台「设置与开发 → 基本配置」复制 AppID 和 AppSecret。家庭宽带要把当前公网 IP 加进 IP 白名单，否则检查会失败。</p>
+        <div class="fields">
+          <label>AppID<a-input v-model:value="wechatAppId" placeholder="wx 开头" autocomplete="off" /></label>
+          <label>AppSecret<a-input-password v-model:value="wechatAppSecret" placeholder="不会回显已保存的值" autocomplete="new-password" /></label>
+        </div>
+        <div class="actions">
+          <a-button type="primary" :loading="wechatSaving" :disabled="!wechatAppId.trim() || !wechatAppSecret.trim()" @click="onSaveWechat">保存</a-button>
+          <a-button :loading="wechatProbing" :disabled="!wechatMp?.configured" @click="onProbeWechat">检查连通</a-button>
           <a-button v-if="wechatMp?.configured" danger :loading="wechatSaving" @click="onClearWechat">清除</a-button>
-        </a-space>
-        <a-alert v-if="wechatProbe" :type="wechatProbe.ok ? 'success' : 'error'" show-icon :message="wechatProbe.message" />
-      </a-space>
-    </a-card>
+        </div>
+        <p v-if="wechatProbe" :class="['probe', wechatProbe.ok ? 'ok' : 'bad']">{{ wechatProbe.message }}</p>
+      </article>
 
-    <a-card title="API Key 配置" style="margin-bottom: 16px">
-      <div v-for="group in keyGroups" :key="group.group" style="margin-bottom: 16px">
-        <h4>{{ group.label }}</h4>
-        <a-space v-for="item in group.keys" :key="item.name" style="width: 100%; margin-bottom: 8px" align="baseline">
-          <span style="display: inline-block; width: 200px; font-family: monospace">{{ item.name }}</span>
-          <a-tag v-if="item.set" color="green">已设置（{{ item.masked }}）</a-tag>
-          <a-tag v-else color="default">未设置</a-tag>
-          <a-input-password
-            v-model:value="pendingValues[item.name]"
-            placeholder="输入新值以保存/覆盖"
-            style="width: 320px"
-          />
-          <a-button
-            type="primary"
-            size="small"
-            :loading="saving[item.name]"
-            :disabled="!pendingValues[item.name]?.trim()"
-            @click="onSave(item.name)"
-          >
-            保存
-          </a-button>
-          <a-button
-            v-if="item.set"
-            size="small"
-            danger
-            :loading="saving[item.name]"
-            @click="onClear(item.name)"
-          >
-            清除
-          </a-button>
-        </a-space>
-      </div>
-      <a-empty v-if="keyGroups.length === 0" description="无 key 分组" />
-    </a-card>
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">2 · 写作和配图</p>
+            <h2>生成文章和插图用的密钥。</h2>
+          </div>
+          <span :class="['status', openaiKey?.set ? 'on' : 'off']">
+            {{ openaiKey?.set ? `已配置 ${openaiKey.masked}` : '还没填' }}
+          </span>
+        </div>
+        <div class="fields">
+          <label>API Key<a-input-password v-model:value="openaiKeyInput" placeholder="输入新值以保存或覆盖" autocomplete="new-password" /></label>
+          <label>图片中转（可选）<a-input v-model:value="openaiImageBaseUrlInput" placeholder="https://example.com/v1" /></label>
+        </div>
+        <p class="help">中转必须是 HTTPS，并以 /v1 结尾。当前：{{ openaiImageBaseUrl || '默认官方接口' }}</p>
+        <div class="actions">
+          <a-button type="primary" :loading="openaiSaving" :disabled="!openaiKeyInput.trim()" @click="onSaveOpenAI">保存密钥</a-button>
+          <a-button v-if="openaiKey?.set" danger :loading="openaiSaving" @click="onClearOpenAI">清除密钥</a-button>
+          <a-button :loading="openaiImageBaseUrlSaving" :disabled="!openaiImageBaseUrlInput.trim()" @click="onSaveRelay">保存中转</a-button>
+          <a-button v-if="openaiImageBaseUrl" danger :loading="openaiImageBaseUrlSaving" @click="onClearRelay">恢复默认</a-button>
+        </div>
+      </article>
 
-    <a-card title="GPT Image 2 中转站" style="margin-bottom: 16px">
-      <a-alert
-        type="info"
-        show-icon
-        style="margin-bottom: 16px"
-        message="可选。只影响 GPT Image 2 的生成与编辑；文本模型和真实发布开关不会改变。地址必须是 HTTPS 且以 /v1 结尾。"
-      />
-      <a-space align="baseline" wrap>
-        <a-input
-          v-model:value="openaiImageBaseUrlInput"
-          placeholder="https://your-relay.example/v1"
-          style="width: 360px"
-        />
-        <a-button
-          type="primary"
-          :loading="openaiImageBaseUrlSaving"
-          :disabled="!openaiImageBaseUrlInput.trim()"
-          @click="onSaveOpenAIImageBaseUrl"
-        >
-          保存中转站
-        </a-button>
-        <a-button
-          v-if="openaiImageBaseUrl"
-          danger
-          :loading="openaiImageBaseUrlSaving"
-          @click="onClearOpenAIImageBaseUrl"
-        >
-          恢复默认接口
-        </a-button>
-      </a-space>
-      <p style="margin: 12px 0 0; color: #666">
-        当前：{{ openaiImageBaseUrl || 'OpenAI 官方默认接口' }}
-      </p>
-    </a-card>
-
-    <a-card title="Doctor 体检" style="margin-bottom: 16px">
-      <a-list size="small" :data-source="doctor">
-        <template #renderItem="{ item }">
-          <a-list-item>
-            <a-tag :color="item.ok ? 'green' : 'red'">{{ item.ok ? '✓' : '✗' }}</a-tag>
-            <strong style="margin-left: 8px">{{ item.name }}</strong>
-            <span style="margin-left: 8px; color: #666">{{ item.hint }}</span>
-          </a-list-item>
-        </template>
-        <template #empty>
-          <span style="color: #999">无 doctor 报告</span>
-        </template>
-      </a-list>
-    </a-card>
-
-    <a-card title="Config（脱敏展示）">
-      <pre v-if="config" style="background: #f5f5f5; padding: 12px; border-radius: 4px; overflow: auto; max-height: 500px">{{ JSON.stringify(config, null, 2) }}</pre>
-      <a-empty v-else description="无 config" />
-    </a-card>
-  </a-spin>
+      <article class="panel quiet">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">3 · 安全</p>
+            <h2>群发是关着的。</h2>
+          </div>
+          <span class="status off">不会自动发到任何平台</span>
+        </div>
+        <p class="help">公众号只进草稿箱。头条和小红书的真发开关不在这个页面上，避免误开。</p>
+      </article>
+    </a-spin>
+  </section>
 </template>
+
+<style scoped>
+.settings { max-width: 720px; padding: 24px 0 64px; }
+.eyebrow { margin: 0 0 8px; color: #7a6650; font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+h1, h2 { margin: 0; color: #292522; font-family: Georgia, 'Songti SC', serif; }
+h1 { margin-bottom: 10px; font-size: clamp(28px, 4vw, 40px); line-height: 1.2; }
+h2 { font-size: 22px; }
+header p, .help { color: #706b65; line-height: 1.7; }
+.panel { margin-top: 22px; padding: 22px; border: 1px solid #e8e1d5; border-radius: 14px; background: #fffdf8; }
+.panel.quiet { background: #f7f3ec; }
+.panel-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
+.status { flex: none; padding: 4px 10px; border-radius: 999px; font-size: 12px; }
+.status.on { color: #2f6b43; background: #e5f3ea; }
+.status.off { color: #7a6650; background: #efe7db; }
+.fields { display: grid; gap: 12px; }
+.fields label { display: grid; gap: 6px; color: #5c564f; font-size: 13px; font-weight: 600; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.probe { margin: 14px 0 0; line-height: 1.6; }
+.probe.ok { color: #2f6b43; }
+.probe.bad { color: #a33b32; }
+@media (max-width: 640px) { .panel-head { flex-direction: column; } }
+</style>
