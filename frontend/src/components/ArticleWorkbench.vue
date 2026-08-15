@@ -127,7 +127,7 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
     </div>
 
     <article v-else class="article">
-      <h1>{{ title }}</h1>
+      <h1 v-if="!body.trimStart().startsWith('# ')">{{ title }}</h1>
       <section
         v-for="block in blocks"
         :key="block.id"

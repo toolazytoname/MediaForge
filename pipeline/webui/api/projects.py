@@ -16,6 +16,11 @@ _PROJECTS_ROOT = project_store.DEFAULT_PROJECTS_ROOT
 
 def _project_dict(project: project_store.Project) -> dict[str, Any]:
     """Serialize an immutable sidecar record without exposing storage details."""
+    from pipeline import master_documents
+    try:
+        master = master_documents.load_master(project.id, projects_root=_PROJECTS_ROOT)
+    except master_documents.MasterDocumentError:
+        master = None
     return {
         "id": project.id,
         "title": project.title,
@@ -28,6 +33,7 @@ def _project_dict(project: project_store.Project) -> dict[str, Any]:
         "asset_paths": list(project.asset_paths),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
+        "has_master": bool(master and master.body.strip()),
     }
 
 

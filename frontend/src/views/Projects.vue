@@ -121,8 +121,8 @@ async function loadPage(): Promise<void> {
     if (shouldCompose || requested === 'master' || requested === 'article' || requested === 'compose') activeWorkbench.value = 'master'
     else if (requested === 'wechat' || requested === 'variants') activeWorkbench.value = 'variants'
     else if (requested === 'visuals' || requested === 'research' || requested === 'approval') activeWorkbench.value = requested as typeof activeWorkbench.value
-    else if (variants.value.some(item => item.platform === 'wechat_mp')) activeWorkbench.value = 'variants'
     else if (master.value) activeWorkbench.value = 'master'
+    else if (variants.value.some(item => item.platform === 'wechat_mp')) activeWorkbench.value = 'variants'
     else activeWorkbench.value = 'master'
     if (shouldCompose) await composeArticle()
   } catch (e) {
@@ -169,13 +169,15 @@ function embedSelectedImages(body: string): string {
     const purpose = slots.find(slot => slot.id === asset.slot_id)?.purpose ?? '插图'
     return `![${purpose}](${visualAssetUrl(asset)})`
   }
-  const chunks = [cover ? imageLine(cover) : '', body].filter(Boolean)
-  if (!inserts.length) return chunks.join('\n\n')
+  const unusedCover = cover && !body.includes(cover.id) ? imageLine(cover) : ''
+  const unusedInserts = inserts.filter(asset => !body.includes(asset.id))
+  const chunks = [unusedCover, body].filter(Boolean)
+  if (!unusedInserts.length) return chunks.join('\n\n')
   const parts = body.split('\n## ')
-  if (parts.length < 2) return `${chunks[0] ? `${chunks[0]}\n\n` : ''}${body}\n\n${inserts.map(imageLine).join('\n\n')}`
-  const rebuilt: string[] = [cover ? `${imageLine(cover)}\n\n${parts[0].trim()}` : parts[0].trim()]
+  if (parts.length < 2) return `${chunks[0] ? `${chunks[0]}\n\n` : ''}${body}\n\n${unusedInserts.map(imageLine).join('\n\n')}`
+  const rebuilt: string[] = [unusedCover ? `${unusedCover}\n\n${parts[0].trim()}` : parts[0].trim()]
   parts.slice(1).forEach((part, index) => {
-    const image = inserts[index] ? `${imageLine(inserts[index])}\n\n` : ''
+    const image = unusedInserts[index] ? `${imageLine(unusedInserts[index])}\n\n` : ''
     rebuilt.push(`${image}## ${part.trim()}`)
   })
   return rebuilt.join('\n\n')
@@ -374,8 +376,16 @@ function variantPreviewHtml(item: PlatformVariant): string {
   const chosen = item.asset_ids
     .map(id => assets.find(asset => asset.id === id && asset.status === 'selected'))
     .filter((asset): asset is VisualAsset => Boolean(asset))
-  const covers = chosen.filter(asset => (slots.find(slot => slot.id === asset.slot_id)?.purpose ?? '').includes('封面'))
-  const inserts = chosen.filter(asset => !covers.includes(asset))
+  const alreadyInBody = (asset: VisualAsset): boolean => {
+    const url = visualAssetUrl(asset)
+    return Boolean(
+      form.body.includes(asset.id)
+      || (url && form.body.includes(url))
+      || (asset.file_path && form.body.includes(asset.file_path)),
+    )
+  }
+  const covers = chosen.filter(asset => (slots.find(slot => slot.id === asset.slot_id)?.purpose ?? '').includes('封面') && !alreadyInBody(asset))
+  const inserts = chosen.filter(asset => !covers.includes(asset) && !alreadyInBody(asset) && !(slots.find(slot => slot.id === asset.slot_id)?.purpose ?? '').includes('封面'))
   const imageLine = (asset: VisualAsset): string => {
     const url = visualAssetUrl(asset)
     const purpose = slots.find(slot => slot.id === asset.slot_id)?.purpose ?? '插图'
@@ -497,7 +507,7 @@ watch(projectId, loadPage)
             </div>
           </a-spin>
         </section>
-        <section v-show="activeWorkbench === 'master'" class="master-workbench">
+        <section v-if="activeWorkbench === 'master'" class="master-workbench">
           <header class="section-heading"><div><p class="eyebrow">文章</p><h2>{{ composing ? (composeStage || '正在生成这篇文章') : '先读这篇，再决定改哪里。' }}</h2><p>{{ composing ? '正文会先出现，封面和插图随后补上。你可以停在这一页等。' : '这是根据你在首页写下的主题和想法生成的草稿。可以直接改，不会静默覆盖上一版。' }}</p></div><a-tag v-if="master" color="blue">版本 {{ master.version }}</a-tag></header>
           <a-alert v-if="masterError" type="error" :message="masterError" show-icon class="notice" />
           <div v-if="composing" class="compose-progress">
@@ -546,7 +556,7 @@ watch(projectId, loadPage)
           <div v-if="visualPlan?.assets.some(asset => visualAssetUrl(asset))" class="asset-gallery"><figure v-for="asset in visualPlan.assets.filter(item => visualAssetUrl(item))" :key="`preview-${asset.id}`"><img :src="visualAssetUrl(asset) || ''" :alt="asset.prompt" /><figcaption>{{ visualSlots.find(slot => slot.id === asset.slot_id)?.purpose }} · {{ asset.status === 'selected' ? '已选择' : '候选' }}</figcaption></figure></div>
           <a-spin :spinning="visualsLoading"><a-card :bordered="false" class="visual-card"><a-form layout="vertical"><a-form-item label="视觉圣经"><a-textarea v-model:value="visualBible" :rows="3" placeholder="例如：风格: 克制的编辑插画\n色彩: 暖白纸张与墨蓝" /></a-form-item><div class="visual-slot-list"><article v-for="(slot, index) in visualSlots" :key="slot.id" class="visual-slot"><div class="slot-heading"><strong>{{ slot.purpose || `槽位 ${index + 1}` }}</strong><a-button type="link" danger size="small" @click="visualSlots.splice(index, 1)">移除</a-button></div><div class="form-pair"><a-form-item label="用途"><a-input v-model:value="slot.purpose" placeholder="封面 / 正文插图" /></a-form-item><a-form-item label="比例"><a-select v-model:value="slot.aspect_ratio"><a-select-option value="16:9">16:9 横图</a-select-option><a-select-option value="1:1">1:1 方图</a-select-option><a-select-option value="9:16">9:16 竖图</a-select-option><a-select-option value="4:3">4:3</a-select-option><a-select-option value="3:4">3:4</a-select-option></a-select></a-form-item></div><a-form-item label="对应段落（可选）"><a-input v-model:value="slot.paragraph_anchor" placeholder="例如：开头的核心问题" /></a-form-item><a-form-item label="画面方向"><a-textarea v-model:value="slot.direction" :rows="2" placeholder="这张图要帮助读者理解什么？" /></a-form-item><a-form-item label="生成或编辑提示词"><a-textarea v-model:value="visualPrompts[slot.id]" :rows="2" placeholder="显式点击后才会调用 GPT Image 2" /></a-form-item><div class="visual-actions"><a-button :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot)">生成候选</a-button></div><div v-if="visualPlan?.assets.filter(asset => asset.slot_id === slot.id).length" class="asset-list"><article v-for="asset in visualPlan.assets.filter(item => item.slot_id === slot.id).slice().reverse()" :key="asset.id" :class="['visual-asset', asset.status]"><div><a-tag :color="asset.status === 'selected' ? 'green' : asset.status === 'failed' ? 'red' : 'blue'">{{ asset.status === 'selected' ? '已选择' : asset.status === 'failed' ? '失败' : '候选' }}</a-tag><span>v{{ asset.version }} · {{ asset.model }} · 预估 ${{ asset.cost_usd.toFixed(2) }}</span></div><p>{{ asset.prompt }}</p><p v-if="asset.failure" class="failure">{{ asset.failure }}</p><div v-if="asset.status !== 'failed'" class="asset-actions"><a-button v-if="asset.status !== 'selected'" size="small" @click="selectVisual(asset.id)">选择</a-button><a-button size="small" :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot, asset.id)">基于此编辑</a-button></div></article></div></article></div><div class="visual-plan-actions"><a-button @click="addVisualSlot">添加插图槽位</a-button><a-button type="primary" :loading="visualSaving" @click="saveVisualPlan">保存视觉计划</a-button></div></a-form></a-card></a-spin>
         </section>
-        <section v-show="activeWorkbench === 'variants'" class="variants-workbench">
+        <section v-if="activeWorkbench === 'variants'" class="variants-workbench">
           <header class="section-heading"><div><p class="eyebrow">{{ focusedPlatform === 'wechat_mp' ? '微信公众号' : '今日头条' }}</p><h2>{{ focusedPlatform === 'wechat_mp' ? '按长文阅读来改这一版。' : '标题和开头更直接，信息更密。' }}</h2><p>这一版独立于主稿。改这里不会覆盖另一平台，也不会真实发布。</p></div></header>
           <a-alert v-if="variantsError" type="error" :message="variantsError" show-icon class="notice" />
           <a-alert type="info" show-icon class="notice" message="本次只走阅读预览、Markdown 导出和安全交付。真实发布仍关闭：publish.enabled=false，且微信公众号不在发布白名单里。" />
@@ -605,7 +615,7 @@ watch(projectId, loadPage)
       <header class="list-header"><div><p class="eyebrow">项目</p><h1>每一个主题，都有一张自己的工作台。</h1><p>项目把想法、资料、主稿、视觉与平台版本放在同一条创作路径上。</p></div><a-button type="primary" @click="router.push('/projects/new')">新建项目</a-button></header>
       <a-alert v-if="error" type="error" :message="error" show-icon class="notice" />
       <a-spin :spinning="loading">
-        <div v-if="items.length" class="project-list"><button v-for="item in items" :key="item.id" class="project-row" @click="router.push(`/projects/${item.id}`)"><div><h2>{{ item.title }}</h2><p>{{ item.idea }}</p><span>{{ item.audience }} · {{ item.goal }}</span></div><div class="row-meta"><time>{{ formatDateTime(item.updated_at) }}</time><ArrowRightOutlined /></div></button></div>
+        <div v-if="items.length" class="project-list"><button v-for="item in items" :key="item.id" class="project-row" @click="router.push(`/projects/${item.id}`)"><div><h2>{{ item.title }}</h2><p>{{ item.idea.length > 90 ? `${item.idea.slice(0, 90)}…` : item.idea }}</p><span>{{ item.has_master ? '已有正文' : '还没写成文章' }} · {{ formatDateTime(item.updated_at) }}</span></div><div class="row-meta"><time>{{ item.id }}</time><ArrowRightOutlined /></div></button></div>
         <a-empty v-else-if="!loading" description="还没有项目。下一步可以从一个真实主题开始。"><template #image><FolderOpenOutlined class="empty-icon" /></template></a-empty>
       </a-spin>
       <p class="count" v-if="total">共 {{ total }} 个项目</p>

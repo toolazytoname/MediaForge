@@ -71,6 +71,34 @@ def test_preview_resolves_selected_asset_and_restore_and_bad_envelopes(client, t
     assert client.get("/api/v1/projects/prj_variant_api/variants/x/preview").status_code == 400
 
 
+def test_preview_does_not_duplicate_images_already_in_the_body(client, tmp_path):
+    root = tmp_path / "projects"
+    _project(root)
+    visuals.save_plan(
+        "prj_variant_api",
+        bible={"style": "plain"},
+        slots=[{"id": "vsl_cover", "purpose": "封面", "paragraph_anchor": None, "direction": "方向", "aspect_ratio": "16:9"}],
+        projects_root=root,
+    )
+    asset = visuals.record_asset(
+        "prj_variant_api", slot_id="vsl_cover", prompt="cover", model="fake", size="16:9",
+        cost_usd=0, now="2026-08-09T00:02:00+00:00", file_path="assets/vas_cover.png",
+        status="candidate", asset_id="vas_cover", projects_root=root,
+    )
+    (root / "prj_variant_api" / "assets").mkdir(exist_ok=True)
+    (root / "prj_variant_api" / "assets" / "vas_cover.png").write_bytes(b"png")
+    visuals.select_asset("prj_variant_api", asset.id, reason="fit", rating=4, projects_root=root)
+    client.post("/api/v1/projects/prj_variant_api/variants/wechat_mp")
+    body = "![封面](/output/projects/prj_variant_api/assets/vas_cover.png)\n\n正文只配一张图。"
+    client.put(
+        "/api/v1/projects/prj_variant_api/variants/wechat_mp",
+        json={"title": "标题", "summary": "摘要", "body": body, "asset_ids": ["vas_cover"]},
+    )
+    preview = client.get("/api/v1/projects/prj_variant_api/variants/wechat_mp/preview")
+    assert preview.status_code == 200
+    assert preview.text.count("vas_cover.png") == 1
+
+
 def test_ai_adaptation_is_explicit_and_only_creates_a_new_variant(
     client, tmp_path, monkeypatch
 ):

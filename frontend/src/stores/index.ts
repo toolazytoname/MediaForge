@@ -74,6 +74,7 @@ export interface ProjectItem {
   asset_paths: string[]
   created_at: string
   updated_at: string
+  has_master?: boolean
 }
 
 export interface ProjectInput {
