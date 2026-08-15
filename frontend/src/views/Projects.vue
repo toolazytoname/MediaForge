@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useSettingsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck } from '../stores'
+import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useSettingsStore, useProjectVideoStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck } from '../stores'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 import { renderMarkdown } from '../utils/markdown'
@@ -17,6 +17,7 @@ const masterStore = useMasterStore()
 const visualsStore = useVisualsStore()
 const variantsStore = useVariantsStore()
 const approvalsStore = useApprovalsStore()
+const videoStore = useProjectVideoStore()
 const settingsStore = useSettingsStore()
 const { items, loading, error } = storeToRefs(store)
 const listItems = computed(() => {
@@ -34,6 +35,7 @@ const { master, suggestions, error: masterError } = storeToRefs(masterStore)
 const { plan: visualPlan, provider: visualProvider, loading: visualsLoading, error: visualsError } = storeToRefs(visualsStore)
 const { variants, error: variantsError } = storeToRefs(variantsStore)
 const { status: approvalStatus, loading: approvalsLoading, error: approvalsError } = storeToRefs(approvalsStore)
+const { video: projectVideo, loading: videoLoading, generating: videoGenerating, error: videoError } = storeToRefs(videoStore)
 const project = ref<ProjectItem | null>(null)
 const detailError = ref<string | null>(null)
 const projectId = computed(() => typeof route.params.id === 'string' ? route.params.id : null)
@@ -66,7 +68,7 @@ const visualPrompts = ref<Record<string, string>>({})
 const variantForms = ref<Record<string, { title: string; summary: string; body: string }>>({})
 const approvalNotes = ref<Record<string, string>>({})
 const approvalActor = ref('本机创作者')
-const activeWorkbench = ref<'research' | 'master' | 'visuals' | 'variants' | 'approval'>('research')
+const activeWorkbench = ref<'research' | 'master' | 'visuals' | 'variants' | 'video' | 'approval'>('research')
 const draftGenerating = ref(false)
 const draftProposal = ref<MasterDraftProposal | null>(null)
 const importingSlot = ref<string | null>(null)
@@ -92,6 +94,7 @@ const wechatAccounts = computed(() => settingsStore.wechatAccounts)
 const activeTab = computed(() => {
   if (activeWorkbench.value === 'master') return 'article'
   if (activeWorkbench.value === 'variants') return 'wechat'
+  if (activeWorkbench.value === 'video') return 'video'
   return 'more'
 })
 async function loadPage(): Promise<void> {
@@ -108,6 +111,7 @@ async function loadPage(): Promise<void> {
     await visualsStore.load(projectId.value)
     await variantsStore.load(projectId.value)
     draftReceipt.value = await variantsStore.loadWechatDraft(projectId.value)
+    await videoStore.load(projectId.value)
     await settingsStore.loadWechatAccounts()
     if (!wechatAccountId.value && settingsStore.wechatAccounts[0]) wechatAccountId.value = settingsStore.wechatAccounts[0].id
     await approvalsStore.load(projectId.value)
@@ -120,6 +124,7 @@ async function loadPage(): Promise<void> {
     const requested = typeof route.query.focus === 'string' ? route.query.focus : ''
     if (shouldCompose || requested === 'master' || requested === 'article' || requested === 'compose') activeWorkbench.value = 'master'
     else if (requested === 'wechat' || requested === 'variants') activeWorkbench.value = 'variants'
+    else if (requested === 'video') activeWorkbench.value = 'video'
     else if (requested === 'visuals' || requested === 'research' || requested === 'approval') activeWorkbench.value = requested as typeof activeWorkbench.value
     else if (master.value) activeWorkbench.value = 'master'
     else if (variants.value.some(item => item.platform === 'wechat_mp')) activeWorkbench.value = 'variants'
@@ -170,10 +175,21 @@ async function preparePlatformDrafts(): Promise<void> {
   }
 }
 
-function openTab(tab: 'article' | 'wechat' | 'more'): void {
+function openTab(tab: 'article' | 'wechat' | 'video' | 'more'): void {
   if (tab === 'article') activeWorkbench.value = 'master'
   else if (tab === 'wechat') { activeWorkbench.value = 'variants'; focusedPlatform.value = 'wechat_mp' }
+  else if (tab === 'video') activeWorkbench.value = 'video'
   else activeWorkbench.value = 'approval'
+}
+
+async function generateProjectVideo(): Promise<void> {
+  if (!projectId.value || videoGenerating.value) return
+  detailError.value = null
+  try {
+    await videoStore.generate(projectId.value)
+  } catch (e) {
+    detailError.value = unwrapError(e)
+  }
 }
 
 function firstHeading(body: string, fallback: string): string {
@@ -499,11 +515,11 @@ watch(projectId, loadPage)
       <button type="button" class="back" @click="router.push('/projects')">全部文章</button>
       <p v-if="detailError" class="banner bad">{{ detailError }}</p>
       <article v-if="project" class="project-workspace">
-        <header v-if="activeWorkbench !== 'master' && activeWorkbench !== 'variants'" class="workspace-head">
+        <header v-if="activeWorkbench !== 'master' && activeWorkbench !== 'variants' && activeWorkbench !== 'video'" class="workspace-head">
           <h1>{{ project.title }}</h1>
           <p class="idea">{{ project.idea }}</p>
         </header>
-        <div v-show="activeWorkbench !== 'variants' && activeWorkbench !== 'master'" class="project-grid">
+        <div v-show="activeWorkbench !== 'variants' && activeWorkbench !== 'master' && activeWorkbench !== 'video'" class="project-grid">
           <section>
             <h3>写给谁</h3>
             <p>{{ project.audience }}</p>
@@ -521,6 +537,7 @@ watch(projectId, loadPage)
         <nav v-show="!composing" class="surface-tabs" aria-label="文章和平台">
           <button :class="{ active: activeTab === 'article' }" @click="openTab('article')">文章</button>
           <button :class="{ active: activeTab === 'wechat' }" @click="openTab('wechat')">微信</button>
+          <button :class="{ active: activeTab === 'video' }" @click="openTab('video')">视频</button>
           <button :class="{ active: activeTab === 'more' }" @click="openTab('more')">更多</button>
         </nav>
         <div v-if="activeTab === 'more'" class="more-sub">
@@ -590,6 +607,7 @@ watch(projectId, loadPage)
               {{ preparingPlatforms ? '正在准备微信稿…' : '去微信稿' }}
             </button>
             <button v-else type="button" class="text-btn" @click="openTab('wechat')">看微信预览</button>
+            <button type="button" class="text-btn" @click="openTab('video')">{{ projectVideo?.file_url ? '看视频' : '做成视频' }}</button>
           </footer>
           <details v-if="master" class="version-card">
             <summary>历史版本</summary>
@@ -636,7 +654,7 @@ watch(projectId, loadPage)
             </div>
             <p v-if="draftSendError" class="banner bad">{{ draftSendError }}</p>
             <p v-else-if="draftReceipt" class="banner">{{ draftReceipt.message }}</p>
-            <p class="muted">头条和小红书还没接。下一轮再按各自形态做。</p>
+            <p class="muted">视频号、抖音、B 站不在这里发布。需要短片时切到「视频」下载。</p>
             <details class="wechat-more">
               <summary>改这篇微信稿</summary>
               <div class="wechat-actions">
@@ -653,6 +671,57 @@ watch(projectId, loadPage)
             </details>
           </aside>
           </div>
+        </section>
+        <section v-if="activeWorkbench === 'video'" class="video-workbench">
+          <header class="section-heading">
+            <div>
+              <h2>短视频</h2>
+              <p>按这篇文章生成口播和一条可下载短片。不会发到视频号、抖音或 B 站。</p>
+            </div>
+          </header>
+          <a-alert v-if="videoError" type="error" :message="videoError" show-icon class="notice" />
+          <a-spin :spinning="videoLoading">
+            <div class="video-layout">
+              <div class="video-stage">
+                <video
+                  v-if="projectVideo?.file_url"
+                  :src="projectVideo.file_url"
+                  controls
+                  playsinline
+                  class="video-player"
+                />
+                <div v-else class="draft-actions">
+                  <div>
+                    <strong>{{ master?.body.trim() ? '还没有短片' : '先写完文章' }}</strong>
+                    <p class="muted">会用文章配图做成 18 秒左右的横版口播片，下载后自己发。</p>
+                  </div>
+                  <a-button type="primary" :loading="videoGenerating" :disabled="!master?.body.trim()" @click="generateProjectVideo">
+                    生成短片
+                  </a-button>
+                </div>
+              </div>
+              <aside class="video-script">
+                <p v-if="projectVideo" class="video-meta">{{ projectVideo.duration_s }} 秒 · {{ projectVideo.aspect }} · 未发布</p>
+                <h3>口播</h3>
+                <p class="script-body">{{ projectVideo?.script || '生成后会出现三句能念的口播。' }}</p>
+                <ol v-if="projectVideo?.shots.length" class="shot-list">
+                  <li v-for="shot in projectVideo.shots" :key="shot.index">{{ shot.line }}</li>
+                </ol>
+                <div class="wechat-actions">
+                  <a-button type="primary" :loading="videoGenerating" :disabled="!master?.body.trim()" @click="generateProjectVideo">
+                    {{ projectVideo ? '按正文重做' : '生成短片' }}
+                  </a-button>
+                  <a
+                    v-if="projectVideo?.file_url"
+                    class="download-link"
+                    :href="projectVideo.file_url"
+                    :download="`${project.title || 'article'}.mp4`"
+                  >下载 MP4</a>
+                </div>
+                <p class="muted">这里只给文件。要发视频号 / 抖音 / B 站，下载后去各平台后台传。</p>
+              </aside>
+            </div>
+          </a-spin>
         </section>
         <section v-show="activeWorkbench === 'approval'" class="approval-workbench">
           <header class="section-heading"><div><h2>交付</h2><p>批准只记录你的判断，不会发布或调用微信接口。</p></div><span v-if="approvalStatus?.complete" class="meta-chip on">已完成审批</span></header>
@@ -1136,12 +1205,59 @@ h3 {
   color: var(--bad) !important;
 }
 
-.wechat-layout {
+.wechat-layout,
+.video-layout {
   display: grid;
   grid-template-columns: minmax(280px, 400px) minmax(0, 1fr);
   gap: 28px;
   align-items: start;
   margin-bottom: 20px;
+}
+
+.video-layout {
+  grid-template-columns: minmax(280px, 1.2fr) minmax(220px, 0.8fr);
+}
+
+.video-player {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  background: #111;
+  border-radius: 8px;
+}
+
+.video-script h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.script-body {
+  margin: 0 0 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.shot-list {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.video-meta {
+  margin: 0 0 12px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.download-link {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
 }
 
 .wechat-actions {
@@ -1279,6 +1395,7 @@ h3 {
   .research-grid,
   .form-pair,
   .wechat-layout,
+  .video-layout,
   .approval-actor,
   .approval-decision {
     grid-template-columns: 1fr;

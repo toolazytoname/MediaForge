@@ -614,6 +614,60 @@ export const useVariantsStore = defineStore('variants', () => {
   return { variants, loading, error, load, create, save, lock, checkUpstream, acknowledgeMaster, restore, prepare, sendWechatDraft, loadWechatDraft }
 })
 
+export interface ProjectVideoShot {
+  index: number
+  line: string
+  file_path: string | null
+  file_url: string | null
+}
+
+export interface ProjectVideo {
+  project_id: string
+  title: string
+  script: string
+  duration_s: number
+  aspect: string
+  shots: ProjectVideoShot[]
+  file_path: string | null
+  file_url: string | null
+  updated_at: string
+  published: boolean
+  destination: null
+}
+
+export const useProjectVideoStore = defineStore('projectVideo', () => {
+  const video = ref<ProjectVideo | null>(null)
+  const loading = ref(false)
+  const generating = ref(false)
+  const error = ref<string | null>(null)
+  async function load(projectId: string): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      video.value = (await api.get<{ video: ProjectVideo | null }>(`/projects/${projectId}/video`)).data.video
+    } catch (e) {
+      error.value = unwrapError(e)
+    } finally {
+      loading.value = false
+    }
+  }
+  async function generate(projectId: string): Promise<ProjectVideo> {
+    generating.value = true
+    error.value = null
+    try {
+      const item = (await api.post<ProjectVideo>(`/projects/${projectId}/video`, {}, { timeout: GENERATION_TIMEOUT_MS })).data
+      video.value = item
+      return item
+    } catch (e) {
+      error.value = unwrapError(e)
+      throw e
+    } finally {
+      generating.value = false
+    }
+  }
+  return { video, loading, generating, error, load, generate }
+})
+
 export interface WechatDraftReceipt {
   project_id: string
   title: string
