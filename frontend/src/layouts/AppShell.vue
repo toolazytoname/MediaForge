@@ -11,13 +11,11 @@ interface NavItem {
 
 const primaryItems: ReadonlyArray<NavItem> = [
   { path: '/', label: '写作', exact: true },
-  { path: '/projects', label: '文章' },
+  { path: '/projects', label: '作品' },
   { path: '/settings', label: '设置' },
 ]
 
-const moreItems: ReadonlyArray<NavItem> = [
-  { path: '/ideas', label: '灵感' },
-]
+const moreItems: ReadonlyArray<NavItem> = []
 
 const route = useRoute()
 const router = useRouter()
@@ -62,7 +60,7 @@ function onMoreBlur(event: FocusEvent): void {
         >
           {{ item.label }}
         </button>
-        <div class="more" @focusout="onMoreBlur">
+        <div v-if="moreItems.length" class="more" @focusout="onMoreBlur">
           <button
             type="button"
             :class="['nav-link', { active: moreActive || moreOpen }]"

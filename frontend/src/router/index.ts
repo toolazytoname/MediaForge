@@ -4,7 +4,7 @@ const later = () => import('../views/Later.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'today', component: () => import('../views/Today.vue') },
-  { path: '/ideas', name: 'ideas', component: () => import('../views/Ideas.vue') },
+  { path: '/ideas', redirect: '/' },
   { path: '/projects', name: 'projects', component: () => import('../views/Projects.vue') },
   { path: '/projects/new', name: 'project-create', component: () => import('../views/ProjectCreate.vue') },
   { path: '/projects/:id', name: 'project-detail', component: () => import('../views/Projects.vue') },

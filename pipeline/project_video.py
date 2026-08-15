@@ -171,8 +171,8 @@ def parse_script_payload(text: str) -> dict[str, Any]:
     shots = payload.get("shots")
     if not isinstance(script, str) or not script.strip():
         raise ValueError("script must be non-empty text")
-    if not isinstance(shots, list) or not 3 <= len(shots) <= 6:
-        raise ValueError("need 3 to 6 shots")
+    if not isinstance(shots, list) or not 3 <= len(shots) <= 8:
+        raise ValueError("need 3 to 8 shots")
     parsed = []
     for index, item in enumerate(shots, start=1):
         if not isinstance(item, dict) or not isinstance(item.get("line"), str) or not item["line"].strip():
@@ -185,7 +185,7 @@ def script_prompt(title: str, body: str) -> str:
     excerpt = body.strip()
     if len(excerpt) > 3500:
         excerpt = excerpt[:3500].rstrip() + "…"
-    return f"""你是短视频口播编剧。根据这篇已完成的中文长文，写一条 18—30 秒、适合视频号/抖音横版或竖版口播的稿。
+    return f"""你是短视频口播编剧。按剪映/口播短视频的成熟流程写稿：先能念，再能切镜头。
 
 标题：{title}
 
@@ -194,9 +194,10 @@ def script_prompt(title: str, body: str) -> str:
 
 规则：
 1. 只使用正文里有的判断，不编造数字、人名、公司新闻。
-2. 口播分 3 句，对应 3 个镜头。每句 12—28 个字，能念、有停顿。
-3. 第一句是钩子，第二句是判断，第三句是收束。不要鸡汤，不要「点赞关注」。
-4. 只返回 JSON：{{"script":"三句连在一起的口播","duration_s":18,"shots":[{{"line":"..."}},{{"line":"..."}},{{"line":"..."}}]}}
+2. 写成 45—75 秒口播，大约 180—280 个汉字，4—6 句。每句 16—40 个字，能一口气念完。
+3. 结构固定：钩子 → 判断 → 具体例子 → 收束。不要鸡汤，不要「点赞关注」「本文」。
+4. 每句对应一个镜头字幕。script 是连起来能直接配音的全文。
+5. 只返回 JSON：{{"script":"完整口播","duration_s":55,"shots":[{{"line":"..."}},{{"line":"..."}},{{"line":"..."}},{{"line":"..."}}]}}
 """
 
 
@@ -211,24 +212,18 @@ def fallback_script(title: str, body: str) -> dict[str, Any]:
         hook = title.strip().rstrip("。！？") + "。"
     else:
         hook = "这篇刚写完的文章，值得先听三句。"
-    while len(paragraphs) < 2:
+    while len(paragraphs) < 3:
         paragraphs.append(hook)
-    first = _clip_line(hook)
-    second = _clip_line(paragraphs[0])
-    third = _clip_line(paragraphs[1] if paragraphs[1] != paragraphs[0] else paragraphs[-1])
-    shots = [
-        {"index": 1, "line": first, "file_path": None},
-        {"index": 2, "line": second, "file_path": None},
-        {"index": 3, "line": third, "file_path": None},
-    ]
-    return {"script": "".join(item["line"] for item in shots), "shots": shots, "duration_s": 18}
+    picks = [hook, paragraphs[0], paragraphs[1], paragraphs[2] if len(paragraphs) > 2 else paragraphs[-1]]
+    shots = [{"index": index, "line": _clip_line(item), "file_path": None} for index, item in enumerate(picks[:5], start=1)]
+    return {"script": "".join(item["line"] for item in shots), "shots": shots, "duration_s": 55}
 
 
 def _clip_line(text: str) -> str:
     cleaned = "".join(text.split())
-    if len(cleaned) <= 28:
+    if len(cleaned) <= 40:
         return cleaned if cleaned.endswith(("。", "！", "？")) else cleaned + "。"
-    return cleaned[:27].rstrip("，、；：") + "。"
+    return cleaned[:39].rstrip("，、；：") + "。"
 
 
 def generate_script(
@@ -271,33 +266,161 @@ def selected_still_paths(
     return paths
 
 
-def _run_ffmpeg(cmd: list[str], *, runner: Callable[..., Any] | None = None) -> None:
+def _run_ffmpeg(cmd: list[str], *, runner: Callable[..., Any] | None = None, cwd: Path | None = None) -> None:
     run = runner or subprocess.run
     try:
-        run(cmd, check=True, capture_output=True, text=True)
+        run(cmd, check=True, capture_output=True, text=True, cwd=str(cwd) if cwd else None)
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or str(exc))[-400:]
         raise ProjectVideoError(f"ffmpeg failed: {tail}") from exc
+
+
+def chinese_font() -> Path | None:
+    for candidate in (
+        Path("/System/Library/Fonts/PingFang.ttc"),
+        Path("/System/Library/Fonts/STHeiti Light.ttc"),
+        Path("/System/Library/Fonts/Supplemental/Songti.ttc"),
+        Path("/Library/Fonts/Arial Unicode.ttf"),
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def probe_duration(path: Path) -> float:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return max(float(result.stdout.strip() or "0"), 1.0)
+
+
+def allocate_shot_times(lines: list[str], total: float) -> list[float]:
+    weights = [max(len(line), 8) for line in lines]
+    scale = total / sum(weights)
+    times = [round(weight * scale, 2) for weight in weights]
+    drift = total - sum(times)
+    times[-1] = round(times[-1] + drift, 2)
+    return [max(item, 1.6) for item in times]
+
+
+def write_srt(lines: list[str], times: list[float], dest: Path) -> Path:
+    def stamp(seconds: float) -> str:
+        whole = max(int(seconds), 0)
+        millis = int(round((seconds - whole) * 1000))
+        hours, rem = divmod(whole, 3600)
+        minutes, secs = divmod(rem, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+    cursor = 0.0
+    blocks: list[str] = []
+    for index, (line, length) in enumerate(zip(lines, times), start=1):
+        start, cursor = cursor, cursor + length
+        blocks.append(f"{index}\n{stamp(start)} --> {stamp(cursor)}\n{line}\n")
+    dest.write_text("\n".join(blocks) + "\n", encoding="utf-8")
+    return dest
+
+
+def render_caption_card(text: str, dest: Path, *, width: int = 1000) -> Path:
+    from PIL import Image, ImageDraw, ImageFont
+
+    def wrap(raw: str) -> str:
+        cleaned = raw.strip()
+        if len(cleaned) <= 16:
+            return cleaned
+        for sep in ("，", "。", "；", "、", "："):
+            idx = cleaned.rfind(sep, 0, 18)
+            if idx >= 6:
+                return cleaned[: idx + 1] + "\n" + cleaned[idx + 1 :]
+        return cleaned[:16] + "\n" + cleaned[16:]
+
+    body = wrap(text)
+    font_path = chinese_font()
+    font = ImageFont.truetype(str(font_path), 40, index=0) if font_path else ImageFont.load_default()
+    probe = Image.new("RGBA", (width, 200), (0, 0, 0, 0))
+    drawer = ImageDraw.Draw(probe)
+    box = drawer.multiline_textbbox((0, 0), body, font=font, align="center", spacing=8)
+    text_w, text_h = box[2] - box[0], box[3] - box[1]
+    pad_x, pad_y = 28, 18
+    card_w = int(min(width, text_w + pad_x * 2))
+    card_h = int(text_h + pad_y * 2)
+    img = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle((0, 0, card_w - 1, card_h - 1), radius=18, fill=(12, 12, 12, 180))
+    draw.multiline_text(((card_w - text_w) / 2, pad_y - box[1]), body, font=font, fill=(255, 255, 255, 255), align="center", spacing=8)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest)
+    return dest
+
+
+def mix_voice_and_captions(
+    video: Path,
+    audio: Path,
+    srt: Path,
+    dest: Path,
+    *,
+    runner: Callable[..., Any] | None = None,
+) -> Path:
+    tmp = dest.with_name(dest.stem + ".mix.mp4")
+    workdir = dest.parent
+    cmd = [
+        "ffmpeg", "-y", "-i", video.name, "-i", audio.name,
+        "-filter_complex", "[0:v]tpad=stop=-1[v]",
+        "-map", "[v]", "-map", "1:a",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest", tmp.name,
+    ]
+    _run_ffmpeg(cmd, runner=runner, cwd=workdir)
+    tmp.replace(dest)
+    return dest
 
 
 def stills_to_clips(
     images: list[Path],
     dest_dir: Path,
     *,
-    seconds: int = 6,
+    seconds: float = 6,
+    durations: list[float] | None = None,
+    lines: list[str] | None = None,
     runner: Callable[..., Any] | None = None,
 ) -> list[Path]:
     if not images:
         raise ProjectVideoError("先给文章配图，再生成视频")
     dest_dir.mkdir(parents=True, exist_ok=True)
     clips: list[Path] = []
-    for index, image in enumerate(images[:6], start=1):
+    count = len(durations) if durations else min(len(images), 6)
+    count = max(count, 1)
+    for index in range(1, count + 1):
+        image = images[(index - 1) % len(images)]
         dest = dest_dir / f"shot{index}.mp4"
+        hold = durations[index - 1] if durations and index <= len(durations) else seconds
+        fade = 0.35 if hold > 1.2 else 0.0
+        fade_tail = f",fade=t=in:st=0:d={fade},fade=t=out:st={max(hold - fade, 0):.2f}:d={fade}" if fade else ""
+        inputs = ["-y", "-loop", "1", "-i", str(image)]
+        if lines and index <= len(lines):
+            card = dest_dir / f"caption{index}.png"
+            render_caption_card(lines[index - 1], card)
+            inputs.extend(["-loop", "1", "-i", str(card)])
+            vf = (
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bg];"
+                f"[bg][1:v]overlay=(W-w)/2:H-h-110:format=auto{fade_tail},format=yuv420p[v]"
+            )
+        else:
+            vf = (
+                f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+                f"{fade_tail},format=yuv420p[v]"
+            )
         _run_ffmpeg(
             [
-                "ffmpeg", "-y", "-loop", "1", "-i", str(image),
-                "-t", str(seconds),
-                "-vf", "scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+                "ffmpeg", *inputs,
+                "-t", f"{hold:.2f}",
+                "-filter_complex", vf,
+                "-map", "[v]",
                 "-r", "24", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(dest),
             ],
             runner=runner,
@@ -354,24 +477,52 @@ def generate_project_video(
     extra_clips: list[Path] | None = None,
     stitch_fn: Callable[..., Path] | None = None,
     stills_fn: Callable[..., list[Path]] | None = None,
+    tts_fn: Callable[[str, Path], Path] | None = None,
+    mix_fn: Callable[..., Path] | None = None,
 ) -> ProjectVideo:
     master = require_master(project_id, projects_root=projects_root)
     payload = generate_script(master.title, master.body, complete_fn=complete_fn)
     dest_dir = _video_dir(project_id, projects_root)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
+    voice = dest_dir / "voice.mp3"
+    if tts_fn is not None:
+        tts_fn(payload["script"], voice)
+    else:
+        try:
+            from pipeline.creators.tts import synthesize_speech
+
+            synthesize_speech(payload["script"], voice)
+        except Exception as exc:
+            raise ProjectVideoError(f"口播配音失败：{exc}") from exc
+
+    try:
+        spoken = probe_duration(voice)
+    except Exception:
+        spoken = float(payload.get("duration_s") or 55)
+    lines = [item["line"] for item in payload["shots"]]
+    times = allocate_shot_times(lines, spoken)
+
     if extra_clips:
         clip_paths = import_clips(extra_clips, dest_dir)
     else:
-        clip_paths = existing_shot_clips(dest_dir)
-        if not clip_paths:
-            stills = selected_still_paths(project_id, projects_root=projects_root)
+        stills = selected_still_paths(project_id, projects_root=projects_root)
+        if not stills:
+            clip_paths = existing_shot_clips(dest_dir)
+            if not clip_paths:
+                raise ProjectVideoError("先给文章配图，再生成视频")
+        else:
             maker = stills_fn or stills_to_clips
-            clip_paths = maker(stills, dest_dir)
+            clip_paths = maker(stills, dest_dir, durations=times, lines=lines)
 
+    silent = dest_dir / "silent.mp4"
     preview = dest_dir / _PREVIEW_NAME
     stitcher = stitch_fn or stitch_clips
-    stitcher(clip_paths, preview)
+    stitcher(clip_paths, silent)
+
+    srt = write_srt(lines[:len(clip_paths)] or lines, times[:len(clip_paths)] or times, dest_dir / "captions.srt")
+    mixer = mix_fn or mix_voice_and_captions
+    mixer(silent, voice, srt, preview)
 
     shot_rows: list[dict[str, Any]] = []
     script_shots = payload["shots"]
@@ -385,8 +536,8 @@ def generate_project_video(
         project_id,
         title=master.title,
         script=payload["script"],
-        duration_s=int(payload.get("duration_s") or 6 * max(len(clip_paths), 1)),
-        aspect="16:9",
+        duration_s=int(round(spoken)),
+        aspect="9:16",
         shots=shot_rows,
         file_path=f"{_VIDEO_DIR}/{_PREVIEW_NAME}",
         now=now,

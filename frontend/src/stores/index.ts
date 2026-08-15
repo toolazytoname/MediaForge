@@ -20,6 +20,8 @@ export interface ProjectItem {
   created_at: string
   updated_at: string
   has_master?: boolean
+  has_wechat?: boolean
+  has_video?: boolean
 }
 
 export interface ProjectInput {

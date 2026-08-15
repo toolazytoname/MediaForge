@@ -8,14 +8,17 @@ import pytest
 from pipeline import master_documents, projects as project_store
 from pipeline.project_video import (
     ProjectVideoError,
+    allocate_shot_times,
     fallback_script,
     generate_project_video,
     load_video,
     parse_script_payload,
+    render_caption_card,
     require_master,
     save_video,
     stitch_clips,
     to_payload,
+    write_srt,
 )
 
 
@@ -97,7 +100,7 @@ def test_parse_script_payload_accepts_fenced_json():
 
 
 def test_parse_script_payload_rejects_too_few_shots():
-    with pytest.raises(ValueError, match="3 to 6"):
+    with pytest.raises(ValueError, match="3 to 8"):
         parse_script_payload(json.dumps({
             "script": "只有一句。",
             "shots": [{"line": "只有一句。"}],
@@ -109,7 +112,7 @@ def test_fallback_script_uses_article_sentences():
         "越想独占越做不成",
         "## 开头\n\n梁文锋说不能独占整盘棋。\n\n![图](/x.png)\n\n开源不是战术，是善意。\n",
     )
-    assert len(payload["shots"]) == 3
+    assert len(payload["shots"]) >= 3
     assert "独占" in payload["script"]
     assert "开源" in payload["script"]
 
@@ -140,6 +143,14 @@ def test_generate_project_video_stitches_imported_clips(tmp_path):
         dest.write_bytes(b"joined")
         return dest
 
+    def fake_tts(_text, dest):
+        dest.write_bytes(b"audio")
+        return dest
+
+    def fake_mix(video, audio, srt, dest, **_kwargs):
+        dest.write_bytes(video.read_bytes() + b"+voice")
+        return dest
+
     pack = generate_project_video(
         "prj_video01",
         now=NOW,
@@ -147,11 +158,30 @@ def test_generate_project_video_stitches_imported_clips(tmp_path):
         complete_fn=fake_complete,
         extra_clips=clips,
         stitch_fn=fake_stitch,
+        tts_fn=fake_tts,
+        mix_fn=fake_mix,
     )
     assert pack.file_path == "video/preview.mp4"
-    assert (root / "prj_video01" / "video" / "preview.mp4").read_bytes() == b"joined"
+    assert (root / "prj_video01" / "video" / "preview.mp4").read_bytes() == b"joined+voice"
     assert [shot.line for shot in pack.shots] == ["钩子。", "判断。", "收束。"]
     assert pack.shots[0].file_path == "video/shot1.mp4"
+    assert pack.aspect == "9:16"
+
+
+def test_allocate_times_and_write_srt(tmp_path):
+    times = allocate_shot_times(["短。", "这是更长的一句判断。", "收。"], 12)
+    assert len(times) == 3
+    assert abs(sum(times) - 12) < 0.05
+    srt = write_srt(["短。", "这是更长的一句判断。", "收。"], times, tmp_path / "a.srt")
+    text = srt.read_text(encoding="utf-8")
+    assert "这是更长的一句判断。" in text
+    assert "-->" in text
+
+
+def test_render_caption_card_writes_png(tmp_path):
+    dest = tmp_path / "cap.png"
+    render_caption_card("梁文锋说，越想把AI整盘拿走，越做不成。", dest)
+    assert dest.is_file() and dest.stat().st_size > 0
 
 
 def test_stitch_clips_with_ffmpeg(tmp_path):

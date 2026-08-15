@@ -92,11 +92,13 @@ const draftSendError = ref<string | null>(null)
 const wechatAccountId = ref('')
 const wechatAccounts = computed(() => settingsStore.wechatAccounts)
 const activeTab = computed(() => {
-  if (activeWorkbench.value === 'master') return 'article'
   if (activeWorkbench.value === 'variants') return 'wechat'
   if (activeWorkbench.value === 'video') return 'video'
-  return 'more'
+  return 'article'
 })
+const displayTitle = computed(() => master.value?.title || project.value?.title || '未命名主题')
+const wechatReady = computed(() => Boolean(wechatVariant.value?.body.trim()))
+const videoReady = computed(() => Boolean(projectVideo.value?.file_url))
 async function loadPage(): Promise<void> {
   detailError.value = null
   project.value = null
@@ -512,38 +514,31 @@ watch(projectId, loadPage)
 <template>
   <section class="projects-page">
     <template v-if="projectId">
-      <button type="button" class="back" @click="router.push('/projects')">全部文章</button>
+      <button type="button" class="back" @click="router.push('/projects')">全部作品</button>
       <p v-if="detailError" class="banner bad">{{ detailError }}</p>
       <article v-if="project" class="project-workspace">
-        <header v-if="activeWorkbench !== 'master' && activeWorkbench !== 'variants' && activeWorkbench !== 'video'" class="workspace-head">
-          <h1>{{ project.title }}</h1>
-          <p class="idea">{{ project.idea }}</p>
+        <header v-show="!composing" class="pack-head">
+          <h1>{{ displayTitle }}</h1>
+          <p>一个主题，三份成品：主稿、微信阅读版、口播短片。</p>
         </header>
-        <div v-show="activeWorkbench !== 'variants' && activeWorkbench !== 'master' && activeWorkbench !== 'video'" class="project-grid">
-          <section>
-            <h3>写给谁</h3>
-            <p>{{ project.audience }}</p>
-            <h3>这次要完成什么</h3>
-            <p>{{ project.goal }}</p>
-            <h3>声音</h3>
-            <p>{{ project.voice }}</p>
-          </section>
-          <section>
-            <h3>目前的材料</h3>
-            <p>已关联 {{ project.content_ids.length }} 篇内容，{{ project.asset_paths.length }} 项资产。</p>
-            <p class="muted">来源、判断和待确认项都由你录入，不会自动抓取或改写。</p>
-          </section>
-        </div>
-        <nav v-show="!composing" class="surface-tabs" aria-label="文章和平台">
-          <button :class="{ active: activeTab === 'article' }" @click="openTab('article')">文章</button>
-          <button :class="{ active: activeTab === 'wechat' }" @click="openTab('wechat')">微信</button>
-          <button :class="{ active: activeTab === 'video' }" @click="openTab('video')">视频</button>
-          <button :class="{ active: activeTab === 'more' }" @click="openTab('more')">更多</button>
+        <nav v-show="!composing" class="pack-nav" aria-label="同一主题的成品">
+          <button :class="{ active: activeTab === 'article' }" @click="openTab('article')">
+            文章
+            <small>{{ master?.body.trim() ? '主稿' : '还没写' }}</small>
+          </button>
+          <button :class="{ active: activeTab === 'wechat' }" @click="openTab('wechat')">
+            微信
+            <small>{{ wechatReady ? '可送草稿' : '未生成' }}</small>
+          </button>
+          <button :class="{ active: activeTab === 'video' }" @click="openTab('video')">
+            视频
+            <small>{{ videoReady ? '可下载' : '未生成' }}</small>
+          </button>
         </nav>
-        <div v-if="activeTab === 'more'" class="more-sub">
+        <div v-if="activeTab === 'article' && !composing" class="more-sub">
+          <button :class="{ active: activeWorkbench === 'master' }" @click="activeWorkbench = 'master'">正文</button>
           <button :class="{ active: activeWorkbench === 'visuals' }" @click="activeWorkbench = 'visuals'">配图</button>
           <button :class="{ active: activeWorkbench === 'research' }" @click="activeWorkbench = 'research'">资料</button>
-          <button :class="{ active: activeWorkbench === 'approval' }" @click="activeWorkbench = 'approval'">交付</button>
         </div>
         <section v-show="activeWorkbench === 'research'" class="research-board">
           <header class="section-heading"><div><h2>资料</h2><p>来源不会自动核查。标记为“已核查”前，请自行确认原始材料。</p></div></header>
@@ -607,7 +602,8 @@ watch(projectId, loadPage)
               {{ preparingPlatforms ? '正在准备微信稿…' : '去微信稿' }}
             </button>
             <button v-else type="button" class="text-btn" @click="openTab('wechat')">看微信预览</button>
-            <button type="button" class="text-btn" @click="openTab('video')">{{ projectVideo?.file_url ? '看视频' : '做成视频' }}</button>
+            <button type="button" class="text-btn" @click="openTab('video')">{{ videoReady ? '看视频' : '做成视频' }}</button>
+            <button type="button" class="text-btn" @click="activeWorkbench = 'visuals'">配图</button>
           </footer>
           <details v-if="master" class="version-card">
             <summary>历史版本</summary>
@@ -654,7 +650,7 @@ watch(projectId, loadPage)
             </div>
             <p v-if="draftSendError" class="banner bad">{{ draftSendError }}</p>
             <p v-else-if="draftReceipt" class="banner">{{ draftReceipt.message }}</p>
-            <p class="muted">视频号、抖音、B 站不在这里发布。需要短片时切到「视频」下载。</p>
+            <p class="muted">这是公众号阅读版。短视频在旁边的「视频」里，不在这里发。</p>
             <details class="wechat-more">
               <summary>改这篇微信稿</summary>
               <div class="wechat-actions">
@@ -676,7 +672,7 @@ watch(projectId, loadPage)
           <header class="section-heading">
             <div>
               <h2>短视频</h2>
-              <p>按这篇文章生成口播和一条可下载短片。不会发到视频号、抖音或 B 站。</p>
+              <p>按主稿写成口播，配音、字幕、竖版画面后下载。不会发到视频号、抖音或 B 站。</p>
             </div>
           </header>
           <a-alert v-if="videoError" type="error" :message="videoError" show-icon class="notice" />
@@ -693,7 +689,7 @@ watch(projectId, loadPage)
                 <div v-else class="draft-actions">
                   <div>
                     <strong>{{ master?.body.trim() ? '还没有短片' : '先写完文章' }}</strong>
-                    <p class="muted">会用文章配图做成 18 秒左右的横版口播片，下载后自己发。</p>
+                    <p class="muted">会按成熟口播流程做：先写能念的稿，再配音、烧字幕、用配图铺画面。</p>
                   </div>
                   <a-button type="primary" :loading="videoGenerating" :disabled="!master?.body.trim()" @click="generateProjectVideo">
                     生成短片
@@ -703,7 +699,7 @@ watch(projectId, loadPage)
               <aside class="video-script">
                 <p v-if="projectVideo" class="video-meta">{{ projectVideo.duration_s }} 秒 · {{ projectVideo.aspect }} · 未发布</p>
                 <h3>口播</h3>
-                <p class="script-body">{{ projectVideo?.script || '生成后会出现三句能念的口播。' }}</p>
+                <p class="script-body">{{ projectVideo?.script || '生成后会出现可直接念的口播稿。' }}</p>
                 <ol v-if="projectVideo?.shots.length" class="shot-list">
                   <li v-for="shot in projectVideo.shots" :key="shot.index">{{ shot.line }}</li>
                 </ol>
@@ -734,9 +730,10 @@ watch(projectId, loadPage)
 
     <template v-else>
       <header class="list-header">
-        <h1>文章</h1>
-        <a-button type="primary" @click="router.push('/projects/new')">新文章</a-button>
+        <h1>作品</h1>
+        <a-button type="primary" @click="router.push('/')">新主题</a-button>
       </header>
+      <p class="list-lead">一个主题派生主稿、微信稿和短视频。点进去切换成品，不要拆成三个项目。</p>
       <p v-if="error" class="banner bad">{{ error }}</p>
       <a-spin :spinning="loading">
         <div v-if="listItems.length" class="project-list">
@@ -744,11 +741,16 @@ watch(projectId, loadPage)
             <div>
               <h2>{{ item.title }}</h2>
               <p>{{ item.idea.length > 90 ? `${item.idea.slice(0, 90)}…` : item.idea }}</p>
-              <span>{{ item.has_master ? '已有正文' : '还没写成文章' }} · {{ formatDateTime(item.updated_at) }}</span>
+              <span class="pack-chips">
+                <em :class="{ on: item.has_master }">文章</em>
+                <em :class="{ on: item.has_wechat }">微信</em>
+                <em :class="{ on: item.has_video }">视频</em>
+                <time>{{ formatDateTime(item.updated_at) }}</time>
+              </span>
             </div>
           </button>
         </div>
-        <p v-else-if="!loading" class="empty-copy">还没有文章。回首页写一个主题即可。</p>
+        <p v-else-if="!loading" class="empty-copy">还没有作品。回首页写一个主题即可。</p>
       </a-spin>
     </template>
   </section>
@@ -970,6 +972,78 @@ h3 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.pack-head {
+  margin: 8px 0 18px;
+}
+
+.pack-head h1 {
+  margin-bottom: 8px;
+  font-size: clamp(26px, 3.6vw, 36px);
+}
+
+.pack-head p,
+.list-lead {
+  margin: 0 0 18px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.pack-nav {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.pack-nav button {
+  display: grid;
+  gap: 2px;
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pack-nav button small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pack-nav button.active {
+  border-color: var(--ink);
+  background: var(--wash);
+}
+
+.pack-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.pack-chips em {
+  font-style: normal;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.pack-chips em.on {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.pack-chips time {
+  margin-left: 4px;
+  color: var(--faint);
 }
 
 .surface-tabs,
@@ -1215,13 +1289,14 @@ h3 {
 }
 
 .video-layout {
-  grid-template-columns: minmax(280px, 1.2fr) minmax(220px, 0.8fr);
+  grid-template-columns: minmax(220px, 320px) minmax(220px, 1fr);
 }
 
 .video-player {
   display: block;
-  width: 100%;
-  max-height: 420px;
+  width: min(100%, 280px);
+  max-height: 520px;
+  margin: 0 auto;
   background: #111;
   border-radius: 8px;
 }
@@ -1396,6 +1471,7 @@ h3 {
   .form-pair,
   .wechat-layout,
   .video-layout,
+  .pack-nav,
   .approval-actor,
   .approval-decision {
     grid-template-columns: 1fr;

@@ -14,6 +14,8 @@ const ideasStore = useIdeasStore()
 const researchStore = useResearchStore()
 const variantsStore = useVariantsStore()
 const { items, loading, error } = storeToRefs(projectsStore)
+const { items: ideaItems } = storeToRefs(ideasStore)
+const saved = ref(false)
 const latestProject = computed(() => items.value[0] ?? null)
 const starting = ref(false)
 const startError = ref<string | null>(null)
@@ -30,6 +32,7 @@ const DEFAULTS = {
 
 onMounted(async () => {
   await projectsStore.load()
+  await ideasStore.load()
   const seed = typeof route.query.seed === 'string' ? route.query.seed : ''
   if (seed) {
     await ideasStore.load()
@@ -57,6 +60,30 @@ onMounted(async () => {
     }
   }
 })
+
+async function saveIdea(payload: { idea: string; sources: IntakeSourceView[] }): Promise<void> {
+  startError.value = null
+  saved.value = false
+  try {
+    const links = payload.sources.filter(item => item.reference.startsWith('http'))
+    if (!payload.idea && links.length === 1 && payload.sources.length === 1) {
+      await ideasStore.create({ input_type: 'url', content: links[0].reference })
+    } else {
+      const blocks = [payload.idea, ...payload.sources.map(source => {
+        const excerpt = source.excerpt.trim() || source.failure || ''
+        return `${source.reference}${excerpt ? `\n${excerpt.slice(0, 1600)}` : ''}`
+      })]
+      await ideasStore.create({
+        input_type: payload.idea && !payload.sources.length ? 'thought' : 'text',
+        content: blocks.filter(Boolean).join('\n\n'),
+      })
+    }
+    await ideasStore.load()
+    saved.value = true
+  } catch (err) {
+    startError.value = unwrapError(err)
+  }
+}
 
 function ideaText(payload: IntakeCommit): string {
   const blocks = [payload.idea]
@@ -111,23 +138,39 @@ function openProject(id: string, focus: 'master' | 'wechat' = 'master'): void {
 <template>
   <section class="home">
     <header class="intro">
-      <h1>写一篇文章</h1>
-      <p>不用先起标题。把想法、链接或文件丢进来，直接生成正文。标题等文章出来再挑。</p>
+      <h1>从一个主题开始</h1>
+      <p>把想法、链接或文件丢进来。先生成一篇主稿，再派生微信稿和短视频。还没想写完，可以先记下。</p>
     </header>
 
     <p v-if="error" class="banner bad">{{ error }}</p>
     <p v-if="startError" class="banner bad">{{ startError }}</p>
-    <p v-if="starting" class="banner">正在用你选的标题开始写…</p>
+    <p v-if="saved" class="banner">已记下。想写的时候再点这条即可。</p>
+    <p v-if="starting" class="banner">正在根据你的想法生成文章…</p>
 
     <ComposeIntake
       :initial-idea="seedIdea"
       :initial-sources="seedSources"
       show-auto-action
+      show-save-action
       @start="startArticle"
+      @save="saveIdea"
     />
 
-    <section v-if="latestProject || readyWechat" class="recent" aria-label="最近文章">
-      <h2>最近</h2>
+    <section v-if="ideaItems.length" class="recent" aria-label="记下的主题">
+      <h2>记下的</h2>
+      <button
+        v-for="idea in ideaItems.slice(0, 4)"
+        :key="idea.id"
+        type="button"
+        @click="idea.project_id ? openProject(idea.project_id) : router.push({ path: '/', query: { seed: idea.id } })"
+      >
+        <strong>{{ idea.title || idea.content.slice(0, 36) }}</strong>
+        <span>{{ idea.project_id ? '已有作品' : '点这里接着写' }} · {{ formatDateTime(idea.updated_at) }}</span>
+      </button>
+    </section>
+
+    <section v-if="latestProject || readyWechat" class="recent" aria-label="最近作品">
+      <h2>最近作品</h2>
       <button
         v-if="readyWechat && readyWechat.id !== latestProject?.id"
         type="button"
@@ -146,7 +189,7 @@ function openProject(id: string, focus: 'master' | 'wechat' = 'master'): void {
       </button>
     </section>
 
-    <p v-else-if="!loading" class="empty">最近写过的文章会出现在这里。</p>
+    <p v-else-if="!loading && !ideaItems.length" class="empty">最近写过的作品会出现在这里。</p>
   </section>
 </template>
 
