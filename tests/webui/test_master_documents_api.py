@@ -76,6 +76,52 @@ def test_invalid_suggestion_input_never_calls_the_provider(client, tmp_path, mon
     assert client.get("/api/v1/projects/prj_master/master/suggestions").json() == {"items": []}
 
 
+def test_whole_article_note_rejects_a_summary_and_keeps_the_master(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    original = "## 问题\n\n" + ("这是一段足够长的正文，用来证明整篇修改不能被压成摘要。" * 8)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "标题", "body": original})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    seen = {}
+
+    def fake_complete(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return "看完整篇文章，结论是要克制。"
+
+    monkeypatch.setattr(master_api.llm, "complete", fake_complete)
+    response = client.post(
+        "/api/v1/projects/prj_master/master/suggestions",
+        json={"action": "clarify", "note": "把开头写得更冲，不要鸡汤"},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["error"]["code"] == "llm_suggestion_collapsed"
+    assert "Author instruction: 把开头写得更冲，不要鸡汤" in seen["prompt"]
+    assert "Do NOT summarize" in seen["prompt"]
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["body"] == original
+
+
+def test_whole_article_note_keeps_a_full_rewrite(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    original = "## 问题\n\n" + ("原来的开头比较软。" * 20)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "标题", "body": original})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    rewrite = "## 问题\n\n" + ("开头改冲了，不再鸡汤。" * 20)
+    monkeypatch.setattr(master_api.llm, "complete", lambda *args, **kwargs: rewrite)
+
+    response = client.post(
+        "/api/v1/projects/prj_master/master/suggestions",
+        json={"action": "clarify", "note": "把开头写得更冲，不要鸡汤"},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["selection"] is None
+    assert payload["proposed_body"] == rewrite
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["body"] == original
+
+
 def test_suggestion_note_is_passed_to_the_provider_and_does_not_write(client, tmp_path, monkeypatch):
     root = tmp_path / "projects"
     _project(root)

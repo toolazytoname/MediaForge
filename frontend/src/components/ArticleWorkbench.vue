@@ -12,6 +12,7 @@ const props = defineProps<{
   error: string | null
   titleOptions?: string[]
   titlesLoading?: boolean
+  currentVersion?: number
 }>()
 
 const emit = defineEmits<{
@@ -59,7 +60,34 @@ function pendingFor(block: ArticleBlock): MasterSuggestion | undefined {
 }
 
 function wholePending(): MasterSuggestion | undefined {
-  return pending.value.find(item => item.selection == null)
+  const live = pending.value.filter(item => {
+    if (item.selection != null) return false
+    if (props.currentVersion && item.base_version !== props.currentVersion) return false
+    return true
+  })
+  return live.at(-1)
+}
+
+function firstChangedChunk(before: string, after: string): { before: string; after: string; changed: boolean; changedCount: number; afterLen: number } {
+  const left = before.split(/\n{2,}/)
+  const right = after.split(/\n{2,}/)
+  const count = Math.max(left.length, right.length)
+  let changedCount = 0
+  let first = { before: before.slice(0, 280), after: after.slice(0, 280) }
+  for (let index = 0; index < count; index += 1) {
+    const previous = (left[index] ?? '').trim()
+    const next = (right[index] ?? '').trim()
+    if (previous !== next) {
+      if (changedCount === 0) {
+        first = {
+          before: previous || '（这段被删了）',
+          after: next || '（这段是新加的）',
+        }
+      }
+      changedCount += 1
+    }
+  }
+  return { ...first, changed: changedCount > 0, changedCount, afterLen: after.trim().length }
 }
 
 function replacementText(suggestion: MasterSuggestion): string {
@@ -85,8 +113,8 @@ function requestBlock(action: MasterSuggestion['action'], note?: string): void {
 }
 
 function requestWhole(): void {
-  if (props.suggesting) return
-  emit('request', { action: 'clarify', selection: null, note: wholeNote.value.trim() || undefined })
+  if (props.suggesting || !wholeNote.value.trim()) return
+  emit('request', { action: 'clarify', selection: null, note: wholeNote.value.trim() })
 }
 
 const actionLabel: Record<MasterSuggestion['action'], string> = {
@@ -152,19 +180,23 @@ function requestTitles(): void {
     <div v-if="wholeOpen" class="whole-box">
       <label>
         对整篇说一句
-        <textarea v-model="wholeNote" rows="3" placeholder="例如：少说教，保留真实失败；开头再具体一点。" />
+        <textarea v-model="wholeNote" rows="3" placeholder="例如：开头写冲一点，少鸡汤；保留封面和插图。" />
       </label>
-      <button type="button" class="primary" :disabled="suggesting || !body.trim()" @click="requestWhole">
-        {{ suggesting ? '生成中…' : '生成整篇建议' }}
+      <button type="button" class="primary" :disabled="suggesting || !body.trim() || !wholeNote.trim()" @click="requestWhole">
+        {{ suggesting ? '正在按你的话改整篇…' : '生成整篇建议' }}
       </button>
+      <p class="hint">不会立刻改正文。生成后先对比，点「采用」才写进去。</p>
       <article v-if="wholePending()" class="compare whole">
+        <p class="hint">
+          已按「{{ wholeNote.trim() || '你的要求' }}」生成整篇建议，约 {{ firstChangedChunk(body, replacementText(wholePending()!)).afterLen }} 字，{{ firstChangedChunk(body, replacementText(wholePending()!)).changedCount }} 处段落不同。点「采用」才写进正文。
+        </p>
         <div>
           <strong>现在</strong>
-          <pre>{{ body.slice(0, 600) }}{{ body.length > 600 ? '…' : '' }}</pre>
+          <pre>{{ firstChangedChunk(body, replacementText(wholePending()!)).before }}</pre>
         </div>
         <div>
           <strong>建议</strong>
-          <pre>{{ replacementText(wholePending()!).slice(0, 600) }}{{ replacementText(wholePending()!).length > 600 ? '…' : '' }}</pre>
+          <pre>{{ firstChangedChunk(body, replacementText(wholePending()!)).after }}</pre>
         </div>
         <div class="compare-actions">
           <button type="button" class="primary" @click="emit('accept', wholePending()!)">采用整篇建议</button>
@@ -520,6 +552,13 @@ function requestTitles(): void {
   grid-column: 1 / -1;
   display: flex;
   gap: 8px;
+}
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .empty {

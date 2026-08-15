@@ -309,8 +309,10 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
     try:
         conn = deps.get_conn()
         try:
-            proposed = llm.complete(prompt, stage="coauthor_suggestion", ref_id=project_id,
-                                    model_tier="creative", max_tokens=4096, conn=conn)
+            proposed = llm.complete(
+                prompt, stage="coauthor_suggestion", ref_id=project_id,
+                model_tier="creative", max_tokens=6000 if selection is None else 4096, conn=conn,
+            )
         finally:
             conn.close()
     except Exception as error:
@@ -318,7 +320,11 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
     try:
         proposed_title = master.title
         cleaned = _clean_replacement(proposed, selection)
+        if selection is None:
+            cleaned = _require_full_article(cleaned, master.body, action)
         proposed_body = _replace_selection(master.body, selection, cleaned) if selection is not None else cleaned
+        if selection is None:
+            _reject_stale_whole_suggestions(project_id, master.version)
         suggestion = master_store.create_suggestion(project_id, action=action, selection=selection,
             proposed_title=proposed_title, proposed_body=proposed_body, now=_now(), projects_root=_root())
         return _suggestion_dict(suggestion)
@@ -379,7 +385,12 @@ def _suggestion_prompt(
         "The selected passage is the only thing you may rewrite. Return only that rewritten passage. "
         "Do not return the article title, cover, headings, or any other paragraph.\n"
         if selection else
-        "Return the complete rewritten article body in Markdown, without a wrapping title unless one is already in the body.\n"
+        "The author's instruction is an editorial direction, not the new article. "
+        "Do NOT summarize. Do NOT return a blurb, abstract, or one-paragraph recap. "
+        "Return the complete rewritten article body in Markdown, similar length to the original "
+        "(at least 70% of the original character count). "
+        "Keep every existing image line exactly as `![...](...)`. "
+        "Do not wrap the body in a title unless one is already in the body.\n"
     )
     return (
         "You are proposing an edit, not publishing a final answer. Return ONLY the replacement text, no preface.\n"
@@ -388,6 +399,29 @@ def _suggestion_prompt(
         f"Audience: {project.audience}\nGoal: {project.goal}\nVoice: {project.voice}\n"
         f"Research sources:\n{sources}\nResearch claims:\n{claims}\n\nText to revise:\n{target}"
     )
+
+
+def _require_full_article(proposed: str, original: str, action: str) -> str:
+    if action == "shorten":
+        return proposed
+    if len(proposed) < max(200, int(len(original) * 0.5)):
+        raise _error(
+            502,
+            "llm_suggestion_collapsed",
+            "整篇建议被压成了摘要，没有改完整篇文章。请再试一次，或把要求写得更具体。",
+        )
+    return proposed
+
+
+def _reject_stale_whole_suggestions(project_id: str, current_version: int) -> None:
+    for item in master_store.load_suggestions(project_id, projects_root=_root()):
+        if item.status == "pending" and item.selection is None and item.base_version <= current_version:
+            try:
+                master_store.reject_suggestion(
+                    project_id, item.id, now=_now(), projects_root=_root(),
+                )
+            except master_store.MasterDocumentError:
+                continue
 
 
 def _clean_replacement(proposed: str, selection: str | None) -> str:
