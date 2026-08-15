@@ -16,7 +16,10 @@ safe_publish 门禁生效，无需重启 webui 进程。
 """
 from __future__ import annotations
 
+import json
 import os
+import tempfile
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -37,6 +40,7 @@ from pipeline.webui.config_edit import (
     set_publish_allowed_platforms,
     set_publish_enabled,
 )
+from pipeline.publishers.wechat_mp import WechatMpPublisher, load_wechat_credentials
 from pipeline.webui.sanitize import sanitize_config
 
 router = APIRouter(tags=["settings"])
@@ -60,6 +64,8 @@ _KEY_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
 ]
 _ALLOWED_KEY_NAMES = frozenset(LLM_ENV_VARS) | frozenset(IMAGE_ENV_VARS)
 _OPENAI_IMAGE_BASE_URL = "OPENAI_IMAGE_BASE_URL"
+_WECHAT_CREDENTIALS_PATH = "secrets/wechat_mp_main.json"
+_WECHAT_ACCOUNT = "main"
 
 
 def _reload_providers() -> str | None:
@@ -229,6 +235,83 @@ def clear_openai_image_base_url() -> dict[str, str | None]:
     delete_env_secret(_OPENAI_IMAGE_BASE_URL, _ENV_SECRETS_PATH)
     os.environ.pop(_OPENAI_IMAGE_BASE_URL, None)
     return {"base_url": None, "reload_error": _reload_providers()}
+
+
+# ── 微信公众号 AppID / AppSecret（只进草稿箱，不群发） ─────
+
+
+def _wechat_status() -> dict[str, Any]:
+    path = Path(_WECHAT_CREDENTIALS_PATH)
+    if not path.is_file():
+        return {"configured": False, "account": _WECHAT_ACCOUNT, "app_id_masked": None}
+    try:
+        app_id, _secret = load_wechat_credentials(path)
+    except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError):
+        return {"configured": False, "account": _WECHAT_ACCOUNT, "app_id_masked": None}
+    return {
+        "configured": True,
+        "account": _WECHAT_ACCOUNT,
+        "app_id_masked": mask(app_id),
+    }
+
+
+def _write_wechat_credentials(app_id: str, app_secret: str) -> None:
+    path = Path(_WECHAT_CREDENTIALS_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"app_id": app_id, "app_secret": app_secret}, ensure_ascii=False, indent=2) + "\n"
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        path.chmod(0o600)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+@router.get("/settings/wechat-mp")
+def get_wechat_mp() -> dict[str, Any]:
+    """Return whether WeChat credentials exist. Never returns the secret."""
+    return _wechat_status()
+
+
+@router.post("/settings/wechat-mp")
+def save_wechat_mp(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Save AppID/AppSecret to secrets/wechat_mp_main.json with mode 0600."""
+    if set(body) != {"app_id", "app_secret"}:
+        raise _err(400, "invalid_wechat_credentials", "request requires only app_id and app_secret")
+    app_id = body["app_id"]
+    app_secret = body["app_secret"]
+    if not isinstance(app_id, str) or not app_id.strip() or not isinstance(app_secret, str) or not app_secret.strip():
+        raise _err(400, "empty_wechat_credentials", "app_id and app_secret must be non-empty text")
+    _write_wechat_credentials(app_id.strip(), app_secret.strip())
+    return _wechat_status()
+
+
+@router.delete("/settings/wechat-mp")
+def clear_wechat_mp() -> dict[str, Any]:
+    """Delete the local WeChat credentials file."""
+    path = Path(_WECHAT_CREDENTIALS_PATH)
+    path.unlink(missing_ok=True)
+    return _wechat_status()
+
+
+@router.post("/settings/wechat-mp/probe")
+def probe_wechat_mp() -> dict[str, Any]:
+    """Try to fetch an access_token. Used to verify AppID/Secret and IP whitelist."""
+    status = _wechat_status()
+    if not status["configured"]:
+        return {"ok": False, "message": "还没有保存公众号 AppID 和 AppSecret。"}
+    app_id, app_secret = load_wechat_credentials(_WECHAT_CREDENTIALS_PATH)
+    try:
+        WechatMpPublisher(app_id=app_id, app_secret=app_secret)._ensure_access_token()
+    except Exception as error:
+        return {"ok": False, "message": str(error)}
+    return {"ok": True, "message": "已连上微信接口。当前 IP 通过白名单，可以继续把稿子送进草稿箱（不会群发）。"}
 
 
 # ── publish.enabled / allowed_platforms（发布总开关，用户明确要求

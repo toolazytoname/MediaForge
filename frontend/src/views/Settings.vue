@@ -10,7 +10,12 @@ import { useSettingsStore } from '../stores'
 import { storeToRefs } from 'pinia'
 
 const store = useSettingsStore()
-const { config, doctor, keyGroups, openaiImageBaseUrl, loading } = storeToRefs(store)
+const { config, doctor, keyGroups, openaiImageBaseUrl, wechatMp, loading } = storeToRefs(store)
+const wechatAppId = ref('')
+const wechatAppSecret = ref('')
+const wechatSaving = ref(false)
+const wechatProbing = ref(false)
+const wechatProbe = ref<{ ok: boolean; message: string } | null>(null)
 
 // 每个 key 名对应的输入框暂存值（不回填已保存的明文，只在提交时读取）
 const pendingValues = reactive<Record<string, string>>({})
@@ -22,7 +27,42 @@ onMounted(() => {
   store.load()
   store.loadKeys()
   store.loadOpenAIImageBaseUrl()
+  store.loadWechatMp()
 })
+
+async function onSaveWechat() {
+  if (!wechatAppId.value.trim() || !wechatAppSecret.value.trim()) return
+  wechatSaving.value = true
+  wechatProbe.value = null
+  try {
+    const ok = await store.saveWechatMp(wechatAppId.value.trim(), wechatAppSecret.value.trim())
+    if (ok) {
+      wechatAppId.value = ''
+      wechatAppSecret.value = ''
+    }
+  } finally {
+    wechatSaving.value = false
+  }
+}
+
+async function onClearWechat() {
+  wechatSaving.value = true
+  wechatProbe.value = null
+  try {
+    await store.clearWechatMp()
+  } finally {
+    wechatSaving.value = false
+  }
+}
+
+async function onProbeWechat() {
+  wechatProbing.value = true
+  try {
+    wechatProbe.value = await store.probeWechatMp()
+  } finally {
+    wechatProbing.value = false
+  }
+}
 
 async function onSave(name: string) {
   const value = pendingValues[name]?.trim()
@@ -147,6 +187,30 @@ async function onSavePlatforms() {
           </a-button>
         </div>
       </div>
+    </a-card>
+
+    <a-card title="微信公众号" style="margin-bottom: 16px">
+      <a-alert
+        type="info"
+        show-icon
+        style="margin-bottom: 16px"
+        message="只进草稿箱，不会群发。AppID / AppSecret 保存在本机 secrets/wechat_mp_main.json（权限 0600），不会写入 Git。家庭宽带需要把当前公网 IP 加进公众号后台的 IP 白名单。"
+      />
+      <p style="margin-bottom: 12px">
+        当前：
+        <a-tag v-if="wechatMp?.configured" color="green">已配置（{{ wechatMp.app_id_masked }}）</a-tag>
+        <a-tag v-else>未配置</a-tag>
+      </p>
+      <a-space direction="vertical" style="width: 100%">
+        <a-input v-model:value="wechatAppId" placeholder="AppID，wx 开头" autocomplete="off" />
+        <a-input-password v-model:value="wechatAppSecret" placeholder="AppSecret" autocomplete="new-password" />
+        <a-space>
+          <a-button type="primary" :loading="wechatSaving" :disabled="!wechatAppId.trim() || !wechatAppSecret.trim()" @click="onSaveWechat">保存凭据</a-button>
+          <a-button :loading="wechatProbing" :disabled="!wechatMp?.configured" @click="onProbeWechat">检查连通和白名单</a-button>
+          <a-button v-if="wechatMp?.configured" danger :loading="wechatSaving" @click="onClearWechat">清除</a-button>
+        </a-space>
+        <a-alert v-if="wechatProbe" :type="wechatProbe.ok ? 'success' : 'error'" show-icon :message="wechatProbe.message" />
+      </a-space>
     </a-card>
 
     <a-card title="API Key 配置" style="margin-bottom: 16px">

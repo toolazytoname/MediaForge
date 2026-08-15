@@ -88,13 +88,12 @@ const masterReady = computed(() => (master.value?.body.trim().length ?? 0) >= 80
 const visualsReady = computed(() => (visualPlan.value?.slots.length ?? 0) >= 3
   && (visualPlan.value?.slots.every(slot => visualPlan.value?.assets.some(asset => asset.slot_id === slot.id && asset.status === 'selected')) ?? false))
 const wechatVariant = computed(() => variants.value.find(item => item.platform === 'wechat_mp') ?? null)
-const toutiaoVariant = computed(() => variants.value.find(item => item.platform === 'toutiao') ?? null)
 const wechatReady = computed(() => Boolean(wechatVariant.value && wechatVariant.value.body.trim().length >= 600))
-const focusedPlatform = ref<'wechat_mp' | 'toutiao'>('wechat_mp')
+const focusedPlatform = ref<'wechat_mp'>('wechat_mp')
 const preparingPlatforms = ref(false)
 const activeTab = computed(() => {
   if (activeWorkbench.value === 'master') return 'article'
-  if (activeWorkbench.value === 'variants') return focusedPlatform.value === 'toutiao' ? 'toutiao' : 'wechat'
+  if (activeWorkbench.value === 'variants') return 'wechat'
   return 'more'
 })
 const xhsPreview = computed(() => {
@@ -148,9 +147,8 @@ async function preparePlatformDrafts(): Promise<void> {
   if (!projectId.value || preparingPlatforms.value) return
   preparingPlatforms.value = true
   try {
-    const prepared = await variantsStore.prepare(projectId.value)
-    variantForms.value = Object.fromEntries(prepared.variants.map(item => [item.platform, { title: item.title, summary: item.summary, body: item.body }]))
-    if (prepared.warnings.length) detailError.value = prepared.warnings.join('；')
+    const item = await variantsStore.create(projectId.value, 'wechat_mp', true)
+    variantForms.value = { ...variantForms.value, [item.platform]: { title: item.title, summary: item.summary, body: item.body } }
   } catch (error) {
     detailError.value = unwrapError(error)
   } finally {
@@ -158,10 +156,9 @@ async function preparePlatformDrafts(): Promise<void> {
   }
 }
 
-function openTab(tab: 'article' | 'wechat' | 'toutiao' | 'more'): void {
+function openTab(tab: 'article' | 'wechat' | 'more'): void {
   if (tab === 'article') activeWorkbench.value = 'master'
   else if (tab === 'wechat') { activeWorkbench.value = 'variants'; focusedPlatform.value = 'wechat_mp' }
-  else if (tab === 'toutiao') { activeWorkbench.value = 'variants'; focusedPlatform.value = 'toutiao' }
   else activeWorkbench.value = 'approval'
 }
 
@@ -235,7 +232,7 @@ async function composeArticle(): Promise<void> {
     await generateStandardVisualsForArticle()
     composeStage.value = ''
     if (route.query.auto === '1') {
-      composeStage.value = '正在按微信和头条的习惯改写'
+      composeStage.value = '正在准备微信公众号稿'
       await preparePlatformDrafts()
       activeWorkbench.value = 'variants'
       focusedPlatform.value = 'wechat_mp'
@@ -370,7 +367,7 @@ async function importVisual(event: Event, slot: VisualSlot): Promise<void> {
   catch (e) { detailError.value = unwrapError(e) }
   finally { importingSlot.value = null; input.value = '' }
 }
-function platformName(platform: PlatformVariant['platform']): string { return platform === 'wechat_mp' ? '微信公众号' : '今日头条' }
+function platformName(platform: PlatformVariant['platform']): string { return platform === 'wechat_mp' ? '微信公众号' : platform }
 function variantForm(platform: PlatformVariant['platform']): { title: string; summary: string; body: string } { return variantForms.value[platform] ?? { title: '', summary: '', body: '' } }
 async function createVariant(platform: PlatformVariant['platform'], adaptWithAi = false): Promise<void> { if (!projectId.value) return; variantGenerating.value = platform; try { const item = await variantsStore.create(projectId.value, platform, adaptWithAi); variantForms.value[item.platform] = { title: item.title, summary: item.summary, body: item.body }; await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } finally { variantGenerating.value = null } }
 async function saveVariant(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { const form = variantForm(item.platform); await variantsStore.save(projectId.value, item.platform, { ...form, asset_ids: item.asset_ids }); await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } }
@@ -487,7 +484,6 @@ watch(projectId, loadPage)
         <nav v-show="!composing" class="surface-tabs" aria-label="文章和平台">
           <button :class="{ active: activeTab === 'article' }" @click="openTab('article')">文章</button>
           <button :class="{ active: activeTab === 'wechat' }" @click="openTab('wechat')">微信</button>
-          <button :class="{ active: activeTab === 'toutiao' }" @click="openTab('toutiao')">头条</button>
           <button :class="{ active: activeTab === 'more' }" @click="openTab('more')">更多</button>
         </nav>
         <div v-if="activeTab === 'more'" class="more-sub">
@@ -534,8 +530,8 @@ watch(projectId, loadPage)
           <a-card v-if="draftProposal" title="待审阅的 AI 初稿" :bordered="false" class="draft-proposal"><h3>{{ draftProposal.title }}</h3><p class="proposal-copy">{{ draftProposal.body }}</p><div class="proposal-actions"><a-button type="primary" @click="useDraftProposal">放入编辑器继续修改</a-button><a-button @click="draftProposal = null">丢弃</a-button></div></a-card>
           <p class="master-count">{{ masterForm.body.trim().length }} 字 · {{ saveStatus || (masterSaving ? '保存中' : '已保存') }}</p>
           <div v-if="master?.body.trim() && !wechatVariant" class="draft-actions">
-            <div><strong>同一主题，按平台再写一版</strong><p class="muted">微信走长文阅读，头条更直接。两份稿互相独立，不会覆盖这篇文章。不会真实发布。</p></div>
-            <a-button type="primary" :loading="preparingPlatforms" @click="preparePlatformDrafts().then(() => openTab('wechat'))">生成微信和头条稿</a-button>
+            <div><strong>准备微信公众号稿</strong><p class="muted">从这篇主稿生成公众号阅读版。只进预览和草稿箱，不会群发。</p></div>
+            <a-button type="primary" :loading="preparingPlatforms" @click="preparePlatformDrafts().then(() => openTab('wechat'))">生成微信稿</a-button>
           </div>
           <ArticleWorkbench
             :title="masterForm.title"
@@ -567,9 +563,9 @@ watch(projectId, loadPage)
           <a-spin :spinning="visualsLoading"><a-card :bordered="false" class="visual-card"><a-form layout="vertical"><a-form-item label="视觉圣经"><a-textarea v-model:value="visualBible" :rows="3" placeholder="例如：风格: 克制的编辑插画\n色彩: 暖白纸张与墨蓝" /></a-form-item><div class="visual-slot-list"><article v-for="(slot, index) in visualSlots" :key="slot.id" class="visual-slot"><div class="slot-heading"><strong>{{ slot.purpose || `槽位 ${index + 1}` }}</strong><a-button type="link" danger size="small" @click="visualSlots.splice(index, 1)">移除</a-button></div><div class="form-pair"><a-form-item label="用途"><a-input v-model:value="slot.purpose" placeholder="封面 / 正文插图" /></a-form-item><a-form-item label="比例"><a-select v-model:value="slot.aspect_ratio"><a-select-option value="16:9">16:9 横图</a-select-option><a-select-option value="1:1">1:1 方图</a-select-option><a-select-option value="9:16">9:16 竖图</a-select-option><a-select-option value="4:3">4:3</a-select-option><a-select-option value="3:4">3:4</a-select-option></a-select></a-form-item></div><a-form-item label="对应段落（可选）"><a-input v-model:value="slot.paragraph_anchor" placeholder="例如：开头的核心问题" /></a-form-item><a-form-item label="画面方向"><a-textarea v-model:value="slot.direction" :rows="2" placeholder="这张图要帮助读者理解什么？" /></a-form-item><a-form-item label="生成或编辑提示词"><a-textarea v-model:value="visualPrompts[slot.id]" :rows="2" placeholder="显式点击后才会调用 GPT Image 2" /></a-form-item><div class="visual-actions"><a-button :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot)">生成候选</a-button></div><div v-if="visualPlan?.assets.filter(asset => asset.slot_id === slot.id).length" class="asset-list"><article v-for="asset in visualPlan.assets.filter(item => item.slot_id === slot.id).slice().reverse()" :key="asset.id" :class="['visual-asset', asset.status]"><div><a-tag :color="asset.status === 'selected' ? 'green' : asset.status === 'failed' ? 'red' : 'blue'">{{ asset.status === 'selected' ? '已选择' : asset.status === 'failed' ? '失败' : '候选' }}</a-tag><span>v{{ asset.version }} · {{ asset.model }} · 预估 ${{ asset.cost_usd.toFixed(2) }}</span></div><p>{{ asset.prompt }}</p><p v-if="asset.failure" class="failure">{{ asset.failure }}</p><div v-if="asset.status !== 'failed'" class="asset-actions"><a-button v-if="asset.status !== 'selected'" size="small" @click="selectVisual(asset.id)">选择</a-button><a-button size="small" :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot, asset.id)">基于此编辑</a-button></div></article></div></article></div><div class="visual-plan-actions"><a-button @click="addVisualSlot">添加插图槽位</a-button><a-button type="primary" :loading="visualSaving" @click="saveVisualPlan">保存视觉计划</a-button></div></a-form></a-card></a-spin>
         </section>
         <section v-if="activeWorkbench === 'variants'" class="variants-workbench">
-          <header class="section-heading"><div><p class="eyebrow">{{ focusedPlatform === 'wechat_mp' ? '微信公众号' : '今日头条' }}</p><h2>{{ focusedPlatform === 'wechat_mp' ? '按长文阅读来改这一版。' : '标题和开头更直接，信息更密。' }}</h2><p>这一版独立于主稿。改这里不会覆盖另一平台，也不会真实发布。</p></div></header>
+          <header class="section-heading"><div><p class="eyebrow">微信公众号</p><h2>先把这篇当成读者打开的文章。</h2><p>确认后可以检查公众号配置，再送进草稿箱。不会群发。</p></div></header>
           <a-alert v-if="variantsError" type="error" :message="variantsError" show-icon class="notice" />
-          <a-alert type="info" show-icon class="notice" message="本次只走阅读预览、Markdown 导出和安全交付。真实发布仍关闭：publish.enabled=false，且微信公众号不在发布白名单里。" />
+          <a-alert type="info" show-icon class="notice" message="公众号只进草稿箱，不会群发。先在本页或设置里保存 AppID / AppSecret，再检查当前 IP 是否在白名单。" />
           <div class="wechat-layout">
           <div v-if="wechatVariant && focusedPlatform === 'wechat_mp'" class="wechat-stage">
             <div>
@@ -581,12 +577,22 @@ watch(projectId, loadPage)
               </div>
             </div>
           </div>
-          <div v-else-if="toutiaoVariant && focusedPlatform === 'toutiao'" class="wechat-stage">
-            <WechatArticlePreview :html="variantPreviewHtml(toutiaoVariant)" caption="头条阅读预览 · 不是微信长文的复制" />
-          </div>
           <div>
-          <div class="variant-adapt"><div v-for="platform in ['wechat_mp', 'toutiao']" :key="`adapt-${platform}`"><strong>{{ platform === 'wechat_mp' ? '微信公众号' : '今日头条' }}</strong><a-button type="primary" :loading="variantGenerating === platform" :disabled="variants.some(item => item.platform === platform) || !master" @click="createVariant(platform as PlatformVariant['platform'], true)">AI 适配平台初稿</a-button></div><p class="muted">没有微信稿时，可以用 AI 适配或复制主稿。头条稿仍可创建，但不挡微信阅读。</p></div>
-          <a-spin :spinning="variantsLoading"><div class="variant-create"><a-button :loading="preparingPlatforms" :disabled="!master" @click="preparePlatformDrafts">生成或刷新双平台稿</a-button></div><p v-if="!master" class="muted">先有文章，才能生成平台稿。</p><div class="variant-list"><a-card v-for="item in variants.filter(variant => variant.platform === focusedPlatform)" :key="item.platform" :title="platformName(item.platform)" :bordered="false"><template #extra><a-tag v-if="item.locked" color="gold">已锁定</a-tag><a-tag v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" color="orange">主稿有更新</a-tag></template><a-alert v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" type="warning" show-icon message="主稿有更新。先解锁并人工合并必要修改，再点击“确认已合并当前主稿”；系统不会覆盖平台稿。" class="notice"/><a-form layout="vertical"><a-form-item label="标题"><a-input v-model:value="variantForm(item.platform).title" :disabled="item.locked" /></a-form-item><a-form-item label="摘要"><a-textarea v-model:value="variantForm(item.platform).summary" :rows="2" :disabled="item.locked" /></a-form-item><a-form-item label="正文"><a-textarea v-model:value="variantForm(item.platform).body" :rows="8" :disabled="item.locked" /></a-form-item><div class="variant-actions"><a-button type="primary" :disabled="item.locked" @click="saveVariant(item)">保存独立版本</a-button><a-button @click="toggleLock(item)">{{ item.locked ? '解锁编辑' : '锁定版本' }}</a-button><a-button @click="checkVariantUpstream(item)">检查主稿更新</a-button><a-button v-if="master && item.source_master_version !== master.version" :disabled="item.locked" @click="acknowledgeVariantMaster(item)">确认已合并当前主稿 v{{ master.version }}</a-button><a-button @click="previewVariant(item)">打开只读预览</a-button></div><p class="muted">源主稿 v{{ item.source_master_version }} · 平台版本 v{{ item.version }} · {{ item.manually_modified ? '已人工修改' : '尚未人工修改' }}</p><div v-if="item.history.length" class="variant-history"><span>历史版本：</span><a-button v-for="version in item.history" :key="version.version" size="small" :disabled="item.locked" @click="restoreVariant(item, version.version)">恢复 v{{ version.version }}</a-button></div></a-form></a-card></div></a-spin>
+          <div class="draft-actions">
+            <div>
+              <strong>公众号配置</strong>
+              <p class="muted">AppID / Secret 只存在本机。保存后点「检查连通」验证白名单。不要发到聊天里。</p>
+            </div>
+            <a-button @click="router.push('/settings')">打开设置填写</a-button>
+          </div>
+          <div class="variant-adapt">
+            <div>
+              <strong>微信公众号</strong>
+              <a-button type="primary" :loading="variantGenerating === 'wechat_mp' || preparingPlatforms" :disabled="!master" @click="createVariant('wechat_mp', true)">生成或刷新微信稿</a-button>
+            </div>
+            <p class="muted">先看阅读预览，再去设置里检查公众号连通，然后才能送进草稿箱。</p>
+          </div>
+          <a-spin :spinning="variantsLoading"><p v-if="!master" class="muted">先有文章，才能生成微信稿。</p><div class="variant-list"><a-card v-for="item in variants.filter(variant => variant.platform === focusedPlatform)" :key="item.platform" :title="platformName(item.platform)" :bordered="false"><template #extra><a-tag v-if="item.locked" color="gold">已锁定</a-tag><a-tag v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" color="orange">主稿有更新</a-tag></template><a-alert v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" type="warning" show-icon message="主稿有更新。先解锁并人工合并必要修改，再点击“确认已合并当前主稿”；系统不会覆盖平台稿。" class="notice"/><a-form layout="vertical"><a-form-item label="标题"><a-input v-model:value="variantForm(item.platform).title" :disabled="item.locked" /></a-form-item><a-form-item label="摘要"><a-textarea v-model:value="variantForm(item.platform).summary" :rows="2" :disabled="item.locked" /></a-form-item><a-form-item label="正文"><a-textarea v-model:value="variantForm(item.platform).body" :rows="8" :disabled="item.locked" /></a-form-item><div class="variant-actions"><a-button type="primary" :disabled="item.locked" @click="saveVariant(item)">保存独立版本</a-button><a-button @click="toggleLock(item)">{{ item.locked ? '解锁编辑' : '锁定版本' }}</a-button><a-button @click="checkVariantUpstream(item)">检查主稿更新</a-button><a-button v-if="master && item.source_master_version !== master.version" :disabled="item.locked" @click="acknowledgeVariantMaster(item)">确认已合并当前主稿 v{{ master.version }}</a-button><a-button @click="previewVariant(item)">打开只读预览</a-button></div><p class="muted">源主稿 v{{ item.source_master_version }} · 平台版本 v{{ item.version }} · {{ item.manually_modified ? '已人工修改' : '尚未人工修改' }}</p><div v-if="item.history.length" class="variant-history"><span>历史版本：</span><a-button v-for="version in item.history" :key="version.version" size="small" :disabled="item.locked" @click="restoreVariant(item, version.version)">恢复 v{{ version.version }}</a-button></div></a-form></a-card></div></a-spin>
           </div>
           </div>
         </section>

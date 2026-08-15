@@ -999,11 +999,52 @@ export const useSettingsStore = defineStore('settings', () => {
       return false
     }
   }
+  const wechatMp = ref<{ configured: boolean; account: string; app_id_masked: string | null } | null>(null)
+  async function loadWechatMp(): Promise<void> {
+    try {
+      const r = await api.get<{ configured: boolean; account: string; app_id_masked: string | null }>('/settings/wechat-mp')
+      wechatMp.value = r.data
+    } catch (e) {
+      message.error(`加载公众号配置失败：${unwrapError(e)}`)
+    }
+  }
+  async function saveWechatMp(appId: string, appSecret: string): Promise<boolean> {
+    try {
+      const r = await api.post<{ configured: boolean; account: string; app_id_masked: string | null }>('/settings/wechat-mp', { app_id: appId, app_secret: appSecret })
+      wechatMp.value = r.data
+      message.success('已保存公众号 AppID / AppSecret，只存在本机 secrets/')
+      return true
+    } catch (e) {
+      message.error(`保存失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  async function clearWechatMp(): Promise<boolean> {
+    try {
+      const r = await api.delete<{ configured: boolean; account: string; app_id_masked: string | null }>('/settings/wechat-mp')
+      wechatMp.value = r.data
+      message.success('已清除公众号凭据')
+      return true
+    } catch (e) {
+      message.error(`清除失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  async function probeWechatMp(): Promise<{ ok: boolean; message: string } | null> {
+    try {
+      const r = await api.post<{ ok: boolean; message: string }>('/settings/wechat-mp/probe', {})
+      return r.data
+    } catch (e) {
+      message.error(`检查失败：${unwrapError(e)}`)
+      return null
+    }
+  }
   return {
-    config, doctor, keyGroups, openaiImageBaseUrl, loading, error,
+    config, doctor, keyGroups, openaiImageBaseUrl, wechatMp, loading, error,
     load, loadKeys, saveKey, clearKey,
     loadOpenAIImageBaseUrl, saveOpenAIImageBaseUrl, clearOpenAIImageBaseUrl,
     setPublishEnabled, setPublishAllowedPlatforms,
+    loadWechatMp, saveWechatMp, clearWechatMp, probeWechatMp,
   }
 })
 

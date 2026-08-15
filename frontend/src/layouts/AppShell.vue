@@ -26,6 +26,7 @@ const primaryItems: ReadonlyArray<NavItem> = [
   { path: '/roadmap/library', label: '资产', icon: FileTextOutlined },
   { path: '/publish', label: '发布', icon: SendOutlined },
   { path: '/analytics', label: '复盘', icon: BarChartOutlined },
+  { path: '/settings', label: '设置', icon: SettingOutlined },
 ]
 
 const developerItems: ReadonlyArray<NavItem> = [

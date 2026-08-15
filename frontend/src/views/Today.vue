@@ -107,7 +107,7 @@ function onMetaEnter(event: KeyboardEvent): void {
       <div class="hero-copy">
         <p class="eyebrow">个人创作</p>
         <h1>写一篇完整的图文文章。</h1>
-        <p>先写图文。受控路径生成文章后你再改；全自动会继续准备微信和头条稿，仍然不会真实发布。</p>
+        <p>先写图文。受控路径生成文章后你再改；全自动会继续准备微信公众号稿，只进草稿箱，不会群发。</p>
       </div>
     </header>
 
@@ -145,7 +145,7 @@ function onMetaEnter(event: KeyboardEvent): void {
           生成文章
         </a-button>
         <a-button size="large" :loading="starting" :disabled="!canStart" @click="startArticle('auto')">
-          全自动准备双平台稿
+          全自动准备微信稿
         </a-button>
         <span>⌘/Ctrl + Enter 走受控生成</span>
       </div>
