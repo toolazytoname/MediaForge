@@ -44,6 +44,9 @@
 - [x] **UX-ARTICLE｜文章页改成阅读栏，并补上封面插图**  
   ✅ 完成于 2026-08-15，备注：文章 tab 收成阅读栏；最新稿用 Imagine 补了封面和两张插图。出图失败不再假装有图。
 
+- [x] **FIX-WHOLE｜整篇意见要真改全文**  
+  ✅ 完成于 2026-08-15，commit 55b32e6，备注：摘要会被拒；界面只看当前版本最新建议；文章页按钮已实地点过。
+
 ## 2026-08-12 产品定义访谈固化（已获批准，按新任务树实施）
 
 > 产品所有者在旧 P0 实施后仍明确表示不会使用，并进一步确认了新的个人创作、人工批注/diff、平台交付、自动化账号、作者定位和长期知识方向。新的事实源是 [2026-08-12-confirmed-product-definition.md](./product-validation/2026-08-12-confirmed-product-definition.md)，详细实施树是 [2026-08-12-confirmed-product-tasklist.md](./product-validation/2026-08-12-confirmed-product-tasklist.md)。
