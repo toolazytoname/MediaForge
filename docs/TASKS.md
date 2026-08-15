@@ -26,6 +26,9 @@
 - [x] **UX-RESTYLE｜写作页按 taste-skill 重做**  
   ✅ 完成于 2026-08-14，备注：去掉蚁小二紫和侧栏驾驶舱；写作 / 文章 / 设置改成冷色编辑工作台。
 
+- [x] **UX-TRIM｜拿掉复盘 / 发布 / 资产驾驶舱**  
+  ✅ 完成于 2026-08-14，备注：这三页不再进日常导航；打开只说明现在该去文章或微信稿。
+
 ## 2026-08-12 产品定义访谈固化（已获批准，按新任务树实施）
 
 > 产品所有者在旧 P0 实施后仍明确表示不会使用，并进一步确认了新的个人创作、人工批注/diff、平台交付、自动化账号、作者定位和长期知识方向。新的事实源是 [2026-08-12-confirmed-product-definition.md](./product-validation/2026-08-12-confirmed-product-definition.md)，详细实施树是 [2026-08-12-confirmed-product-tasklist.md](./product-validation/2026-08-12-confirmed-product-tasklist.md)。

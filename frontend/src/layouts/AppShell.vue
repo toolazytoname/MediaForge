@@ -17,8 +17,6 @@ const primaryItems: ReadonlyArray<NavItem> = [
 
 const moreItems: ReadonlyArray<NavItem> = [
   { path: '/ideas', label: '灵感' },
-  { path: '/publish', label: '发布' },
-  { path: '/analytics', label: '复盘' },
 ]
 
 const developerItems: ReadonlyArray<NavItem> = [
