@@ -19,25 +19,12 @@ const moreItems: ReadonlyArray<NavItem> = [
   { path: '/ideas', label: '灵感' },
 ]
 
-const developerItems: ReadonlyArray<NavItem> = [
-  { path: '/creation', label: '旧创作向导' },
-  { path: '/creation/video', label: '视频向导' },
-  { path: '/topics', label: '选题状态' },
-  { path: '/contents', label: '内容记录' },
-  { path: '/review', label: '审核状态' },
-  { path: '/runs', label: '运行状态' },
-  { path: '/accounts', label: '账号状态' },
-]
-
 const route = useRoute()
 const router = useRouter()
 const moreOpen = ref(false)
 const mobileOpen = ref(false)
-const developerOpen = ref(false)
 
-const moreActive = computed(() =>
-  [...moreItems, ...developerItems].some(item => isActive(item)),
-)
+const moreActive = computed(() => moreItems.some(item => isActive(item)))
 
 function isActive(item: NavItem): boolean {
   if (item.exact) return route.path === item.path
@@ -47,7 +34,6 @@ function isActive(item: NavItem): boolean {
 function go(path: string): void {
   moreOpen.value = false
   mobileOpen.value = false
-  developerOpen.value = false
   if (route.fullPath !== path) void router.push(path)
 }
 
@@ -97,21 +83,6 @@ function onMoreBlur(event: FocusEvent): void {
             >
               {{ item.label }}
             </button>
-            <button type="button" class="quiet" @click="developerOpen = !developerOpen">
-              {{ developerOpen ? '收起开发者' : '开发者工具' }}
-            </button>
-            <template v-if="developerOpen">
-              <button
-                v-for="item in developerItems"
-                :key="item.path"
-                type="button"
-                role="menuitem"
-                :class="{ active: isActive(item) }"
-                @click="go(item.path)"
-              >
-                {{ item.label }}
-              </button>
-            </template>
           </div>
         </div>
       </nav>
@@ -139,7 +110,6 @@ function onMoreBlur(event: FocusEvent): void {
       >
         {{ item.label }}
       </button>
-      <p>其余入口</p>
       <button
         v-for="item in moreItems"
         :key="item.path"
@@ -149,20 +119,6 @@ function onMoreBlur(event: FocusEvent): void {
       >
         {{ item.label }}
       </button>
-      <button type="button" class="quiet" @click="developerOpen = !developerOpen">
-        {{ developerOpen ? '收起开发者' : '开发者工具' }}
-      </button>
-      <template v-if="developerOpen">
-        <button
-          v-for="item in developerItems"
-          :key="item.path"
-          type="button"
-          :class="{ active: isActive(item) }"
-          @click="go(item.path)"
-        >
-          {{ item.label }}
-        </button>
-      </template>
     </div>
 
     <main id="main" class="stage">
@@ -245,20 +201,12 @@ function onMoreBlur(event: FocusEvent): void {
   position: absolute;
   top: calc(100% + 8px);
   left: 50%;
-  min-width: 168px;
+  min-width: 140px;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   transform: translateX(-50%);
-}
-
-.menu p,
-.sheet p {
-  margin: 10px 8px 4px;
-  color: var(--faint);
-  font-size: 11px;
-  letter-spacing: 0.06em;
 }
 
 .menu button,
@@ -279,11 +227,6 @@ function onMoreBlur(event: FocusEvent): void {
 .sheet button:hover,
 .sheet button.active {
   background: var(--wash);
-}
-
-.menu button.quiet,
-.sheet button.quiet {
-  color: var(--faint);
 }
 
 .burger {

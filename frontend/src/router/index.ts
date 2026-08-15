@@ -1,6 +1,6 @@
-// M11-A 路由：保留 M10-7 全部 11 真实页 + 占位路由；M11-A 新增 `/publish` 重定向
-// （M11-B 会把 `/publish` 替换为正式 PublishCenter 组件）
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+
+const later = () => import('../views/Later.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'today', component: () => import('../views/Today.vue') },
@@ -8,23 +8,19 @@ const routes: RouteRecordRaw[] = [
   { path: '/projects', name: 'projects', component: () => import('../views/Projects.vue') },
   { path: '/projects/new', name: 'project-create', component: () => import('../views/ProjectCreate.vue') },
   { path: '/projects/:id', name: 'project-detail', component: () => import('../views/Projects.vue') },
-  { path: '/topics', name: 'topics', component: () => import('../views/Topics.vue') },
-  { path: '/contents', name: 'contents', component: () => import('../views/Contents.vue') },
-  { path: '/contents/new', name: 'contents-new', component: () => import('../views/ManualEditor.vue') },
-  { path: '/contents/:id/edit', name: 'contents-edit', component: () => import('../views/ManualEditor.vue') },
-  { path: '/contents/:id', name: 'content-detail', component: () => import('../views/ContentDetail.vue') },
-  { path: '/review', name: 'review', component: () => import('../views/Review.vue') },
-  { path: '/creation', name: 'creation', component: () => import('../views/Creation.vue') },
-  // M12-3 视频创作 6 步向导（素材混剪/AI 生成视频/数字人口播）
-  { path: '/creation/video', name: 'creation-video', component: () => import('../views/CreationVideo.vue') },
-  { path: '/publish', name: 'publish', component: () => import('../views/Later.vue') },
-  { path: '/publish/calendar', name: 'publish-calendar', component: () => import('../views/Later.vue') },
-  { path: '/publish/records', name: 'publish-records', component: () => import('../views/Later.vue') },
-  { path: '/analytics', name: 'analytics', component: () => import('../views/Later.vue') },
-  { path: '/accounts', name: 'accounts', component: () => import('../views/Accounts.vue') },
-  { path: '/runs', name: 'runs', component: () => import('../views/Runs.vue') },
   { path: '/settings', name: 'settings', component: () => import('../views/Settings.vue') },
-  { path: '/roadmap/:feature', name: 'roadmap', component: () => import('../views/Later.vue') },
+  { path: '/publish', name: 'publish', component: later },
+  { path: '/publish/:pathMatch(.*)*', name: 'publish-legacy', component: later },
+  { path: '/analytics', name: 'analytics', component: later },
+  { path: '/roadmap/:feature', name: 'roadmap', component: later },
+  { path: '/topics', name: 'topics', component: later },
+  { path: '/contents/:pathMatch(.*)*', name: 'contents-legacy', component: later },
+  { path: '/contents', name: 'contents', component: later },
+  { path: '/review', name: 'review', component: later },
+  { path: '/creation/:pathMatch(.*)*', name: 'creation-legacy', component: later },
+  { path: '/creation', name: 'creation', component: later },
+  { path: '/accounts', name: 'accounts', component: later },
+  { path: '/runs', name: 'runs', component: later },
 ]
 
 export const router = createRouter({

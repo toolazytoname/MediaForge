@@ -22,11 +22,19 @@ const copy = computed(() => {
       to: '/',
     }
   }
+  if (route.path.startsWith('/roadmap')) {
+    return {
+      title: '资产库还没做',
+      body: '这篇文章用到的图，都在文章页的「配图」里。',
+      action: '打开文章',
+      to: '/projects',
+    }
+  }
   return {
-    title: '资产库还没做',
-    body: '这篇文章用到的图，都在文章页的「配图」里。',
-    action: '打开文章',
-    to: '/projects',
+    title: '旧入口已关掉',
+    body: '选题池、内容库、审核台和发布驾驶舱不再作为日常页面。现在从首页写文章。',
+    action: '回写作',
+    to: '/',
   }
 })
 </script>
