@@ -64,9 +64,12 @@ async function startArticle(mode: 'review' | 'auto' = 'review'): Promise<void> {
   starting.value = true
   startError.value = null
   try {
-    const project = await projectsStore.create({
-      title: titleFromInput(),
-      idea: [idea.value.trim() || topic.value.trim(), notes.value.trim() ? `作者提供的资料：\n${notes.value.trim()}` : ''].filter(Boolean).join('\n\n'),
+    const title = titleFromInput()
+    const ideaText = [idea.value.trim() || topic.value.trim(), notes.value.trim() ? `作者提供的资料：\n${notes.value.trim()}` : ''].filter(Boolean).join('\n\n')
+    const reusable = items.value.find(item => !item.has_master && item.title === title)
+    const project = reusable ?? await projectsStore.create({
+      title,
+      idea: ideaText,
       audience: '27—39 岁左右、正在用 AI 重建工作方式的知识工作者',
       goal: '完成一篇可在微信公众号发布的图文草稿',
       voice: '第一人称、诚实克制、具体、不喊口号',

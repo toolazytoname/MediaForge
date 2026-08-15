@@ -19,6 +19,16 @@ const visualsStore = useVisualsStore()
 const variantsStore = useVariantsStore()
 const approvalsStore = useApprovalsStore()
 const { items, total, loading, error } = storeToRefs(store)
+const listItems = computed(() => {
+  const titled = items.value
+  return titled.filter((item, index) => {
+    const sameTitle = titled.filter(other => other.title === item.title)
+    if (sameTitle.length === 1) return true
+    const withBody = sameTitle.filter(other => other.has_master)
+    if (withBody.length) return item.has_master === true && item.id === withBody[0].id
+    return item.id === sameTitle[0].id
+  })
+})
 const { board, loading: researchLoading, error: researchError } = storeToRefs(researchStore)
 const { master, suggestions, loading: masterLoading, error: masterError } = storeToRefs(masterStore)
 const { plan: visualPlan, provider: visualProvider, loading: visualsLoading, error: visualsError } = storeToRefs(visualsStore)
@@ -465,7 +475,7 @@ watch(projectId, loadPage)
       <a-button type="link" class="back" @click="router.push('/projects')"><ArrowLeftOutlined /> 全部项目</a-button>
       <a-alert v-if="detailError" type="error" :message="detailError" show-icon />
       <article v-if="project" class="project-workspace">
-        <header>
+        <header v-if="activeWorkbench !== 'master'">
           <p class="eyebrow">主题项目</p>
           <h1>{{ project.title }}</h1>
           <p class="idea">{{ project.idea }}</p>
@@ -615,10 +625,10 @@ watch(projectId, loadPage)
       <header class="list-header"><div><p class="eyebrow">项目</p><h1>每一个主题，都有一张自己的工作台。</h1><p>项目把想法、资料、主稿、视觉与平台版本放在同一条创作路径上。</p></div><a-button type="primary" @click="router.push('/projects/new')">新建项目</a-button></header>
       <a-alert v-if="error" type="error" :message="error" show-icon class="notice" />
       <a-spin :spinning="loading">
-        <div v-if="items.length" class="project-list"><button v-for="item in items" :key="item.id" class="project-row" @click="router.push(`/projects/${item.id}`)"><div><h2>{{ item.title }}</h2><p>{{ item.idea.length > 90 ? `${item.idea.slice(0, 90)}…` : item.idea }}</p><span>{{ item.has_master ? '已有正文' : '还没写成文章' }} · {{ formatDateTime(item.updated_at) }}</span></div><div class="row-meta"><time>{{ item.id }}</time><ArrowRightOutlined /></div></button></div>
+        <div v-if="listItems.length" class="project-list"><button v-for="item in listItems" :key="item.id" class="project-row" @click="router.push(`/projects/${item.id}`)"><div><h2>{{ item.title }}</h2><p>{{ item.idea.length > 90 ? `${item.idea.slice(0, 90)}…` : item.idea }}</p><span>{{ item.has_master ? '已有正文' : '还没写成文章' }} · {{ formatDateTime(item.updated_at) }}</span></div><div class="row-meta"><ArrowRightOutlined /></div></button></div>
         <a-empty v-else-if="!loading" description="还没有项目。下一步可以从一个真实主题开始。"><template #image><FolderOpenOutlined class="empty-icon" /></template></a-empty>
       </a-spin>
-      <p class="count" v-if="total">共 {{ total }} 个项目</p>
+      <p class="count" v-if="listItems.length">共 {{ listItems.length }} 个项目</p>
     </template>
   </section>
 </template>
