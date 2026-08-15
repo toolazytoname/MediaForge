@@ -74,6 +74,8 @@ const exporting = ref(false)
 const exportResult = ref<ProjectExportResult | null>(null)
 const composing = ref(false)
 const composeStage = ref('')
+const titleOptions = ref<string[]>([])
+const titlesLoading = ref(false)
 
 const unverifiedFacts = computed(() => board.value?.claims.filter(item => item.kind === 'fact' && (item.status === 'unverified' || !item.source_ids.length)) ?? [])
 const openQuestions = computed(() => board.value?.claims.filter(item => item.kind === 'open_question' && item.status === 'open') ?? [])
@@ -238,6 +240,8 @@ async function composeArticle(): Promise<void> {
   try {
     const article = await masterStore.compose(projectId.value)
     masterForm.value = { title: article.title, body: article.body }
+    composeStage.value = '正文已写出，正在按成稿起标题'
+    await suggestTitles()
     composeStage.value = '正文已写出，正在生成封面和插图'
     await generateStandardVisualsForArticle()
     composeStage.value = ''
@@ -265,6 +269,29 @@ async function composeArticle(): Promise<void> {
   } finally {
     composing.value = false
     composeStage.value = ''
+  }
+}
+
+async function suggestTitles(): Promise<void> {
+  if (!projectId.value || titlesLoading.value || !masterForm.value.body.trim()) return
+  titlesLoading.value = true
+  try {
+    titleOptions.value = await masterStore.proposeTitles(projectId.value)
+  } catch (e) {
+    detailError.value = unwrapError(e)
+  } finally {
+    titlesLoading.value = false
+  }
+}
+
+async function applyGeneratedTitle(title: string): Promise<void> {
+  if (!projectId.value || !title.trim()) return
+  try {
+    const updated = await masterStore.applyTitle(projectId.value, title.trim())
+    masterForm.value = { title: updated.title, body: updated.body }
+    if (project.value) project.value = { ...project.value, title: updated.title }
+  } catch (e) {
+    detailError.value = unwrapError(e)
   }
 }
 
@@ -533,7 +560,7 @@ watch(projectId, loadPage)
             <a-spin />
             <div>
               <strong>{{ composeStage || '正在生成文章' }}</strong>
-              <p class="muted">标题和你的想法已经留下。生成失败也不会清空它们。</p>
+              <p class="muted">先出正文。标题等文章写完再按成稿挑。</p>
             </div>
           </div>
           <div v-else-if="!master?.body.trim()" class="draft-actions">
@@ -553,12 +580,16 @@ watch(projectId, loadPage)
             :suggesting="suggestionSaving"
             :saving="masterSaving"
             :error="masterError"
+            :title-options="titleOptions"
+            :titles-loading="titlesLoading"
             @update:title="masterForm.title = $event"
             @update:body="masterForm.body = $event"
             @save="saveMaster"
             @request="requestSuggestion"
             @accept="acceptSuggestion"
             @reject="rejectSuggestion"
+            @request-titles="suggestTitles"
+            @apply-title="applyGeneratedTitle"
           />
           <details v-if="master" class="version-card">
             <summary>历史版本</summary>

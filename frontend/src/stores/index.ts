@@ -273,6 +273,19 @@ export const useMasterStore = defineStore('master', () => {
     return response.data
   }
 
+  async function proposeTitles(projectId: string): Promise<string[]> {
+    const response = await api.post<{ titles: string[] }>(
+      `/projects/${projectId}/master/titles`, {}, { timeout: GENERATION_TIMEOUT_MS },
+    )
+    return response.data.titles
+  }
+
+  async function applyTitle(projectId: string, title: string): Promise<MasterDocument> {
+    const response = await api.post<MasterDocument>(`/projects/${projectId}/master/title`, { title })
+    master.value = response.data
+    return response.data
+  }
+
   async function request(
     projectId: string,
     input: Pick<MasterSuggestion, 'action' | 'selection'> & { note?: string },
@@ -308,7 +321,7 @@ export const useMasterStore = defineStore('master', () => {
     return response.data
   }
 
-  return { master, suggestions, loading, error, load, save, proposeDraft, compose, request, accept, reject, restore }
+  return { master, suggestions, loading, error, load, save, proposeDraft, compose, proposeTitles, applyTitle, request, accept, reject, restore }
 })
 
 export const useVisualsStore = defineStore('visuals', () => {

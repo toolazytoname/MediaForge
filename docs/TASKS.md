@@ -38,6 +38,9 @@
 - [x] **WX-DRAFT｜把现有文章送进公众号草稿箱**  
   ✅ 完成于 2026-08-14，commit da5f706，备注：设置页「测试通」只验 token；文章页新增「送进草稿箱」。`prj_4699cd3c` 已真实 draft/add 成功（published=false，未群发）。
 
+- [x] **UX-TITLE｜标题改到成稿之后再选**  
+  ✅ 完成于 2026-08-15，备注：首页不再先挑标题；进文章页后按正文生成勾人候选。
+
 ## 2026-08-12 产品定义访谈固化（已获批准，按新任务树实施）
 
 > 产品所有者在旧 P0 实施后仍明确表示不会使用，并进一步确认了新的个人创作、人工批注/diff、平台交付、自动化账号、作者定位和长期知识方向。新的事实源是 [2026-08-12-confirmed-product-definition.md](./product-validation/2026-08-12-confirmed-product-definition.md)，详细实施树是 [2026-08-12-confirmed-product-tasklist.md](./product-validation/2026-08-12-confirmed-product-tasklist.md)。

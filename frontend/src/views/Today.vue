@@ -112,7 +112,7 @@ function openProject(id: string, focus: 'master' | 'wechat' = 'master'): void {
   <section class="home">
     <header class="intro">
       <h1>写一篇文章</h1>
-      <p>不用先起标题。把想法、链接或文件丢进来，先挑一个标题，再生成带封面和插图的草稿。</p>
+      <p>不用先起标题。把想法、链接或文件丢进来，直接生成正文。标题等文章出来再挑。</p>
     </header>
 
     <p v-if="error" class="banner bad">{{ error }}</p>

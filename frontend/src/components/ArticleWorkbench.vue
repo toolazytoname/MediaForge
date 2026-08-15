@@ -10,6 +10,8 @@ const props = defineProps<{
   suggesting: boolean
   saving: boolean
   error: string | null
+  titleOptions?: string[]
+  titlesLoading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -19,7 +21,11 @@ const emit = defineEmits<{
   request: [input: { action: MasterSuggestion['action']; selection: string | null; note?: string }]
   accept: [suggestion: MasterSuggestion]
   reject: [suggestion: MasterSuggestion]
+  'request-titles': []
+  'apply-title': [title: string]
 }>()
+
+const customTitle = ref('')
 
 type ArticleBlock = { id: string; text: string; kind: 'heading' | 'paragraph' | 'image' }
 
@@ -127,6 +133,34 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
     </div>
 
     <article v-else class="article">
+      <div class="title-picker">
+        <header>
+          <p>按这篇正文起标题</p>
+          <button type="button" class="text" :disabled="titlesLoading || !body.trim()" @click="emit('request-titles')">
+            {{ titlesLoading ? '正在起标题…' : titleOptions?.length ? '换一批' : '按正文起几个标题' }}
+          </button>
+        </header>
+        <div v-if="titleOptions?.length" class="title-options">
+          <button
+            v-for="option in titleOptions"
+            :key="option"
+            type="button"
+            :class="{ on: title === option }"
+            @click="emit('apply-title', option)"
+          >
+            {{ option }}
+          </button>
+          <label>
+            <input
+              v-model="customTitle"
+              type="text"
+              placeholder="自己写一个"
+              @keydown.enter="customTitle.trim() && emit('apply-title', customTitle.trim())"
+            />
+            <button type="button" :disabled="!customTitle.trim()" @click="emit('apply-title', customTitle.trim())">用这个</button>
+          </label>
+        </div>
+      </div>
       <h1 v-if="!body.trimStart().startsWith('# ')">{{ title }}</h1>
       <section
         v-for="block in blocks"
@@ -257,6 +291,59 @@ const actionLabel: Record<MasterSuggestion['action'], string> = {
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1.25;
+}
+
+.title-picker {
+  margin: 0 0 28px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.title-picker header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.title-picker p {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.title-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.title-options > button {
+  padding: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.title-options > button.on {
+  font-weight: 560;
+}
+
+.title-options label {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.title-options input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  background: transparent;
 }
 
 .block {

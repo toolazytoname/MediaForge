@@ -105,7 +105,7 @@ function writeFromSaved(idea: IdeaItem): void {
   <section class="ideas-page">
     <header>
       <h1>灵感</h1>
-      <p>先收下还没成形的一团东西。链接、文件、半句话都可以。准备好了再挑标题写成文章。</p>
+      <p>先收下还没成形的一团东西。链接、文件、半句话都可以。写成文章后，再按正文挑标题。</p>
     </header>
 
     <p v-if="formError" class="banner bad">{{ formError }}</p>

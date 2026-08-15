@@ -64,6 +64,16 @@ def test_heuristic_titles_are_distinct_and_usable():
     assert len(set(titles)) == len(titles)
 
 
+def test_article_title_prompt_reads_the_finished_body_not_the_dump():
+    prompt = intake.article_title_prompt(
+        body="## 问题\n\n测试全绿了，我还是不敢把链接发给朋友。\n\n## 主张\n\n绿的是测试，不是产品。",
+        idea="随便写点想法",
+    )
+    assert "成稿正文" in prompt
+    assert "绿的是测试，不是产品" in prompt
+    assert "禁止硬编" not in prompt or "正文为空" in intake.article_title_prompt(body="")
+
+
 def test_parse_titles_requires_three_clean_strings():
     parsed = intake.parse_titles('{"titles":[" 甲 ","乙","丙","丁"]}')
     assert parsed == ["甲", "乙", "丙", "丁"]

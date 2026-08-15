@@ -44,14 +44,8 @@ const urlDraft = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const preparing = ref(false)
 const prepareError = ref<string | null>(null)
-const titles = ref<string[]>([])
-const picked = ref('')
-const customTitle = ref('')
-const pendingMode = ref<'review' | 'auto'>('review')
 
 const canPrepare = computed(() => Boolean(idea.value.trim() || sources.value.length))
-const chosenTitle = computed(() => (picked.value === '__custom' ? customTitle.value.trim() : picked.value.trim()))
-const canCommit = computed(() => Boolean(chosenTitle.value))
 
 watch(() => props.initialIdea, value => {
   if (value && !idea.value) idea.value = value
@@ -144,11 +138,15 @@ function onMetaEnter(event: KeyboardEvent): void {
   }
 }
 
+function workingTitle(): string {
+  const line = idea.value.trim().split('\n').find(item => item.trim()) ?? ''
+  return line.slice(0, 36) || sources.value[0]?.title || '未命名文章'
+}
+
 async function prepare(mode: 'review' | 'auto'): Promise<void> {
   if (!canPrepare.value || preparing.value) return
   preparing.value = true
   prepareError.value = null
-  pendingMode.value = mode
   try {
     const form = new FormData()
     form.append('idea', idea.value)
@@ -156,7 +154,7 @@ async function prepare(mode: 'review' | 'auto'): Promise<void> {
       if (source.file) form.append('files', source.file, source.file.name)
       else if (source.reference.startsWith('http')) form.append('urls', source.reference)
     }
-    const response = await api.post<{ idea: string; titles: string[]; sources: IntakeSourceView[] }>(
+    const response = await api.post<{ idea: string; sources: IntakeSourceView[] }>(
       '/intake/prepare',
       form,
       { timeout: GENERATION_TIMEOUT_MS },
@@ -167,9 +165,12 @@ async function prepare(mode: 'review' | 'auto'): Promise<void> {
       return { ...item, file: previous?.file }
     })
     sources.value = extracted
-    titles.value = response.data.titles
-    picked.value = response.data.titles[0] ?? ''
-    customTitle.value = ''
+    emit('start', {
+      title: workingTitle(),
+      idea: idea.value.trim(),
+      sources: sources.value,
+      mode,
+    })
   } catch (error) {
     prepareError.value = unwrapError(error)
   } finally {
@@ -177,36 +178,20 @@ async function prepare(mode: 'review' | 'auto'): Promise<void> {
   }
 }
 
-function commit(): void {
-  if (!canCommit.value) return
-  emit('start', {
-    title: chosenTitle.value,
-    idea: idea.value.trim(),
-    sources: sources.value,
-    mode: pendingMode.value,
-  })
-}
-
 function save(): void {
   if (!canPrepare.value) return
   emit('save', { idea: idea.value.trim(), sources: sources.value })
 }
-
-function resetTitles(): void {
-  titles.value = []
-  picked.value = ''
-  customTitle.value = ''
-}
 </script>
 
 <template>
-  <form class="intake" @submit.prevent="titles.length ? commit() : prepare('review')">
+  <form class="intake" @submit.prevent="prepare('review')">
     <label class="dump">
       <span>想法和资料</span>
       <textarea
         v-model="idea"
         rows="8"
-        placeholder="不用起标题。把脑子里的判断、经历、问题丢进来。一篇公众号、一个网页、一段摘录，都可以。"
+        placeholder="不用起标题。把脑子里的判断、经历、问题丢进来。一篇公众号、一个网页、一段摘录，都可以。标题等正文出来再选。"
         @keydown="onMetaEnter"
       />
     </label>
@@ -246,46 +231,12 @@ function resetTitles(): void {
 
     <p v-if="prepareError" class="banner bad">{{ prepareError }}</p>
 
-    <div v-if="titles.length" class="titles">
-      <header>
-        <h2>选一个标题</h2>
-        <button type="button" class="text-btn" @click="resetTitles">返回改想法</button>
-      </header>
-      <p>后面写正文时会用你选的这个，不再另外起名。</p>
-      <label v-for="title in titles" :key="title" :class="{ on: picked === title }">
-        <input v-model="picked" type="radio" name="title" :value="title" />
-        <span>{{ title }}</span>
-      </label>
-      <label :class="{ on: picked === '__custom' }">
-        <input v-model="picked" type="radio" name="title" value="__custom" />
-        <input
-          v-model="customTitle"
-          type="text"
-          placeholder="自己写一个"
-          @focus="picked = '__custom'"
-        />
-      </label>
-    </div>
-
     <div class="actions">
-      <button
-        v-if="!titles.length"
-        type="submit"
-        class="primary"
-        :disabled="!canPrepare || preparing"
-      >
-        {{ preparing ? '正在读资料并想标题…' : '想几个标题' }}
+      <button type="submit" class="primary" :disabled="!canPrepare || preparing">
+        {{ preparing ? '正在读资料并开始写…' : '生成文章' }}
       </button>
       <button
-        v-else
-        type="submit"
-        class="primary"
-        :disabled="!canCommit"
-      >
-        {{ pendingMode === 'auto' ? '用这个标题准备微信稿' : '用这个标题写下去' }}
-      </button>
-      <button
-        v-if="showAutoAction && !titles.length"
+        v-if="showAutoAction"
         type="button"
         class="ghost"
         :disabled="!canPrepare || preparing"
@@ -294,7 +245,7 @@ function resetTitles(): void {
         准备微信稿
       </button>
       <button
-        v-if="showSaveAction && !titles.length"
+        v-if="showSaveAction"
         type="button"
         class="ghost"
         :disabled="!canPrepare || preparing"
@@ -302,7 +253,7 @@ function resetTitles(): void {
       >
         先收下
       </button>
-      <span v-if="!titles.length">⌘ / Ctrl + Enter</span>
+      <span>⌘ / Ctrl + Enter</span>
     </div>
   </form>
 </template>

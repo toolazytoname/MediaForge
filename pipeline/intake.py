@@ -234,22 +234,38 @@ def working_title(content: str, input_type: str = "thought") -> str:
 
 
 def title_prompt(idea: str, sources: Iterable[IntakeSource]) -> str:
-    source_block = "\n".join(
-        f"- [{item.kind}] {item.title} | {item.reference}\n  {item.excerpt[:500] or item.failure or '（无摘录）'}"
-        for item in sources
-    ) or "（无来源）"
-    return f"""你是中文资深编辑。作者还没有标题，只有一团想法和资料。请给出 4 个适合微信公众号的中文标题，让作者挑选。
+    """Legacy prompt kept for intake tests; titles should come from a finished article."""
+    return article_title_prompt(body="", idea=idea)
 
-作者写下的想法：
-{idea.strip() or "（作者只给了资料，没有另写想法）"}
 
-资料：
-{source_block}
+def article_title_prompt(*, body: str, idea: str = "") -> str:
+    excerpt = (body or "").strip()
+    if len(excerpt) > 4000:
+        excerpt = excerpt[:4000].rstrip() + "…"
+    return f"""你是微信公众号资深标题编辑。作者已经写完正文。标题必须从这篇成稿里长出来，不能只复述作者开写前的一团想法。
 
-规则：
-1. 每个标题 12—28 个字，具体、有判断，不鸡汤，不悬疑党，不用emoji。
-2. 不要编号，不要引号，不要解释。
-3. 只返回严格 JSON：{{"titles":["...","...","...","..."]}}。"""
+作者开写前的想法（只作背景，不是标题来源）：
+{idea.strip() or "（无）"}
+
+成稿正文：
+{excerpt or "（正文为空，禁止硬编）"}
+
+任务：给出 4 个会让目标读者停下来点开的中文标题。四个角度必须不同：
+1. 反差/冲突：正文里真实存在的张力（例如更快了却更喘不过气）
+2. 具体钩子：抽正文里的一句人话、一个细节或一个判断，不要空概念
+3. 疑问钩：正文里作者真正没想完的问题，不要假悬疑
+4. 克制主张：作者真正的判断，短、硬、不鸡汤
+
+硬钩子优先顺序（只许用正文里有的）：具体细节 → 冲突/反转 → 真实后果 → 疑问。
+标点可以谨慎用「」，：？！，不要堆。
+
+禁止：
+- 编造正文没有的数字、人名、公司、榜单、论文、「刚刚」「全球第一」「首个」
+- 鸡汤、口号、贩卖焦虑、故弄玄虚（「看完沉默了」「细思极恐」）
+- emoji、编号、引号包裹整句
+
+每个标题 14—28 个字。
+只返回严格 JSON：{{"titles":["...","...","...","..."]}}。"""
 
 
 def _pdf_text_and_title(data: bytes, fallback: str) -> tuple[str, str]:

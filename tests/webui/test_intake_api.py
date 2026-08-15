@@ -17,15 +17,7 @@ def client(tmp_path, monkeypatch):
     return TestClient(create_app())
 
 
-def test_prepare_returns_ai_titles_and_extracted_sources(client, monkeypatch):
-    monkeypatch.setattr(intake_api, "_llm_is_configured", lambda: True)
-    seen: dict[str, str] = {}
-
-    def fake_complete(prompt, **kwargs):
-        seen["prompt"] = prompt
-        return ["工具更快了，人为什么更喘不过气", "绿的是测试，不是产品", "我还是不敢用自己做的东西"]
-
-    monkeypatch.setattr(intake_api.llm, "complete_json", fake_complete)
+def test_prepare_extracts_sources_and_does_not_pick_a_title(client, monkeypatch):
     monkeypatch.setattr(
         intake_api.intake,
         "fetch_url_material",
@@ -49,24 +41,11 @@ def test_prepare_returns_ai_titles_and_extracted_sources(client, monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["titles"][0].startswith("工具更快了")
+    assert payload["titles"] == []
     kinds = {item["kind"] for item in payload["sources"]}
     assert kinds == {"wechat", "markdown"}
     wechat = next(item for item in payload["sources"] if item["kind"] == "wechat")
     assert wechat["excerpt"] == "公众号正文摘录。"
-    assert "作者还没有标题" in seen["prompt"]
-    assert "公众号正文摘录" in seen["prompt"]
-
-
-def test_prepare_without_llm_still_returns_usable_titles(client, monkeypatch):
-    monkeypatch.setattr(intake_api, "_llm_is_configured", lambda: False)
-
-    response = client.post("/api/v1/intake/prepare", data={"idea": "普通人怎样和 AI 一起重新建立工作"})
-
-    assert response.status_code == 200
-    titles = response.json()["titles"]
-    assert len(titles) >= 3
-    assert all(isinstance(item, str) and item.strip() for item in titles)
 
 
 def test_prepare_rejects_empty_intake(client):
@@ -75,9 +54,9 @@ def test_prepare_rejects_empty_intake(client):
     assert response.json()["detail"]["error"]["code"] == "invalid_intake"
 
 
-def test_compose_keeps_the_title_the_author_picked(client, tmp_path, monkeypatch):
+def test_titles_come_from_the_finished_article(client, tmp_path, monkeypatch):
     created = client.post("/api/v1/projects", json={
-        "title": "作者亲手挑的标题",
+        "title": "未命名文章",
         "idea": "一团还没整理的想法",
         "audience": "创作者",
         "goal": "一篇公众号草稿",
@@ -85,16 +64,34 @@ def test_compose_keeps_the_title_the_author_picked(client, tmp_path, monkeypatch
         "autonomy": "draft",
     })
     project_id = created.json()["id"]
+    client.put(f"/api/v1/projects/{project_id}/master", json={
+        "title": "工作标题",
+        "body": "## 问题\n\n测试全绿了，我还是不敢把链接发给朋友。\n\n## 主张\n\n绿的是测试，不是产品。",
+    })
+    seen: dict[str, str] = {}
+
+    def fake_complete(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return ["绿的是测试，不是产品", "测试全绿了，我还是不敢发出去", "我不敢把链接发给朋友"]
+
     monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
-    monkeypatch.setattr(
-        master_api.llm,
-        "complete_json",
-        lambda prompt, **kwargs: {"title": "模型自己起的标题", "body": "## 问题\n\n正文。"},
-    )
+    monkeypatch.setattr(master_api.llm, "complete_json", fake_complete)
 
-    response = client.post(f"/api/v1/projects/{project_id}/compose")
+    missing = client.post("/api/v1/projects/prj_missing/master/titles")
+    assert missing.status_code == 404
 
+    empty = client.post("/api/v1/projects/does-not/master/titles")
+    assert empty.status_code in {400, 404}
+
+    response = client.post(f"/api/v1/projects/{project_id}/master/titles")
     assert response.status_code == 200
-    assert response.json()["title"] == "作者亲手挑的标题"
-    stored = client.get(f"/api/v1/projects/{project_id}/master").json()["master"]
-    assert stored["title"] == "作者亲手挑的标题"
+    assert response.json()["titles"][0] == "绿的是测试，不是产品"
+    assert "绿的是测试，不是产品" in seen["prompt"]
+    assert "成稿正文" in seen["prompt"]
+
+    applied = client.post(f"/api/v1/projects/{project_id}/master/title", json={"title": "绿的是测试，不是产品"})
+    assert applied.status_code == 200
+    assert applied.json()["title"] == "绿的是测试，不是产品"
+    assert applied.json()["body"].startswith("## 问题")
+    listed = client.get("/api/v1/projects").json()["items"]
+    assert any(item["id"] == project_id and item["title"] == "绿的是测试，不是产品" for item in listed)

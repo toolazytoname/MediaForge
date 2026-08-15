@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+from pipeline import intake
 from pipeline import master_documents as master_store
 from pipeline import research as research_store
 from pipeline.creators import llm
@@ -109,15 +110,8 @@ def _draft_prompt(project_id: str) -> str:
         f" | limitation={item.limitation or 'none'} | counterpoint={item.counterpoint or 'none'}"
         for item in board.claims
     ) or "（无声明）"
-    chosen = project.title.strip()
-    title_rule = (
-        f"作者已选定标题：{chosen}。JSON 的 title 必须原样使用这个标题，不要另起。"
-        if chosen and chosen != "未命名文章"
-        else "请为这篇文章起一个具体、有判断的中文标题。"
-    )
     return f"""你是中文资深编辑。根据作者自己写下的想法和资料，写成一篇可直接阅读的图文初稿。不要发布，也不要声称已替作者确认。
-项目标题：{project.title}
-{title_rule}
+先写正文。JSON 的 title 只是工作标题，作者稍后会按成稿另选。
 作者写下的想法和资料：{project.idea}
 目标读者：{project.audience}
 发布目的：{project.goal}
@@ -138,24 +132,6 @@ def _draft_prompt(project_id: str) -> str:
 4. 外部事实首次出现时使用来源区提供的 Markdown 链接 `[来源标题](URL)`，文末附精简参考资料；不得虚构 URL，也不要为 local: 引用创建链接。
 5. 写成 1500—2500 字、结构清楚、有真实问题和明确主张的中文长文，使用 Markdown 二级标题。不要输出 [IMAGE: ...] 占位符。
 6. 只返回严格 JSON：{{"title":"...","body":"..."}}，不要代码围栏或额外文字。"""
-
-
-def _chosen_title(project_id: str) -> str:
-    try:
-        project = projects_api.project_store.load_project(project_id, projects_root=_root())
-    except projects_api.project_store.ProjectManifestError:
-        return ""
-    title = project.title.strip()
-    if not title or title == "未命名文章":
-        return ""
-    return title
-
-
-def _apply_chosen_title(project_id: str, draft: dict[str, str]) -> dict[str, str]:
-    title = _chosen_title(project_id)
-    if not title:
-        return draft
-    return {"title": title, "body": draft["body"]}
 
 
 def _generate_article(project_id: str) -> dict[str, str]:
@@ -202,7 +178,6 @@ def compose_article(project_id: str) -> dict[str, Any]:
     if existing is not None and existing.body.strip():
         raise _error(409, "master_already_exists", "this project already has an article; it was not overwritten")
     draft = _generate_article(project_id)
-    draft = _apply_chosen_title(project_id, draft)
     try:
         master = master_store.save_manual(
             project_id, title=draft["title"], body=draft["body"], now=_now(), projects_root=_root(),
@@ -244,6 +219,58 @@ def restore_master(project_id: str, version: int) -> dict[str, Any]:
         return _master_dict(master_store.restore_version(project_id, version, now=_now(), projects_root=_root())) or {}
     except master_store.MasterDocumentError as error:
         raise _master_error(project_id, error) from error
+
+
+@router.post("/projects/{project_id}/master/titles")
+def propose_titles(project_id: str) -> dict[str, Any]:
+    """Propose headlines from the finished article, never from the intake dump alone."""
+    try:
+        master = master_store.load_master(project_id, projects_root=_root())
+        project = projects_api.project_store.load_project(project_id, projects_root=_root())
+    except (master_store.MasterDocumentError, projects_api.project_store.ProjectManifestError) as error:
+        raise _master_error(project_id, error) if isinstance(error, master_store.MasterDocumentError) else _error(404, "project_not_found", error) from error
+    if master is None or not master.body.strip():
+        raise _error(400, "master_not_ready", "write the article first, then pick a title")
+    fallback = intake.heuristic_titles(master.body)
+    if not _llm_is_configured():
+        return {"titles": fallback, "source": "heuristic"}
+    try:
+        conn = deps.get_conn()
+        try:
+            titles = llm.complete_json(
+                intake.article_title_prompt(body=master.body, idea=project.idea),
+                stage="master_titles",
+                ref_id=project_id,
+                model_tier="cheap",
+                max_tokens=800,
+                conn=conn,
+                parse=intake.parse_titles,
+            )
+        finally:
+            conn.close()
+    except Exception:
+        titles = fallback
+    return {"titles": titles, "source": "model"}
+
+
+@router.post("/projects/{project_id}/master/title")
+def apply_title(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Replace only the title. Body is untouched."""
+    if set(body) != {"title"} or not isinstance(body.get("title"), str) or not body["title"].strip():
+        raise _error(400, "invalid_title", "request requires a non-empty title")
+    title = body["title"].strip()
+    try:
+        master = master_store.load_master(project_id, projects_root=_root())
+        if master is None:
+            raise master_store.MasterDocumentError(f"master not found: {project_id}")
+        updated = master_store.save_manual(
+            project_id, title=title, body=master.body, now=_now(), projects_root=_root(),
+        )
+        project = projects_api.project_store.load_project(project_id, projects_root=_root())
+        projects_api.project_store.update_project(project, title=title, now=_now(), projects_root=_root())
+        return _master_dict(updated) or {}
+    except (master_store.MasterDocumentError, projects_api.project_store.ProjectManifestError) as error:
+        raise _master_error(project_id, error) if isinstance(error, master_store.MasterDocumentError) else _error(400, "invalid_title", error) from error
 
 
 @router.get("/projects/{project_id}/master/suggestions")
