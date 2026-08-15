@@ -16,6 +16,7 @@ from pipeline.webui.api import (
     publish,
     projects,
     ideas,
+    intake,
     research,
     master_documents,
     review,
@@ -39,6 +40,7 @@ api_router.include_router(review.router)
 api_router.include_router(publish.router)
 api_router.include_router(projects.router)
 api_router.include_router(ideas.router)
+api_router.include_router(intake.router)
 api_router.include_router(research.router)
 api_router.include_router(master_documents.router)
 api_router.include_router(analytics.router)

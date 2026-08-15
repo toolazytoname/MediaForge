@@ -170,9 +170,9 @@ def test_compose_writes_master_from_author_idea_when_empty(client, tmp_path, mon
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["title"] == "工具更快了，人为什么更喘不过气"
+    assert payload["title"] == "API 项目"
     assert payload["version"] == 1
-    assert "作者写下的主题和想法" in seen["prompt"]
+    assert "作者写下的想法和资料" in seen["prompt"]
     stored = client.get("/api/v1/projects/prj_master/master").json()["master"]
     assert stored["body"].startswith("## 问题")
 

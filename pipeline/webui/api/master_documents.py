@@ -109,9 +109,16 @@ def _draft_prompt(project_id: str) -> str:
         f" | limitation={item.limitation or 'none'} | counterpoint={item.counterpoint or 'none'}"
         for item in board.claims
     ) or "（无声明）"
-    return f"""你是中文资深编辑。根据作者自己写下的主题和想法，写成一篇可直接阅读的图文初稿。不要发布，也不要声称已替作者确认。
+    chosen = project.title.strip()
+    title_rule = (
+        f"作者已选定标题：{chosen}。JSON 的 title 必须原样使用这个标题，不要另起。"
+        if chosen and chosen != "未命名文章"
+        else "请为这篇文章起一个具体、有判断的中文标题。"
+    )
+    return f"""你是中文资深编辑。根据作者自己写下的想法和资料，写成一篇可直接阅读的图文初稿。不要发布，也不要声称已替作者确认。
 项目标题：{project.title}
-作者写下的主题和想法：{project.idea}
+{title_rule}
+作者写下的想法和资料：{project.idea}
 目标读者：{project.audience}
 发布目的：{project.goal}
 声音：{project.voice}
@@ -126,11 +133,29 @@ def _draft_prompt(project_id: str) -> str:
 
 规则：
 1. 只把 status=verified 且有来源的 fact 当作确定事实；judgment 必须写成作者判断；open_question 不得伪装成结论。
-2. 若没有已核查来源，以作者写下的主题和想法为唯一依据；把它们写成作者的观察、问题和判断，不要编造成已经发生的具体经历、数据、引语或他人案例。
+2. 若没有已核查来源，以作者写下的想法和资料为唯一依据；把它们写成作者的观察、问题和判断，不要编造成已经发生的具体经历、数据、引语或他人案例。
 3. 不虚构数字、引语、案例或个人经历；保留限制与有力反方观点。不得展开想法里没有出现的家庭、财务或私密细节。
 4. 外部事实首次出现时使用来源区提供的 Markdown 链接 `[来源标题](URL)`，文末附精简参考资料；不得虚构 URL，也不要为 local: 引用创建链接。
 5. 写成 1500—2500 字、结构清楚、有真实问题和明确主张的中文长文，使用 Markdown 二级标题。不要输出 [IMAGE: ...] 占位符。
 6. 只返回严格 JSON：{{"title":"...","body":"..."}}，不要代码围栏或额外文字。"""
+
+
+def _chosen_title(project_id: str) -> str:
+    try:
+        project = projects_api.project_store.load_project(project_id, projects_root=_root())
+    except projects_api.project_store.ProjectManifestError:
+        return ""
+    title = project.title.strip()
+    if not title or title == "未命名文章":
+        return ""
+    return title
+
+
+def _apply_chosen_title(project_id: str, draft: dict[str, str]) -> dict[str, str]:
+    title = _chosen_title(project_id)
+    if not title:
+        return draft
+    return {"title": title, "body": draft["body"]}
 
 
 def _generate_article(project_id: str) -> dict[str, str]:
@@ -177,6 +202,7 @@ def compose_article(project_id: str) -> dict[str, Any]:
     if existing is not None and existing.body.strip():
         raise _error(409, "master_already_exists", "this project already has an article; it was not overwritten")
     draft = _generate_article(project_id)
+    draft = _apply_chosen_title(project_id, draft)
     try:
         master = master_store.save_manual(
             project_id, title=draft["title"], body=draft["body"], now=_now(), projects_root=_root(),

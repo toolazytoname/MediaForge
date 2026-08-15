@@ -193,7 +193,7 @@ export const useIdeasStore = defineStore('ideas', () => {
     }
   }
 
-  async function create(input: Pick<IdeaItem, 'input_type' | 'content' | 'title'>): Promise<IdeaItem> {
+  async function create(input: Pick<IdeaItem, 'input_type' | 'content'> & { title?: string }): Promise<IdeaItem> {
     const response = await apiPost<IdeaItem>('/ideas', input)
     return response.data
   }

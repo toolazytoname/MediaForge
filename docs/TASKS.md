@@ -32,6 +32,9 @@
 - [x] **UX-DELETE｜删除旧驾驶舱前端**  
   ✅ 完成于 2026-08-14，备注：删掉蚁小二式页面和开发者抽屉；后端流水线 API 未动。
 
+- [x] **UX-INTAKE｜想法不再拆标题，标题改成挑选**  
+  ✅ 完成于 2026-08-14，备注：写作/灵感合并成一团输入；可加公众号/网页/Markdown/PDF；AI 给几个标题再成文。
+
 ## 2026-08-12 产品定义访谈固化（已获批准，按新任务树实施）
 
 > 产品所有者在旧 P0 实施后仍明确表示不会使用，并进一步确认了新的个人创作、人工批注/diff、平台交付、自动化账号、作者定位和长期知识方向。新的事实源是 [2026-08-12-confirmed-product-definition.md](./product-validation/2026-08-12-confirmed-product-definition.md)，详细实施树是 [2026-08-12-confirmed-product-tasklist.md](./product-validation/2026-08-12-confirmed-product-tasklist.md)。

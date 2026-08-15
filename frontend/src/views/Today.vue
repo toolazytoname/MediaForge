@@ -1,41 +1,53 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { useProjectsStore, useVariantsStore, type ProjectItem } from '../stores'
+import ComposeIntake, { type IntakeCommit, type IntakeSourceView } from '../components/ComposeIntake.vue'
+import { useIdeasStore, useProjectsStore, useResearchStore, useVariantsStore, type ProjectItem } from '../stores'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 
-const DRAFT_KEY = 'mediaforge.home.draft'
-
+const route = useRoute()
 const router = useRouter()
 const projectsStore = useProjectsStore()
+const ideasStore = useIdeasStore()
+const researchStore = useResearchStore()
 const variantsStore = useVariantsStore()
 const { items, loading, error } = storeToRefs(projectsStore)
 const latestProject = computed(() => items.value[0] ?? null)
-const topic = ref('')
-const idea = ref('')
-const notes = ref('')
 const starting = ref(false)
 const startError = ref<string | null>(null)
 const latestHasWechat = ref(false)
 const readyWechat = ref<ProjectItem | null>(null)
+const seedIdea = ref('')
+const seedSources = ref<IntakeSourceView[]>([])
 
-const canStart = computed(() => Boolean(topic.value.trim() || idea.value.trim()))
+const DEFAULTS = {
+  audience: '27—39 岁左右、正在用 AI 重建工作方式的知识工作者',
+  goal: '完成一篇可在微信公众号发布的图文草稿',
+  voice: '第一人称、诚实克制、具体、不喊口号',
+}
 
 onMounted(async () => {
-  try {
-    const raw = localStorage.getItem(DRAFT_KEY)
-    if (raw) {
-      const draft = JSON.parse(raw) as { topic?: string; idea?: string; notes?: string }
-      topic.value = draft.topic ?? ''
-      idea.value = draft.idea ?? ''
-      notes.value = draft.notes ?? ''
-    }
-  } catch {
-    localStorage.removeItem(DRAFT_KEY)
-  }
   await projectsStore.load()
+  const seed = typeof route.query.seed === 'string' ? route.query.seed : ''
+  if (seed) {
+    await ideasStore.load()
+    const idea = ideasStore.items.find(item => item.id === seed)
+    if (idea) {
+      if (idea.input_type === 'url') {
+        seedSources.value = [{
+          kind: idea.content.includes('mp.weixin.qq.com') ? 'wechat' : 'web',
+          title: idea.title,
+          reference: idea.content,
+          excerpt: '',
+          failure: null,
+        }]
+      } else {
+        seedIdea.value = idea.content
+      }
+    }
+  }
   for (const project of items.value.slice(0, 6)) {
     await variantsStore.load(project.id)
     const wechat = variantsStore.variants.find(item => item.platform === 'wechat_mp' && item.body.trim().length >= 600)
@@ -46,35 +58,44 @@ onMounted(async () => {
   }
 })
 
-watch([topic, idea, notes], () => {
-  localStorage.setItem(DRAFT_KEY, JSON.stringify({ topic: topic.value, idea: idea.value, notes: notes.value }))
-})
-
-function titleFromInput(): string {
-  const heading = topic.value.trim()
-  if (heading) return heading
-  const firstLine = idea.value.trim().split('\n').find(line => line.trim()) ?? ''
-  return firstLine.slice(0, 36) || '未命名文章'
+function ideaText(payload: IntakeCommit): string {
+  const blocks = [payload.idea]
+  if (payload.sources.length) {
+    blocks.push('作者提供的资料：')
+    for (const source of payload.sources) {
+      const excerpt = source.excerpt.trim() || source.failure || source.reference
+      blocks.push(`- [${source.kind}] ${source.title}\n  ${excerpt.slice(0, 1600)}`)
+    }
+  }
+  return blocks.filter(Boolean).join('\n\n')
 }
 
-async function startArticle(mode: 'review' | 'auto' = 'review'): Promise<void> {
-  if (!canStart.value || starting.value) return
+async function startArticle(payload: IntakeCommit): Promise<void> {
+  if (starting.value) return
   starting.value = true
   startError.value = null
   try {
-    const title = titleFromInput()
-    const ideaText = [idea.value.trim() || topic.value.trim(), notes.value.trim() ? `作者提供的资料：\n${notes.value.trim()}` : ''].filter(Boolean).join('\n\n')
-    const reusable = items.value.find(item => !item.has_master && item.title === title)
+    const idea = ideaText(payload)
+    const reusable = items.value.find(item => !item.has_master && item.title === payload.title)
     const project = reusable ?? await projectsStore.create({
-      title,
-      idea: ideaText,
-      audience: '27—39 岁左右、正在用 AI 重建工作方式的知识工作者',
-      goal: '完成一篇可在微信公众号发布的图文草稿',
-      voice: '第一人称、诚实克制、具体、不喊口号',
-      autonomy: mode === 'auto' ? 'pack' : 'draft',
+      title: payload.title,
+      idea,
+      ...DEFAULTS,
+      autonomy: payload.mode === 'auto' ? 'pack' : 'draft',
     })
-    localStorage.removeItem(DRAFT_KEY)
-    await router.push(mode === 'auto' ? `/projects/${project.id}?compose=1&auto=1` : `/projects/${project.id}?compose=1`)
+    for (const source of payload.sources) {
+      const summary = (source.excerpt.trim() || source.failure || source.title).slice(0, 4000)
+      try {
+        await researchStore.addSource(project.id, {
+          title: source.title,
+          reference: source.reference,
+          summary: summary || source.title,
+        })
+      } catch {
+        // Sources stay in the project idea text even if the research sidecar rejects one item.
+      }
+    }
+    await router.push(payload.mode === 'auto' ? `/projects/${project.id}?compose=1&auto=1` : `/projects/${project.id}?compose=1`)
   } catch (err) {
     startError.value = unwrapError(err)
   } finally {
@@ -85,62 +106,25 @@ async function startArticle(mode: 'review' | 'auto' = 'review'): Promise<void> {
 function openProject(id: string, focus: 'master' | 'wechat' = 'master'): void {
   router.push(`/projects/${id}?focus=${focus}`)
 }
-
-function onMetaEnter(event: KeyboardEvent): void {
-  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-    event.preventDefault()
-    void startArticle('review')
-  }
-}
 </script>
 
 <template>
   <section class="home">
     <header class="intro">
       <h1>写一篇文章</h1>
-      <p>写下主题和想法，一次生成带封面和插图的完整草稿。改动都可审阅，不会静默覆盖。</p>
+      <p>不用先起标题。把想法、链接或文件丢进来，先挑一个标题，再生成带封面和插图的草稿。</p>
     </header>
 
     <p v-if="error" class="banner bad">{{ error }}</p>
     <p v-if="startError" class="banner bad">{{ startError }}</p>
+    <p v-if="starting" class="banner">正在用你选的标题开始写…</p>
 
-    <form class="compose" @submit.prevent="startArticle('review')">
-      <label>
-        主题
-        <input
-          v-model="topic"
-          type="text"
-          placeholder="例如：为什么测试全绿，我还是不敢用自己的产品"
-          @keydown="onMetaEnter"
-        />
-      </label>
-      <label>
-        你的想法
-        <textarea
-          v-model="idea"
-          rows="5"
-          placeholder="这段话可以不完整。写下你真正想说的判断、经历或还没想清楚的问题。"
-          @keydown="onMetaEnter"
-        />
-      </label>
-      <label>
-        <span class="label-row">资料 <em>可选</em></span>
-        <textarea
-          v-model="notes"
-          rows="3"
-          placeholder="粘贴笔记或摘录。今晚还不抓网页或 PDF。"
-        />
-      </label>
-      <div class="actions">
-        <button type="submit" class="primary" :disabled="!canStart || starting">
-          {{ starting ? '正在开始…' : '生成文章' }}
-        </button>
-        <button type="button" class="ghost" :disabled="!canStart || starting" @click="startArticle('auto')">
-          准备微信稿
-        </button>
-        <span>⌘ / Ctrl + Enter</span>
-      </div>
-    </form>
+    <ComposeIntake
+      :initial-idea="seedIdea"
+      :initial-sources="seedSources"
+      show-auto-action
+      @start="startArticle"
+    />
 
     <section v-if="latestProject || readyWechat" class="recent" aria-label="最近文章">
       <h2>最近</h2>
@@ -172,6 +156,10 @@ function onMetaEnter(event: KeyboardEvent): void {
   padding-top: 28px;
 }
 
+.intro {
+  margin-bottom: 32px;
+}
+
 .intro h1 {
   margin: 0 0 10px;
   font-size: clamp(32px, 5vw, 48px);
@@ -190,7 +178,7 @@ function onMetaEnter(event: KeyboardEvent): void {
 }
 
 .banner {
-  margin: 18px 0 0;
+  margin: 0 0 18px;
   padding: 10px 12px;
   border-radius: var(--radius);
   line-height: 1.55;
@@ -199,104 +187,6 @@ function onMetaEnter(event: KeyboardEvent): void {
 .banner.bad {
   background: var(--bad-wash);
   color: var(--bad);
-}
-
-.compose {
-  display: grid;
-  gap: 22px;
-  margin-top: 36px;
-}
-
-.compose label {
-  display: grid;
-  gap: 8px;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 560;
-}
-
-.compose .label-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.compose .label-row em {
-  color: var(--faint);
-  font-style: normal;
-  font-weight: 400;
-}
-
-.compose input,
-.compose textarea {
-  width: 100%;
-  padding: 12px 0;
-  border: 0;
-  border-bottom: 1px solid var(--line-strong);
-  border-radius: 0;
-  background: transparent;
-  color: var(--ink);
-  resize: vertical;
-}
-
-.compose input:focus,
-.compose textarea:focus {
-  outline: none;
-  border-bottom-color: var(--ink);
-}
-
-.compose textarea {
-  line-height: 1.7;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  margin-top: 8px;
-}
-
-.primary,
-.ghost {
-  height: 40px;
-  padding: 0 16px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 200ms var(--ease), transform 200ms var(--ease), opacity 200ms var(--ease);
-}
-
-.primary {
-  border: 0;
-  background: var(--ink);
-  color: var(--surface);
-}
-
-.ghost {
-  border: 1px solid var(--line-strong);
-  background: transparent;
-  color: var(--ink);
-}
-
-.primary:hover,
-.ghost:hover {
-  opacity: 0.92;
-}
-
-.primary:active,
-.ghost:active {
-  transform: scale(0.98);
-}
-
-.primary:disabled,
-.ghost:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-.actions span {
-  color: var(--faint);
-  font-size: 12px;
 }
 
 .recent {
