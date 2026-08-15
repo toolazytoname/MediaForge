@@ -475,7 +475,7 @@ watch(projectId, loadPage)
       <a-button type="link" class="back" @click="router.push('/projects')"><ArrowLeftOutlined /> 全部项目</a-button>
       <a-alert v-if="detailError" type="error" :message="detailError" show-icon />
       <article v-if="project" class="project-workspace">
-        <header v-if="activeWorkbench !== 'master'">
+        <header v-if="activeWorkbench !== 'master' && activeWorkbench !== 'variants'">
           <p class="eyebrow">主题项目</p>
           <h1>{{ project.title }}</h1>
           <p class="idea">{{ project.idea }}</p>
