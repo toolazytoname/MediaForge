@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useSettingsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult } from '../stores'
+import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useSettingsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck } from '../stores'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 import { renderMarkdown } from '../utils/markdown'
@@ -32,7 +32,7 @@ const listItems = computed(() => {
 const { board, loading: researchLoading, error: researchError } = storeToRefs(researchStore)
 const { master, suggestions, error: masterError } = storeToRefs(masterStore)
 const { plan: visualPlan, provider: visualProvider, loading: visualsLoading, error: visualsError } = storeToRefs(visualsStore)
-const { variants, loading: variantsLoading, error: variantsError } = storeToRefs(variantsStore)
+const { variants, error: variantsError } = storeToRefs(variantsStore)
 const { status: approvalStatus, loading: approvalsLoading, error: approvalsError } = storeToRefs(approvalsStore)
 const project = ref<ProjectItem | null>(null)
 const detailError = ref<string | null>(null)
@@ -71,8 +71,6 @@ const draftGenerating = ref(false)
 const draftProposal = ref<MasterDraftProposal | null>(null)
 const importingSlot = ref<string | null>(null)
 const variantGenerating = ref<string | null>(null)
-const exporting = ref(false)
-const exportResult = ref<ProjectExportResult | null>(null)
 const composing = ref(false)
 const composeStage = ref('')
 const titleOptions = ref<string[]>([])
@@ -96,16 +94,6 @@ const activeTab = computed(() => {
   if (activeWorkbench.value === 'variants') return 'wechat'
   return 'more'
 })
-const xhsPreview = computed(() => {
-  const text = masterForm.value.body.replace(/!\[[^\]]*\]\([^)]+\)/g, '').replace(/^#+\s+/gm, '').trim()
-  const images = (visualPlan.value?.assets ?? []).filter(asset => asset.status === 'selected' && visualAssetUrl(asset)).slice(0, 9)
-  return {
-    title: (masterForm.value.title || project.value?.title || '未命名').slice(0, 20),
-    caption: text.slice(0, 220),
-    images,
-  }
-})
-
 async function loadPage(): Promise<void> {
   detailError.value = null
   project.value = null
@@ -415,10 +403,7 @@ function platformName(platform: PlatformVariant['platform']): string { return pl
 function variantForm(platform: PlatformVariant['platform']): { title: string; summary: string; body: string } { return variantForms.value[platform] ?? { title: '', summary: '', body: '' } }
 async function createVariant(platform: PlatformVariant['platform'], adaptWithAi = false): Promise<void> { if (!projectId.value) return; variantGenerating.value = platform; try { const item = await variantsStore.create(projectId.value, platform, adaptWithAi); variantForms.value[item.platform] = { title: item.title, summary: item.summary, body: item.body }; await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } finally { variantGenerating.value = null } }
 async function saveVariant(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { const form = variantForm(item.platform); await variantsStore.save(projectId.value, item.platform, { ...form, asset_ids: item.asset_ids }); await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } }
-async function toggleLock(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { await variantsStore.lock(projectId.value, item.platform, !item.locked); await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } }
-async function checkVariantUpstream(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { await variantsStore.checkUpstream(projectId.value, item.platform) } catch (e) { detailError.value = unwrapError(e) } }
-async function acknowledgeVariantMaster(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { const updated = await variantsStore.acknowledgeMaster(projectId.value, item.platform); variantForms.value[item.platform] = { title: updated.title, summary: updated.summary, body: updated.body }; await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } }
-async function restoreVariant(item: PlatformVariant, version: number): Promise<void> { if (!projectId.value) return; try { const updated = await variantsStore.restore(projectId.value, item.platform, version); variantForms.value[item.platform] = { title: updated.title, summary: updated.summary, body: updated.body }; await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } }
+
 function previewVariant(item: PlatformVariant): void { if (!projectId.value) return; window.open(`/api/v1/projects/${projectId.value}/variants/${item.platform}/preview`, '_blank', 'noopener') }
 function variantPreviewHtml(item: PlatformVariant): string {
   const form = variantForm(item.platform)
@@ -476,8 +461,6 @@ function downloadVariantMarkdown(item: PlatformVariant): void {
 const approvalLabel: Record<ApprovalCheck['id'], string> = { master: '主稿内容与事实边界', visuals: '已选封面与插图', wechat_mp: '微信公众号版本', toutiao: '头条版本' }
 async function recheckApproval(): Promise<void> { if (!projectId.value) return; const actor = approvalActor.value.trim(); if (!actor) { detailError.value = '请填写真实审批人或角色。'; return } try { await approvalsStore.recheck(projectId.value, actor) } catch (e) { detailError.value = unwrapError(e) } }
 async function decideApproval(check: ApprovalCheck, approved: boolean): Promise<void> { if (!projectId.value) return; const actor = approvalActor.value.trim(); if (!actor) { detailError.value = '请填写真实审批人或角色。'; return } try { await approvalsStore.decide(projectId.value, check.id, approved, actor, approvalNotes.value[check.id]?.trim() || undefined); approvalNotes.value[check.id] = '' } catch (e) { detailError.value = unwrapError(e) } }
-async function exportPackage(): Promise<void> { if (!projectId.value) return; exporting.value = true; try { exportResult.value = await approvalsStore.exportPackage(projectId.value) } catch (e) { detailError.value = unwrapError(e) } finally { exporting.value = false } }
-
 function updateStatusForKind(): void {
   claimForm.value.status = claimForm.value.kind === 'open_question' ? 'open' : 'unverified'
 }
@@ -624,48 +607,51 @@ watch(projectId, loadPage)
           <a-spin :spinning="visualsLoading"><a-card :bordered="false" class="visual-card"><a-form layout="vertical"><a-form-item label="视觉圣经"><a-textarea v-model:value="visualBible" :rows="3" placeholder="例如：风格: 克制的编辑插画\n色彩: 暖白纸张与墨蓝" /></a-form-item><div class="visual-slot-list"><article v-for="(slot, index) in visualSlots" :key="slot.id" class="visual-slot"><div class="slot-heading"><strong>{{ slot.purpose || `槽位 ${index + 1}` }}</strong><a-button type="link" danger size="small" @click="visualSlots.splice(index, 1)">移除</a-button></div><div class="form-pair"><a-form-item label="用途"><a-input v-model:value="slot.purpose" placeholder="封面 / 正文插图" /></a-form-item><a-form-item label="比例"><a-select v-model:value="slot.aspect_ratio"><a-select-option value="16:9">16:9 横图</a-select-option><a-select-option value="1:1">1:1 方图</a-select-option><a-select-option value="9:16">9:16 竖图</a-select-option><a-select-option value="4:3">4:3</a-select-option><a-select-option value="3:4">3:4</a-select-option></a-select></a-form-item></div><a-form-item label="对应段落（可选）"><a-input v-model:value="slot.paragraph_anchor" placeholder="例如：开头的核心问题" /></a-form-item><a-form-item label="画面方向"><a-textarea v-model:value="slot.direction" :rows="2" placeholder="这张图要帮助读者理解什么？" /></a-form-item><a-form-item label="生成或编辑提示词"><a-textarea v-model:value="visualPrompts[slot.id]" :rows="2" placeholder="显式点击后才会调用 GPT Image 2" /></a-form-item><div class="visual-actions"><a-button :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot)">生成候选</a-button></div><div v-if="visualPlan?.assets.filter(asset => asset.slot_id === slot.id).length" class="asset-list"><article v-for="asset in visualPlan.assets.filter(item => item.slot_id === slot.id).slice().reverse()" :key="asset.id" :class="['visual-asset', asset.status]"><div><a-tag :color="asset.status === 'selected' ? 'green' : asset.status === 'failed' ? 'red' : 'blue'">{{ asset.status === 'selected' ? '已选择' : asset.status === 'failed' ? '失败' : '候选' }}</a-tag><span>v{{ asset.version }} · {{ asset.model }} · 预估 ${{ asset.cost_usd.toFixed(2) }}</span></div><p>{{ asset.prompt }}</p><p v-if="asset.failure" class="failure">{{ asset.failure }}</p><div v-if="asset.status !== 'failed'" class="asset-actions"><a-button v-if="asset.status !== 'selected'" size="small" @click="selectVisual(asset.id)">选择</a-button><a-button size="small" :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot, asset.id)">基于此编辑</a-button></div></article></div></article></div><div class="visual-plan-actions"><a-button @click="addVisualSlot">添加插图槽位</a-button><a-button type="primary" :loading="visualSaving" @click="saveVisualPlan">保存视觉计划</a-button></div></a-form></a-card></a-spin>
         </section>
         <section v-if="activeWorkbench === 'variants'" class="variants-workbench">
-          <header class="section-heading"><div><h2>微信公众号</h2><p>先看读者会打开的样子。选一个已绑定的号，送进它的草稿箱。不会群发。</p></div></header>
+          <header class="section-heading"><div><h2>微信公众号</h2><p>预览 → 选号 → 送进该号草稿箱。群发请到微信后台手动点。</p></div></header>
           <a-alert v-if="variantsError" type="error" :message="variantsError" show-icon class="notice" />
-          <a-alert type="info" show-icon class="notice" message="群发请到微信公众平台草稿箱里手动点发布。这里只送草稿，也不会自动换号。" />
           <div class="wechat-layout">
-          <div v-if="wechatVariant && focusedPlatform === 'wechat_mp'" class="wechat-stage">
+          <div v-if="wechatVariant" class="wechat-stage">
+            <WechatArticlePreview :html="variantPreviewHtml(wechatVariant)" caption="读者打开后会看到的样子" />
+          </div>
+          <div v-else class="draft-actions">
             <div>
-              <WechatArticlePreview :html="variantPreviewHtml(wechatVariant)" caption="微信公众号阅读预览 · 封面和插图来自已选视觉资产" />
-              <label class="account-pick">
-                送到哪个公众号
-                <select v-model="wechatAccountId">
-                  <option v-if="!wechatAccounts.length" value="" disabled>还没有绑定账号</option>
-                  <option v-for="account in wechatAccounts" :key="account.id" :value="account.id">
-                    {{ account.label }}（{{ account.app_id_masked }}）
-                  </option>
-                </select>
-              </label>
+              <strong>还没有微信稿</strong>
+              <p class="muted">从这篇主稿生成公众号阅读版。只进预览和草稿箱。</p>
+            </div>
+            <a-button type="primary" :loading="variantGenerating === 'wechat_mp' || preparingPlatforms" :disabled="!master" @click="createVariant('wechat_mp', true)">生成微信稿</a-button>
+          </div>
+          <aside v-if="wechatVariant" class="wechat-send">
+            <label class="account-pick">
+              送到哪个公众号
+              <select v-model="wechatAccountId">
+                <option v-if="!wechatAccounts.length" value="" disabled>还没有绑定账号</option>
+                <option v-for="account in wechatAccounts" :key="account.id" :value="account.id">
+                  {{ account.label }}（{{ account.app_id_masked }}）
+                </option>
+              </select>
+            </label>
+            <div class="wechat-actions">
+              <a-button type="primary" :loading="sendingDraft" :disabled="!wechatAccounts.length" @click="sendWechatDraft">送进草稿箱</a-button>
+              <a-button @click="router.push('/settings')">管理账号</a-button>
+            </div>
+            <p v-if="draftSendError" class="banner bad">{{ draftSendError }}</p>
+            <p v-else-if="draftReceipt" class="banner">{{ draftReceipt.message }}</p>
+            <p class="muted">头条和小红书还没接。下一轮再按各自形态做。</p>
+            <details class="wechat-more">
+              <summary>改这篇微信稿</summary>
               <div class="wechat-actions">
-                <a-button type="primary" :loading="sendingDraft" :disabled="!wechatVariant || !wechatAccounts.length" @click="sendWechatDraft">送进草稿箱</a-button>
+                <a-button :loading="variantGenerating === 'wechat_mp'" @click="createVariant('wechat_mp', true)">按主稿刷新</a-button>
                 <a-button @click="previewVariant(wechatVariant)">全屏预览</a-button>
                 <a-button @click="downloadVariantMarkdown(wechatVariant)">导出 Markdown</a-button>
               </div>
-              <p v-if="draftSendError" class="banner bad">{{ draftSendError }}</p>
-              <p v-else-if="draftReceipt" class="banner">{{ draftReceipt.message }} 草稿 media_id：{{ draftReceipt.media_id }}</p>
-            </div>
-          </div>
-          <div>
-          <div class="draft-actions">
-            <div>
-              <strong>公众号配置</strong>
-              <p class="muted">AppID / Secret 只存在本机。保存后点「检查连通」验证白名单。不要发到聊天里。</p>
-            </div>
-            <a-button @click="router.push('/settings')">打开设置填写</a-button>
-          </div>
-          <div class="variant-adapt">
-            <div>
-              <strong>微信公众号</strong>
-              <a-button type="primary" :loading="variantGenerating === 'wechat_mp' || preparingPlatforms" :disabled="!master" @click="createVariant('wechat_mp', true)">生成或刷新微信稿</a-button>
-            </div>
-            <p class="muted">先看阅读预览，再去设置里检查公众号连通，然后才能送进草稿箱。</p>
-          </div>
-          <a-spin :spinning="variantsLoading"><p v-if="!master" class="muted">先有文章，才能生成微信稿。</p><div class="variant-list"><a-card v-for="item in variants.filter(variant => variant.platform === focusedPlatform)" :key="item.platform" :title="platformName(item.platform)" :bordered="false"><template #extra><a-tag v-if="item.locked" color="gold">已锁定</a-tag><a-tag v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" color="orange">主稿有更新</a-tag></template><a-alert v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" type="warning" show-icon message="主稿有更新。先解锁并人工合并必要修改，再点击“确认已合并当前主稿”；系统不会覆盖平台稿。" class="notice"/><a-form layout="vertical"><a-form-item label="标题"><a-input v-model:value="variantForm(item.platform).title" :disabled="item.locked" /></a-form-item><a-form-item label="摘要"><a-textarea v-model:value="variantForm(item.platform).summary" :rows="2" :disabled="item.locked" /></a-form-item><a-form-item label="正文"><a-textarea v-model:value="variantForm(item.platform).body" :rows="8" :disabled="item.locked" /></a-form-item><div class="variant-actions"><a-button type="primary" :disabled="item.locked" @click="saveVariant(item)">保存独立版本</a-button><a-button @click="toggleLock(item)">{{ item.locked ? '解锁编辑' : '锁定版本' }}</a-button><a-button @click="checkVariantUpstream(item)">检查主稿更新</a-button><a-button v-if="master && item.source_master_version !== master.version" :disabled="item.locked" @click="acknowledgeVariantMaster(item)">确认已合并当前主稿 v{{ master.version }}</a-button><a-button @click="previewVariant(item)">打开只读预览</a-button></div><p class="muted">源主稿 v{{ item.source_master_version }} · 平台版本 v{{ item.version }} · {{ item.manually_modified ? '已人工修改' : '尚未人工修改' }}</p><div v-if="item.history.length" class="variant-history"><span>历史版本：</span><a-button v-for="version in item.history" :key="version.version" size="small" :disabled="item.locked" @click="restoreVariant(item, version.version)">恢复 v{{ version.version }}</a-button></div></a-form></a-card></div></a-spin>
-          </div>
+              <a-form layout="vertical">
+                <a-form-item label="标题"><a-input v-model:value="variantForm('wechat_mp').title" :disabled="wechatVariant.locked" /></a-form-item>
+                <a-form-item label="摘要"><a-textarea v-model:value="variantForm('wechat_mp').summary" :rows="2" :disabled="wechatVariant.locked" /></a-form-item>
+                <a-form-item label="正文"><a-textarea v-model:value="variantForm('wechat_mp').body" :rows="8" :disabled="wechatVariant.locked" /></a-form-item>
+                <a-button type="primary" :disabled="wechatVariant.locked" @click="saveVariant(wechatVariant)">保存</a-button>
+              </a-form>
+            </details>
+          </aside>
           </div>
         </section>
         <section v-show="activeWorkbench === 'approval'" class="approval-workbench">
@@ -673,28 +659,6 @@ watch(projectId, loadPage)
           <a-alert v-if="approvalsError" type="error" :message="approvalsError" show-icon class="notice" />
           <div class="approval-actor"><label for="approval-actor">真实审批人或角色</label><a-input id="approval-actor" v-model:value="approvalActor" placeholder="例如：张三 / Codex 自测（受用户委托）" /></div>
           <a-spin :spinning="approvalsLoading"><a-card :bordered="false" class="approval-card"><a-alert v-if="approvalStatus?.blockers.length" type="warning" show-icon :message="`尚不可审批：${approvalStatus?.blockers.join('；')}`" class="notice"/><a-alert v-else-if="approvalStatus?.stale" type="warning" show-icon message="上游内容已改变，请重新检查。历史批准不会被静默沿用；所有批准与撤回动作已暂停。" class="notice"/><div class="approval-actions"><a-button type="primary" @click="recheckApproval">重新检查内容包</a-button></div><div v-if="approvalStatus?.approval.checks.length" class="approval-list"><article v-for="check in approvalStatus.approval.checks" :key="check.id"><div><strong>{{ approvalLabel[check.id] }}</strong><p>{{ check.status === 'approved' ? `已由 ${check.approved_by} 批准` : '待人工检查' }}</p><small v-if="check.note">当前备注：{{ check.note }}</small></div><div class="approval-decision"><a-input v-model:value="approvalNotes[check.id]" :disabled="!approvalStatus.ready || approvalStatus.stale" placeholder="可选审批备注" size="small"/><a-button v-if="check.status !== 'approved'" type="primary" size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, true)">批准</a-button><a-button v-else size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, false)">撤回批准</a-button></div></article></div><a-empty v-else description="先重新检查，生成当前内容包的审批清单。" :image-style="{ height: '40px' }"/><p v-if="approvalStatus?.complete" class="approval-complete">所有项目已批准。下一步仅可进入草稿箱或安全导出，仍不等于真实发布。</p><div v-if="approvalStatus?.approval.history.length" class="approval-history"><strong>审批历史</strong><p v-for="event in approvalStatus.approval.history.slice().reverse().slice(0, 8)" :key="`${event.at}-${event.action}-${event.check_id}`">{{ event.at }} · {{ event.actor }} · {{ event.action }}{{ event.check_id ? ` (${approvalLabel[event.check_id]})` : '' }}{{ event.note ? ` · ${event.note}` : '' }}</p></div></a-card></a-spin>
-          <section class="xhs-preview">
-            <div>
-              <strong>小红书形态预告</strong>
-              <p>小红书更适合成组照片和短口播感文案。今晚只预览形态，不创建平台稿，也不发布。</p>
-            </div>
-            <article class="xhs-card">
-              <h3>{{ xhsPreview.title }}</h3>
-              <p>{{ xhsPreview.caption }}{{ xhsPreview.caption.length >= 220 ? '…' : '' }}</p>
-              <div class="xhs-photos">
-                <img v-for="asset in xhsPreview.images" :key="asset.id" :src="visualAssetUrl(asset) || ''" :alt="asset.prompt" />
-              </div>
-            </article>
-          </section>
-          <div v-if="wechatVariant" class="export-panel">
-            <div><strong>这篇微信稿可以交付了</strong><p>先导出 Markdown，或全屏阅读。ZIP 只作备份，不会创建发布记录，也不会调用微信接口。</p></div>
-            <div class="wechat-actions">
-              <a-button type="primary" @click="downloadVariantMarkdown(wechatVariant)">导出 Markdown</a-button>
-              <a-button @click="previewVariant(wechatVariant)">全屏预览</a-button>
-              <a-button :loading="exporting" :disabled="!approvalStatus?.complete" @click="exportPackage">备份 ZIP</a-button>
-            </div>
-            <a v-if="exportResult" :href="exportResult.url" target="_blank" rel="noreferrer">下载 {{ exportResult.file_name }}</a>
-          </div>
         </section>
       </article>
     </template>
@@ -1183,6 +1147,22 @@ h3 {
 .wechat-actions {
   align-items: center;
   margin-top: 12px;
+}
+
+.wechat-send {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.wechat-more {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.wechat-more summary {
+  cursor: pointer;
+  color: var(--muted);
 }
 
 .account-pick {
