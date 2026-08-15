@@ -47,6 +47,9 @@
 - [x] **FIX-WHOLE｜整篇意见要真改全文**  
   ✅ 完成于 2026-08-15，commit 55b32e6，备注：摘要会被拒；界面只看当前版本最新建议；文章页按钮已实地点过。
 
+- [x] **WX-ACCOUNTS｜送草稿前选择公众号，仍不群发**  
+  ✅ 完成于 2026-08-15，备注：设置可绑多个公众号；微信页先选号再送草稿。群发仍关闭。
+
 ## 2026-08-12 产品定义访谈固化（已获批准，按新任务树实施）
 
 > 产品所有者在旧 P0 实施后仍明确表示不会使用，并进一步确认了新的个人创作、人工批注/diff、平台交付、自动化账号、作者定位和长期知识方向。新的事实源是 [2026-08-12-confirmed-product-definition.md](./product-validation/2026-08-12-confirmed-product-definition.md)，详细实施树是 [2026-08-12-confirmed-product-tasklist.md](./product-validation/2026-08-12-confirmed-product-tasklist.md)。

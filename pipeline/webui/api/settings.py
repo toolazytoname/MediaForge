@@ -40,6 +40,7 @@ from pipeline.webui.config_edit import (
     set_publish_allowed_platforms,
     set_publish_enabled,
 )
+from pipeline import wechat_accounts
 from pipeline.publishers.wechat_mp import WechatMpPublisher, load_wechat_credentials
 from pipeline.webui.sanitize import sanitize_config
 
@@ -66,6 +67,7 @@ _ALLOWED_KEY_NAMES = frozenset(LLM_ENV_VARS) | frozenset(IMAGE_ENV_VARS)
 _OPENAI_IMAGE_BASE_URL = "OPENAI_IMAGE_BASE_URL"
 _WECHAT_CREDENTIALS_PATH = "secrets/wechat_mp_main.json"
 _WECHAT_ACCOUNT = "main"
+_WECHAT_SECRETS_ROOT = Path("secrets")
 
 
 def _reload_providers() -> str | None:
@@ -298,6 +300,55 @@ def clear_wechat_mp() -> dict[str, Any]:
     path = Path(_WECHAT_CREDENTIALS_PATH)
     path.unlink(missing_ok=True)
     return _wechat_status()
+
+
+@router.get("/settings/wechat-mp/accounts")
+def list_wechat_accounts() -> dict[str, Any]:
+    try:
+        items = wechat_accounts.list_accounts(secrets_root=_WECHAT_SECRETS_ROOT)
+    except wechat_accounts.WechatAccountError as error:
+        raise _err(400, "invalid_wechat_account", str(error)) from error
+    return {
+        "items": [{"id": item.id, "label": item.label, "app_id_masked": item.app_id_masked} for item in items],
+        "total": len(items),
+    }
+
+
+@router.post("/settings/wechat-mp/accounts", status_code=201)
+def save_wechat_account(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    allowed = {"id", "label", "app_id", "app_secret"}
+    if set(body) != allowed:
+        raise _err(400, "invalid_wechat_account", "request requires id, label, app_id and app_secret")
+    try:
+        account = wechat_accounts.upsert_account(
+            account_id=body["id"], label=body["label"], app_id=body["app_id"],
+            app_secret=body["app_secret"], secrets_root=_WECHAT_SECRETS_ROOT,
+        )
+    except wechat_accounts.WechatAccountError as error:
+        raise _err(400, "invalid_wechat_account", str(error)) from error
+    return {"id": account.id, "label": account.label, "app_id_masked": account.app_id_masked}
+
+
+@router.delete("/settings/wechat-mp/accounts/{account_id}")
+def delete_wechat_account(account_id: str) -> dict[str, Any]:
+    try:
+        wechat_accounts.delete_account(account_id, secrets_root=_WECHAT_SECRETS_ROOT)
+    except wechat_accounts.WechatAccountError as error:
+        raise _err(400, "invalid_wechat_account", str(error)) from error
+    return list_wechat_accounts()
+
+
+@router.post("/settings/wechat-mp/accounts/{account_id}/probe")
+def probe_wechat_account(account_id: str) -> dict[str, Any]:
+    try:
+        path = wechat_accounts.credentials_path(account_id, secrets_root=_WECHAT_SECRETS_ROOT)
+        app_id, app_secret = load_wechat_credentials(path)
+        WechatMpPublisher(app_id=app_id, app_secret=app_secret)._ensure_access_token()
+    except wechat_accounts.WechatAccountError as error:
+        return {"ok": False, "message": str(error)}
+    except Exception as error:
+        return {"ok": False, "message": str(error)}
+    return {"ok": True, "message": "已连上微信接口。当前 IP 通过白名单，可以送进这个账号的草稿箱（不会群发）。"}
 
 
 @router.post("/settings/wechat-mp/probe")

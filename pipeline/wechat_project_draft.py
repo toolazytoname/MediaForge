@@ -17,6 +17,7 @@ from pipeline import variants as variant_store
 from pipeline import visuals
 from pipeline.creators.wechat_html import markdown_to_wechat_html
 from pipeline.publishers.base import PublishError
+from pipeline import wechat_accounts
 from pipeline.publishers.wechat_mp import (
     DIGEST_MAX_LEN,
     TITLE_MAX_LEN,
@@ -25,7 +26,7 @@ from pipeline.publishers.wechat_mp import (
 )
 
 
-DEFAULT_CREDENTIALS = Path("secrets/wechat_mp_main.json")
+DEFAULT_SECRETS_ROOT = wechat_accounts.DEFAULT_SECRETS_ROOT
 _RECEIPT_NAME = "wechat_draft.json"
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
@@ -43,13 +44,17 @@ class WechatDraftReceipt:
     published: bool
     sent_at: str
     message: str
+    account_id: str = "main"
+    account_label: str = "主账号"
 
 
 def send_project_wechat_draft(
     project_id: str,
     *,
     projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
-    credentials_path: str | Path = DEFAULT_CREDENTIALS,
+    secrets_root: str | Path = DEFAULT_SECRETS_ROOT,
+    account_id: str | None = None,
+    credentials_path: str | Path | None = None,
     publisher: WechatMpPublisher | None = None,
     now: str | None = None,
 ) -> WechatDraftReceipt:
@@ -58,7 +63,15 @@ def send_project_wechat_draft(
     cover = _cover_path(project_id, variant, projects_root)
     title = _clip(variant.title, TITLE_MAX_LEN, "标题")
     digest = _clip(variant.summary or _fallback_digest(variant.body), DIGEST_MAX_LEN, "摘要")
-    client = publisher or _live_publisher(credentials_path)
+    try:
+        chosen_id = wechat_accounts.resolve_account_id(account_id, secrets_root=secrets_root) if credentials_path is None and publisher is None else (account_id or "main")
+        chosen_label = wechat_accounts.account_label(chosen_id, secrets_root=secrets_root)
+    except wechat_accounts.WechatAccountError as error:
+        if publisher is None and credentials_path is None:
+            raise WechatDraftError(str(error)) from error
+        chosen_id = account_id or "main"
+        chosen_label = chosen_id
+    client = publisher or _live_publisher(credentials_path or wechat_accounts.credentials_path(chosen_id, secrets_root=secrets_root))
     try:
         article_md = _replace_local_images(variant.body, client, projects_root)
         html_body = markdown_to_wechat_html(article_md)
@@ -78,7 +91,9 @@ def send_project_wechat_draft(
         destination="wechat_draft",
         published=False,
         sent_at=now or datetime.now(timezone.utc).isoformat(),
-        message="已送进公众号草稿箱，不会群发。请到微信公众平台 → 草稿箱核对。",
+        message=f"已送进「{chosen_label}」的公众号草稿箱，不会群发。请到该账号的微信公众平台 → 草稿箱核对。",
+        account_id=chosen_id,
+        account_label=chosen_label,
     )
     _write_receipt(project_id, receipt, projects_root)
     return receipt
@@ -91,7 +106,10 @@ def load_receipt(
     if not path.exists():
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return WechatDraftReceipt(**payload)
+    payload.setdefault("account_id", "main")
+    payload.setdefault("account_label", "主账号")
+    fields = set(WechatDraftReceipt.__dataclass_fields__)
+    return WechatDraftReceipt(**{key: payload.get(key) for key in fields})
 
 
 def _live_publisher(credentials_path: str | Path) -> WechatMpPublisher:

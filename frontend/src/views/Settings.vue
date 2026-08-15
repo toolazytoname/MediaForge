@@ -4,12 +4,14 @@ import { storeToRefs } from 'pinia'
 import { useSettingsStore } from '../stores'
 
 const store = useSettingsStore()
-const { keyGroups, openaiImageBaseUrl, wechatMp, loading } = storeToRefs(store)
+const { keyGroups, openaiImageBaseUrl, wechatAccounts, loading } = storeToRefs(store)
 
+const wechatId = ref('')
+const wechatLabel = ref('')
 const wechatAppId = ref('')
 const wechatAppSecret = ref('')
 const wechatSaving = ref(false)
-const wechatProbing = ref(false)
+const wechatProbing = ref<string | null>(null)
 const wechatProbe = ref<{ ok: boolean; message: string } | null>(null)
 
 const openaiKeyInput = ref('')
@@ -26,39 +28,47 @@ onMounted(() => {
   store.loadKeys()
   store.loadOpenAIImageBaseUrl()
   store.loadWechatMp()
+  store.loadWechatAccounts()
 })
 
 async function onSaveWechat(): Promise<void> {
+  const id = wechatId.value.trim() || 'main'
+  const label = wechatLabel.value.trim() || (id === 'main' ? '主账号' : id)
   if (!wechatAppId.value.trim() || !wechatAppSecret.value.trim()) return
   wechatSaving.value = true
   wechatProbe.value = null
   try {
-    const ok = await store.saveWechatMp(wechatAppId.value.trim(), wechatAppSecret.value.trim())
-    if (ok) {
-      wechatAppId.value = ''
-      wechatAppSecret.value = ''
-    }
+    await store.saveWechatAccount({
+      id,
+      label,
+      app_id: wechatAppId.value.trim(),
+      app_secret: wechatAppSecret.value.trim(),
+    })
+    wechatId.value = ''
+    wechatLabel.value = ''
+    wechatAppId.value = ''
+    wechatAppSecret.value = ''
   } finally {
     wechatSaving.value = false
   }
 }
 
-async function onClearWechat(): Promise<void> {
+async function onClearWechat(accountId: string): Promise<void> {
   wechatSaving.value = true
   wechatProbe.value = null
   try {
-    await store.clearWechatMp()
+    await store.deleteWechatAccount(accountId)
   } finally {
     wechatSaving.value = false
   }
 }
 
-async function onProbeWechat(): Promise<void> {
-  wechatProbing.value = true
+async function onProbeWechat(accountId: string): Promise<void> {
+  wechatProbing.value = accountId
   try {
-    wechatProbe.value = await store.probeWechatMp()
+    wechatProbe.value = await store.probeWechatAccount(accountId)
   } finally {
-    wechatProbing.value = false
+    wechatProbing.value = null
   }
 }
 
@@ -117,21 +127,35 @@ async function onClearRelay(): Promise<void> {
         <div class="panel-head">
           <div>
             <h2>微信公众号</h2>
-            <p>送进草稿箱，不群发。</p>
+            <p>可以绑多个号。送草稿时再选进哪一个。不会群发。</p>
           </div>
-          <span :class="['status', wechatMp?.configured ? 'on' : 'off']">
-            {{ wechatMp?.configured ? `已配置 ${wechatMp.app_id_masked}` : '还没填' }}
+          <span :class="['status', wechatAccounts.length ? 'on' : 'off']">
+            {{ wechatAccounts.length ? `已绑定 ${wechatAccounts.length} 个号` : '还没填' }}
           </span>
         </div>
-        <p class="help">在公众号后台「设置与开发 → 基本配置」复制 AppID 和 AppSecret。家庭宽带要把当前公网 IP 加进 IP 白名单，否则检查会失败。</p>
+        <ul v-if="wechatAccounts.length" class="account-list">
+          <li v-for="account in wechatAccounts" :key="account.id">
+            <div>
+              <strong>{{ account.label }}</strong>
+              <span>{{ account.id }} · {{ account.app_id_masked }}</span>
+            </div>
+            <div class="account-actions">
+              <button type="button" class="ghost" :disabled="wechatProbing === account.id" @click="onProbeWechat(account.id)">
+                {{ wechatProbing === account.id ? '检查中…' : '检查连通' }}
+              </button>
+              <button type="button" class="danger" :disabled="wechatSaving" @click="onClearWechat(account.id)">移除</button>
+            </div>
+          </li>
+        </ul>
+        <p class="help">在公众号后台「设置与开发 → 基本配置」复制 AppID 和 AppSecret。每个号都要把当前公网 IP 加进白名单。账号 id 用英文，例如 main、life。</p>
         <div class="fields">
+          <label>账号 id<input v-model="wechatId" type="text" placeholder="main" autocomplete="off" /></label>
+          <label>显示名<input v-model="wechatLabel" type="text" placeholder="主账号" autocomplete="off" /></label>
           <label>AppID<input v-model="wechatAppId" type="text" placeholder="wx 开头" autocomplete="off" /></label>
           <label>AppSecret<input v-model="wechatAppSecret" type="password" placeholder="不会回显已保存的值" autocomplete="new-password" /></label>
         </div>
         <div class="actions">
-          <button type="button" class="primary" :disabled="wechatSaving || !wechatAppId.trim() || !wechatAppSecret.trim()" @click="onSaveWechat">保存</button>
-          <button type="button" class="ghost" :disabled="wechatProbing || !wechatMp?.configured" @click="onProbeWechat">{{ wechatProbing ? '检查中…' : '检查连通' }}</button>
-          <button v-if="wechatMp?.configured" type="button" class="danger" :disabled="wechatSaving" @click="onClearWechat">清除</button>
+          <button type="button" class="primary" :disabled="wechatSaving || !wechatAppId.trim() || !wechatAppSecret.trim()" @click="onSaveWechat">保存这个号</button>
         </div>
         <p v-if="wechatProbe" :class="['probe', wechatProbe.ok ? 'ok' : 'bad']">{{ wechatProbe.message }}</p>
       </article>
@@ -232,6 +256,37 @@ header p,
 .status.off {
   color: var(--muted);
   background: var(--wash);
+}
+
+.account-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.account-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.account-list strong {
+  display: block;
+}
+
+.account-list span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .fields {

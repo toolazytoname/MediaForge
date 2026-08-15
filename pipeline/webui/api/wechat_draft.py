@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
 from pipeline import projects as project_store
 from pipeline.wechat_project_draft import WechatDraftError, load_receipt, send_project_wechat_draft
@@ -42,9 +42,18 @@ def get_wechat_draft(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/projects/{project_id}/wechat-draft")
-def post_wechat_draft(project_id: str) -> dict[str, Any]:
+def post_wechat_draft(project_id: str, body: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    payload = body or {}
+    extra = set(payload) - {"account_id"}
+    if extra:
+        raise _err(400, "invalid_wechat_draft", "request may only include account_id")
+    account_id = payload.get("account_id")
+    if account_id is not None and (not isinstance(account_id, str) or not account_id.strip()):
+        raise _err(400, "invalid_wechat_draft", "account_id must be non-empty text when provided")
     try:
-        receipt = send_project_wechat_draft(project_id, projects_root=_root())
+        receipt = send_project_wechat_draft(
+            project_id, projects_root=_root(), account_id=account_id.strip() if isinstance(account_id, str) else None,
+        )
     except (project_store.ProjectManifestError, WechatDraftError) as error:
         raise _receipt_error(project_id, error) from error
     return asdict(receipt)

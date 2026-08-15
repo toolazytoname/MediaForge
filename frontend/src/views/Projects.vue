@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult } from '../stores'
+import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useSettingsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult } from '../stores'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 import { renderMarkdown } from '../utils/markdown'
@@ -17,6 +17,7 @@ const masterStore = useMasterStore()
 const visualsStore = useVisualsStore()
 const variantsStore = useVariantsStore()
 const approvalsStore = useApprovalsStore()
+const settingsStore = useSettingsStore()
 const { items, loading, error } = storeToRefs(store)
 const listItems = computed(() => {
   const titled = items.value
@@ -86,8 +87,10 @@ const wechatVariant = computed(() => variants.value.find(item => item.platform =
 const focusedPlatform = ref<'wechat_mp'>('wechat_mp')
 const preparingPlatforms = ref(false)
 const sendingDraft = ref(false)
-const draftReceipt = ref<{ media_id: string; title: string; message: string; sent_at: string } | null>(null)
+const draftReceipt = ref<{ media_id: string; title: string; message: string; sent_at: string; account_label?: string } | null>(null)
 const draftSendError = ref<string | null>(null)
+const wechatAccountId = ref('')
+const wechatAccounts = computed(() => settingsStore.wechatAccounts)
 const activeTab = computed(() => {
   if (activeWorkbench.value === 'master') return 'article'
   if (activeWorkbench.value === 'variants') return 'wechat'
@@ -117,6 +120,8 @@ async function loadPage(): Promise<void> {
     await visualsStore.load(projectId.value)
     await variantsStore.load(projectId.value)
     draftReceipt.value = await variantsStore.loadWechatDraft(projectId.value)
+    await settingsStore.loadWechatAccounts()
+    if (!wechatAccountId.value && settingsStore.wechatAccounts[0]) wechatAccountId.value = settingsStore.wechatAccounts[0].id
     await approvalsStore.load(projectId.value)
     if (master.value) masterForm.value = { title: master.value.title, body: master.value.body }
     else if (project.value) masterForm.value = { title: project.value.title, body: project.value.idea }
@@ -143,11 +148,20 @@ async function refreshApprovalStatus(): Promise<void> {
 
 async function sendWechatDraft(): Promise<void> {
   if (!projectId.value || sendingDraft.value) return
-  if (!window.confirm('只送进公众号草稿箱，不会群发。确定现在送吗？')) return
+  if (!wechatAccounts.value.length) {
+    draftSendError.value = '还没有绑定公众号。先到设置里添加账号。'
+    return
+  }
+  if (wechatAccounts.value.length > 1 && !wechatAccountId.value) {
+    draftSendError.value = '先选择要送进哪一个公众号。'
+    return
+  }
+  const selected = wechatAccounts.value.find(item => item.id === wechatAccountId.value) ?? wechatAccounts.value[0]
+  if (!window.confirm(`只送进「${selected.label}」的草稿箱，不会群发。确定现在送吗？`)) return
   sendingDraft.value = true
   draftSendError.value = null
   try {
-    draftReceipt.value = await variantsStore.sendWechatDraft(projectId.value)
+    draftReceipt.value = await variantsStore.sendWechatDraft(projectId.value, selected.id)
   } catch (e) {
     draftSendError.value = unwrapError(e)
   } finally {
@@ -610,15 +624,24 @@ watch(projectId, loadPage)
           <a-spin :spinning="visualsLoading"><a-card :bordered="false" class="visual-card"><a-form layout="vertical"><a-form-item label="视觉圣经"><a-textarea v-model:value="visualBible" :rows="3" placeholder="例如：风格: 克制的编辑插画\n色彩: 暖白纸张与墨蓝" /></a-form-item><div class="visual-slot-list"><article v-for="(slot, index) in visualSlots" :key="slot.id" class="visual-slot"><div class="slot-heading"><strong>{{ slot.purpose || `槽位 ${index + 1}` }}</strong><a-button type="link" danger size="small" @click="visualSlots.splice(index, 1)">移除</a-button></div><div class="form-pair"><a-form-item label="用途"><a-input v-model:value="slot.purpose" placeholder="封面 / 正文插图" /></a-form-item><a-form-item label="比例"><a-select v-model:value="slot.aspect_ratio"><a-select-option value="16:9">16:9 横图</a-select-option><a-select-option value="1:1">1:1 方图</a-select-option><a-select-option value="9:16">9:16 竖图</a-select-option><a-select-option value="4:3">4:3</a-select-option><a-select-option value="3:4">3:4</a-select-option></a-select></a-form-item></div><a-form-item label="对应段落（可选）"><a-input v-model:value="slot.paragraph_anchor" placeholder="例如：开头的核心问题" /></a-form-item><a-form-item label="画面方向"><a-textarea v-model:value="slot.direction" :rows="2" placeholder="这张图要帮助读者理解什么？" /></a-form-item><a-form-item label="生成或编辑提示词"><a-textarea v-model:value="visualPrompts[slot.id]" :rows="2" placeholder="显式点击后才会调用 GPT Image 2" /></a-form-item><div class="visual-actions"><a-button :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot)">生成候选</a-button></div><div v-if="visualPlan?.assets.filter(asset => asset.slot_id === slot.id).length" class="asset-list"><article v-for="asset in visualPlan.assets.filter(item => item.slot_id === slot.id).slice().reverse()" :key="asset.id" :class="['visual-asset', asset.status]"><div><a-tag :color="asset.status === 'selected' ? 'green' : asset.status === 'failed' ? 'red' : 'blue'">{{ asset.status === 'selected' ? '已选择' : asset.status === 'failed' ? '失败' : '候选' }}</a-tag><span>v{{ asset.version }} · {{ asset.model }} · 预估 ${{ asset.cost_usd.toFixed(2) }}</span></div><p>{{ asset.prompt }}</p><p v-if="asset.failure" class="failure">{{ asset.failure }}</p><div v-if="asset.status !== 'failed'" class="asset-actions"><a-button v-if="asset.status !== 'selected'" size="small" @click="selectVisual(asset.id)">选择</a-button><a-button size="small" :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot, asset.id)">基于此编辑</a-button></div></article></div></article></div><div class="visual-plan-actions"><a-button @click="addVisualSlot">添加插图槽位</a-button><a-button type="primary" :loading="visualSaving" @click="saveVisualPlan">保存视觉计划</a-button></div></a-form></a-card></a-spin>
         </section>
         <section v-if="activeWorkbench === 'variants'" class="variants-workbench">
-          <header class="section-heading"><div><h2>微信公众号</h2><p>先看读者会打开的样子。确认后检查配置，再送进草稿箱。不会群发。</p></div></header>
+          <header class="section-heading"><div><h2>微信公众号</h2><p>先看读者会打开的样子。选一个已绑定的号，送进它的草稿箱。不会群发。</p></div></header>
           <a-alert v-if="variantsError" type="error" :message="variantsError" show-icon class="notice" />
-          <a-alert type="info" show-icon class="notice" message="公众号只进草稿箱，不会群发。先在本页或设置里保存 AppID / AppSecret，再检查当前 IP 是否在白名单。" />
+          <a-alert type="info" show-icon class="notice" message="群发请到微信公众平台草稿箱里手动点发布。这里只送草稿，也不会自动换号。" />
           <div class="wechat-layout">
           <div v-if="wechatVariant && focusedPlatform === 'wechat_mp'" class="wechat-stage">
             <div>
               <WechatArticlePreview :html="variantPreviewHtml(wechatVariant)" caption="微信公众号阅读预览 · 封面和插图来自已选视觉资产" />
+              <label class="account-pick">
+                送到哪个公众号
+                <select v-model="wechatAccountId">
+                  <option v-if="!wechatAccounts.length" value="" disabled>还没有绑定账号</option>
+                  <option v-for="account in wechatAccounts" :key="account.id" :value="account.id">
+                    {{ account.label }}（{{ account.app_id_masked }}）
+                  </option>
+                </select>
+              </label>
               <div class="wechat-actions">
-                <a-button type="primary" :loading="sendingDraft" :disabled="!wechatVariant" @click="sendWechatDraft">送进草稿箱</a-button>
+                <a-button type="primary" :loading="sendingDraft" :disabled="!wechatVariant || !wechatAccounts.length" @click="sendWechatDraft">送进草稿箱</a-button>
                 <a-button @click="previewVariant(wechatVariant)">全屏预览</a-button>
                 <a-button @click="downloadVariantMarkdown(wechatVariant)">导出 Markdown</a-button>
               </div>
@@ -1160,6 +1183,23 @@ h3 {
 .wechat-actions {
   align-items: center;
   margin-top: 12px;
+}
+
+.account-pick {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.account-pick select {
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
 }
 
 .variant-list {

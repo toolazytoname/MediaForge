@@ -45,6 +45,27 @@ def test_wechat_settings_round_trip_never_returns_secret(client, tmp_path, monke
     assert not creds.exists()
 
 
+def test_wechat_accounts_can_be_added_listed_and_removed(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings_mod, "_WECHAT_SECRETS_ROOT", tmp_path)
+    empty = client.get("/api/v1/settings/wechat-mp/accounts")
+    assert empty.status_code == 200
+    assert empty.json() == {"items": [], "total": 0}
+
+    created = client.post("/api/v1/settings/wechat-mp/accounts", json={
+        "id": "life", "label": "生活号", "app_id": "wxbbbbbbbbbbbbbb", "app_secret": "secret-two",
+    })
+    assert created.status_code == 201
+    assert created.json()["id"] == "life"
+    assert "secret-two" not in created.text
+    listed = client.get("/api/v1/settings/wechat-mp/accounts").json()
+    assert listed["total"] == 1
+    assert listed["items"][0]["label"] == "生活号"
+
+    removed = client.delete("/api/v1/settings/wechat-mp/accounts/life")
+    assert removed.status_code == 200
+    assert removed.json()["total"] == 0
+
+
 def test_wechat_probe_reports_token_success_and_ip_errors(client, tmp_path, monkeypatch):
     creds = tmp_path / "wechat_mp_main.json"
     monkeypatch.setattr(settings_mod, "_WECHAT_CREDENTIALS_PATH", str(creds))

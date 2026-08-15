@@ -504,6 +504,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
   const wechatMp = ref<{ configured: boolean; account: string; app_id_masked: string | null } | null>(null)
+  const wechatAccounts = ref<WechatAccount[]>([])
   async function loadWechatMp(): Promise<void> {
     try {
       const r = await api.get<{ configured: boolean; account: string; app_id_masked: string | null }>('/settings/wechat-mp')
@@ -534,6 +535,25 @@ export const useSettingsStore = defineStore('settings', () => {
       return false
     }
   }
+  async function loadWechatAccounts(): Promise<WechatAccount[]> {
+    const r = await api.get<{ items: WechatAccount[]; total: number }>('/settings/wechat-mp/accounts')
+    wechatAccounts.value = r.data.items
+    return r.data.items
+  }
+  async function saveWechatAccount(input: { id: string; label: string; app_id: string; app_secret: string }): Promise<WechatAccount> {
+    const r = await api.post<WechatAccount>('/settings/wechat-mp/accounts', input)
+    await loadWechatAccounts()
+    await loadWechatMp()
+    return r.data
+  }
+  async function deleteWechatAccount(accountId: string): Promise<void> {
+    await api.delete(`/settings/wechat-mp/accounts/${accountId}`)
+    await loadWechatAccounts()
+    await loadWechatMp()
+  }
+  async function probeWechatAccount(accountId: string): Promise<{ ok: boolean; message: string }> {
+    return (await api.post<{ ok: boolean; message: string }>(`/settings/wechat-mp/accounts/${accountId}/probe`, {})).data
+  }
   async function probeWechatMp(): Promise<{ ok: boolean; message: string } | null> {
     try {
       const r = await api.post<{ ok: boolean; message: string }>('/settings/wechat-mp/probe', {})
@@ -549,8 +569,15 @@ export const useSettingsStore = defineStore('settings', () => {
     loadOpenAIImageBaseUrl, saveOpenAIImageBaseUrl, clearOpenAIImageBaseUrl,
     setPublishEnabled, setPublishAllowedPlatforms,
     loadWechatMp, saveWechatMp, clearWechatMp, probeWechatMp,
+    wechatAccounts, loadWechatAccounts, saveWechatAccount, deleteWechatAccount, probeWechatAccount,
   }
 })
+
+export interface WechatAccount {
+  id: string
+  label: string
+  app_id_masked: string
+}
 
 export interface PlatformVariantVersion { version: number; title: string; summary: string; body: string; asset_ids: string[]; saved_at: string; reason: string }
 export interface PlatformVariant { platform: 'wechat_mp' | 'toutiao'; title: string; summary: string; body: string; asset_ids: string[]; source_master_version: number; version: number; locked: boolean; manually_modified: boolean; upstream_updated: boolean; created_at: string; updated_at: string; history: PlatformVariantVersion[] }
@@ -574,8 +601,12 @@ export const useVariantsStore = defineStore('variants', () => {
     variants.value = response.data.variants
     return response.data
   }
-  async function sendWechatDraft(projectId: string): Promise<WechatDraftReceipt> {
-    return (await api.post<WechatDraftReceipt>(`/projects/${projectId}/wechat-draft`, {}, { timeout: GENERATION_TIMEOUT_MS })).data
+  async function sendWechatDraft(projectId: string, accountId?: string): Promise<WechatDraftReceipt> {
+    return (await api.post<WechatDraftReceipt>(
+      `/projects/${projectId}/wechat-draft`,
+      accountId ? { account_id: accountId } : {},
+      { timeout: GENERATION_TIMEOUT_MS },
+    )).data
   }
   async function loadWechatDraft(projectId: string): Promise<WechatDraftReceipt | null> {
     return (await api.get<{ receipt: WechatDraftReceipt | null }>(`/projects/${projectId}/wechat-draft`)).data.receipt
@@ -591,6 +622,8 @@ export interface WechatDraftReceipt {
   published: boolean
   sent_at: string
   message: string
+  account_id?: string
+  account_label?: string
 }
 
 export interface ApprovalCheck { id: 'master' | 'visuals' | 'wechat_mp' | 'toutiao'; status: 'pending' | 'approved'; note: string | null; approved_by: string | null; approved_at: string | null }
