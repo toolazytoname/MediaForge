@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, unwrapError, GENERATION_TIMEOUT_MS } from '../api/client'
 
 export type IntakeKind = 'wechat' | 'web' | 'markdown' | 'pdf' | 'text' | 'file'
@@ -44,8 +44,11 @@ const urlDraft = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const preparing = ref(false)
 const prepareError = ref<string | null>(null)
+const dragDepth = ref(0)
+const dragging = computed(() => dragDepth.value > 0)
 
 const canPrepare = computed(() => Boolean(idea.value.trim() || sources.value.length))
+const acceptHint = '把 PDF、Markdown 或纯文本拖到这里，也可以点下面添加'
 
 watch(() => props.initialIdea, value => {
   if (value && !idea.value) idea.value = value
@@ -104,15 +107,21 @@ function addUrl(): void {
   prepareError.value = null
 }
 
-function onFiles(event: Event): void {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files ?? [])
-  input.value = ''
+function classifyFile(file: File): IntakeKind {
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  const type = file.type.toLowerCase()
+  if (ext === 'pdf' || type === 'application/pdf') return 'pdf'
+  if (ext === 'md' || ext === 'markdown' || type === 'text/markdown') return 'markdown'
+  if (ext === 'txt' || type === 'text/plain') return 'text'
+  return 'file'
+}
+
+function addFiles(files: File[]): void {
+  let rejected = false
   for (const file of files) {
-    const ext = file.name.split('.').pop()?.toLowerCase()
-    const kind: IntakeKind = ext === 'pdf' ? 'pdf' : ext === 'md' || ext === 'markdown' ? 'markdown' : ext === 'txt' ? 'text' : 'file'
+    const kind = classifyFile(file)
     if (kind === 'file') {
-      prepareError.value = '目前只收 Markdown、PDF 或纯文本'
+      rejected = true
       continue
     }
     if (sources.value.some(item => item.file?.name === file.name || item.reference === `local:${file.name}`)) continue
@@ -125,7 +134,60 @@ function onFiles(event: Event): void {
       file,
     }]
   }
+  prepareError.value = rejected ? '目前只收 Markdown、PDF 或纯文本' : null
 }
+
+function onFiles(event: Event): void {
+  const input = event.target as HTMLInputElement
+  addFiles(Array.from(input.files ?? []))
+  input.value = ''
+}
+
+function onDragOver(event: DragEvent): void {
+  if (!hasDroppableItems(event.dataTransfer)) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  dragDepth.value = 1
+}
+
+function onDrop(event: DragEvent): void {
+  event.preventDefault()
+  dragDepth.value = 0
+  const transfer = event.dataTransfer
+  if (!transfer) return
+  const files = Array.from(transfer.files)
+  if (files.length) {
+    addFiles(files)
+    return
+  }
+  const uri = transfer.getData('text/uri-list').split('\n').map(item => item.trim()).find(item => item && !item.startsWith('#'))
+    || transfer.getData('text/plain').trim()
+  if (uri.startsWith('http://') || uri.startsWith('https://')) {
+    urlDraft.value = uri
+    addUrl()
+  }
+}
+
+function hasDroppableItems(transfer: DataTransfer | null): boolean {
+  if (!transfer) return false
+  return Array.from(transfer.types).some(type => type === 'Files' || type === 'text/uri-list' || type === 'text/plain')
+}
+
+function onWindowDragLeave(event: DragEvent): void {
+  if (event.relatedTarget === null) dragDepth.value = 0
+}
+
+onMounted(() => {
+  window.addEventListener('dragover', onDragOver)
+  window.addEventListener('drop', onDrop)
+  window.addEventListener('dragleave', onWindowDragLeave)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('dragover', onDragOver)
+  window.removeEventListener('drop', onDrop)
+  window.removeEventListener('dragleave', onWindowDragLeave)
+})
 
 function removeSource(reference: string): void {
   sources.value = sources.value.filter(item => item.reference !== reference)
@@ -185,21 +247,28 @@ function save(): void {
 </script>
 
 <template>
-  <form class="intake" @submit.prevent="prepare('review')">
+  <form
+    class="intake"
+    :class="{ dragging }"
+    @submit.prevent="prepare('review')"
+  >
+    <div v-if="dragging" class="drop-veil" aria-hidden="true">放开即可加入这份资料</div>
     <label class="dump">
       <span>想法和资料</span>
       <textarea
         v-model="idea"
         rows="8"
-        placeholder="不用起标题。把脑子里的判断、经历、问题丢进来。一篇公众号、一个网页、一段摘录，都可以。标题等正文出来再选。"
+        placeholder="不用起标题。把脑子里的判断、经历、问题丢进来。一篇公众号、一个网页、一段摘录，都可以。PDF 可以直接拖进来。"
         @keydown="onMetaEnter"
+        @dragover="onDragOver"
+        @drop="onDrop"
       />
     </label>
 
     <div class="attach">
       <button type="button" class="text-btn" @click="linkOpen = !linkOpen">添加链接</button>
       <button type="button" class="text-btn" @click="fileInput?.click()">添加文件</button>
-      <span>公众号、网页、Markdown、PDF</span>
+      <span>{{ acceptHint }}</span>
       <input
         ref="fileInput"
         type="file"
@@ -260,8 +329,28 @@ function save(): void {
 
 <style scoped>
 .intake {
+  position: relative;
   display: grid;
   gap: 18px;
+}
+
+.intake.dragging {
+  outline: 1px dashed var(--ink);
+  outline-offset: 10px;
+}
+
+.drop-veil {
+  position: absolute;
+  inset: -12px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--canvas) 88%, transparent);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 560;
+  pointer-events: none;
 }
 
 .dump {
