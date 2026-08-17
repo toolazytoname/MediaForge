@@ -1637,20 +1637,73 @@ export const useApprovalsStore = defineStore('approvals', () => {
   async function recheck(projectId: string, actor: string) { status.value = (await apiPost<ApprovalStatus>(`/projects/${projectId}/approval/recheck`, { actor })).data; return status.value }
   async function decide(projectId: string, checkId: string, approved: boolean, actor: string, note?: string) { status.value = (await apiPost<ApprovalStatus>(`/projects/${projectId}/approval/checks/${checkId}`, { approved, actor, ...(note ? { note } : {}) })).data; return status.value }
   async function exportPackage(projectId: string) { return (await apiPost<ProjectExportResult>(`/projects/${projectId}/export`, {})).data }
+  async function exportGallery(projectId: string, deliverableId: string, actor: string) {
+    return (await apiPost<DeliveryAttemptResult>(`/projects/${projectId}/deliverables/${deliverableId}/export`, { actor })).data
+  }
   async function createWechatDraft(projectId: string, actor: string, retryOfId?: string | null) {
     return (await apiPost<DeliveryAttemptResult>(`/projects/${projectId}/deliverables/dlv_article_wechat_mp/draft`, {
       actor,
       ...(retryOfId ? { retry_of_id: retryOfId } : {}),
     })).data
   }
-  return { status, loading, error, load, recheck, decide, exportPackage, createWechatDraft }
+  return { status, loading, error, load, recheck, decide, exportPackage, exportGallery, createWechatDraft }
+})
+
+export interface GalleryCrop { x: number; y: number; w: number; h: number }
+export interface GallerySlide { asset_id: string; order: number; alt: string; crop?: GalleryCrop | null }
+export interface GalleryDeliverable {
+  id: string
+  kind: 'gallery'
+  title: string
+  version: number
+  status: string
+  locked: boolean
+  targets: string[]
+  payload: { caption: string; tags: string[]; cover_asset_id: string; slides: GallerySlide[] }
+  asset_ids: string[]
+}
+
+export const useGalleriesStore = defineStore('galleries', () => {
+  const items = ref<GalleryDeliverable[]>([])
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+  async function load(projectId: string) {
+    loading.value = true
+    error.value = null
+    try {
+      const result = (await api.get<{ items: Array<GalleryDeliverable | { kind: string }> }>(`/projects/${projectId}/deliverables`)).data
+      items.value = result.items.filter((item): item is GalleryDeliverable => item.kind === 'gallery')
+    } catch (e) {
+      error.value = unwrapError(e)
+    } finally {
+      loading.value = false
+    }
+  }
+  async function create(projectId: string, input: { title: string; caption: string; tags: string[]; cover_asset_id: string; slides: GallerySlide[]; targets?: string[] }) {
+    const item = (await apiPost<GalleryDeliverable>(`/projects/${projectId}/galleries`, input)).data
+    items.value = [...items.value.filter(existing => existing.id !== item.id), item]
+    return item
+  }
+  async function save(projectId: string, deliverableId: string, input: Partial<Pick<GalleryDeliverable, 'title'> & GalleryDeliverable['payload']>) {
+    const item = (await api.put<GalleryDeliverable>(`/projects/${projectId}/deliverables/${deliverableId}`, input)).data
+    items.value = items.value.map(existing => existing.id === item.id ? item : existing)
+    return item
+  }
+  async function lock(projectId: string, deliverableId: string, locked: boolean) {
+    const item = (await apiPost<GalleryDeliverable>(`/projects/${projectId}/deliverables/${deliverableId}/lock`, { locked })).data
+    items.value = items.value.map(existing => existing.id === item.id ? item : existing)
+    return item
+  }
+  return { items, loading, error, load, create, save, lock }
 })
 
 export interface CapabilityItem {
   platform: string
   label: string
+  formats: string[]
   ui: { preview_kind: string; confirm_copy: string; fields: string[] }
   delivery: { preview: boolean; export: boolean; draft: boolean; direct: boolean }
+  limits?: { min_images?: number | null; max_images?: number | null }
 }
 
 export interface NextActionResult {

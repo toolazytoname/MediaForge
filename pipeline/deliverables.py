@@ -7,7 +7,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pipeline import projects as project_store, variants as variant_store
+from pipeline import projects as project_store, variants as variant_store, visuals as visual_store
+from pipeline.publishers.capability_registry import (
+    KIND_GALLERY,
+    gallery_image_limits_for,
+    platforms_for,
+)
+from pipeline.utils.ids import new_id
 from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 _NAME = "deliverables.json"
@@ -30,6 +36,30 @@ class ArticlePayload:
     summary: str
     body: str
     locale: str = "zh-CN"
+
+
+@dataclass(frozen=True)
+class GalleryCrop:
+    x: float
+    y: float
+    w: float
+    h: float
+
+
+@dataclass(frozen=True)
+class GallerySlide:
+    asset_id: str
+    order: int
+    alt: str
+    crop: GalleryCrop | None = None
+
+
+@dataclass(frozen=True)
+class GalleryPayload:
+    caption: str
+    tags: tuple[str, ...]
+    cover_asset_id: str
+    slides: tuple[GallerySlide, ...]
 
 
 @dataclass(frozen=True)
@@ -150,6 +180,165 @@ def article_payload(item: Deliverable) -> ArticlePayload:
     )
 
 
+def gallery_payload(item: Deliverable | dict[str, Any]) -> GalleryPayload:
+    payload = item.payload if isinstance(item, Deliverable) else item
+    if isinstance(item, Deliverable) and item.kind != KIND_GALLERY:
+        raise DeliverablesError("deliverable is not a gallery")
+    if not isinstance(payload, dict):
+        raise DeliverablesError("gallery payload must be an object")
+    slides_raw = payload.get("slides")
+    if not isinstance(slides_raw, list) or not slides_raw:
+        raise DeliverablesError("gallery slides must be a non-empty array")
+    slides = tuple(_gallery_slide(value) for value in slides_raw)
+    orders = [slide.order for slide in slides]
+    if orders != list(range(len(slides))):
+        raise DeliverablesError("gallery slide order must be contiguous from 0")
+    asset_ids = [slide.asset_id for slide in slides]
+    if len(set(asset_ids)) != len(asset_ids):
+        raise DeliverablesError("gallery slide assets must be unique")
+    cover = payload.get("cover_asset_id")
+    if not valid_sidecar_id(cover, "vas_"):
+        raise DeliverablesError("cover_asset_id must be a visual asset id")
+    if cover not in asset_ids:
+        raise DeliverablesError("cover_asset_id must be one of the slides")
+    tags_raw = payload.get("tags", [])
+    if tags_raw is None:
+        tags_raw = []
+    if not isinstance(tags_raw, list) or any(not isinstance(tag, str) or not tag.strip() for tag in tags_raw):
+        raise DeliverablesError("tags must be a string array")
+    return GalleryPayload(
+        _text("caption", payload.get("caption")),
+        tuple(tag.strip() for tag in tags_raw),
+        cover,
+        slides,
+    )
+
+
+def create_gallery(
+    project_id: str,
+    *,
+    title: str,
+    caption: str,
+    slides: list[dict[str, Any]],
+    cover_asset_id: str,
+    now: str,
+    tags: list[str] | None = None,
+    targets: list[str] | None = None,
+    locked: bool = False,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+) -> Deliverable:
+    _ensure(project_id, projects_root)
+    timestamp = _timestamp(now)
+    target_tuple = _gallery_targets(targets)
+    payload = gallery_payload({
+        "caption": caption,
+        "tags": tags or [],
+        "cover_asset_id": cover_asset_id,
+        "slides": slides,
+    })
+    _assert_gallery_limits(payload, target_tuple)
+    _assert_gallery_selected(project_id, payload, projects_root)
+    item = Deliverable(
+        new_id("dlv"), KIND_GALLERY, _text("title", title), 1,
+        "ready_for_approval" if locked else "drafting", None, locked, True, False,
+        target_tuple, _gallery_dict(payload), tuple(slide.asset_id for slide in payload.slides),
+        timestamp, timestamp, (),
+    )
+    bundle = load_deliverables(project_id, projects_root=projects_root)
+    _write(projects_root, DeliverableSet(bundle.project_id, _SCHEMA_VERSION, (*bundle.items, item)))
+    return item
+
+
+def update_gallery(
+    project_id: str,
+    deliverable_id: str,
+    *,
+    now: str,
+    title: str | None = None,
+    caption: str | None = None,
+    tags: list[str] | None = None,
+    cover_asset_id: str | None = None,
+    slides: list[dict[str, Any]] | None = None,
+    targets: list[str] | None = None,
+    reason: str = "edit",
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+) -> Deliverable:
+    current = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
+    if current.kind != KIND_GALLERY:
+        raise DeliverablesError("deliverable is not a gallery")
+    if current.locked:
+        raise DeliverablesError("locked gallery cannot be edited")
+    existing = gallery_payload(current)
+    payload = gallery_payload({
+        "caption": existing.caption if caption is None else caption,
+        "tags": list(existing.tags) if tags is None else tags,
+        "cover_asset_id": existing.cover_asset_id if cover_asset_id is None else cover_asset_id,
+        "slides": slides if slides is not None else [_slide_dict(slide) for slide in existing.slides],
+    })
+    target_tuple = current.targets if targets is None else _gallery_targets(targets)
+    _assert_gallery_limits(payload, target_tuple)
+    _assert_gallery_selected(project_id, payload, projects_root)
+    timestamp = _timestamp(now)
+    snapshot = DeliverableSnapshot(
+        current.version, current.title, current.kind, current.targets,
+        current.payload, current.asset_ids, timestamp, reason,
+    )
+    updated = replace(
+        current,
+        title=_text("title", title) if title is not None else current.title,
+        version=current.version + 1,
+        status="drafting",
+        manually_modified=True,
+        targets=target_tuple,
+        payload=_gallery_dict(payload),
+        asset_ids=tuple(slide.asset_id for slide in payload.slides),
+        updated_at=timestamp,
+        history=(snapshot, *current.history)[:_HISTORY_LIMIT],
+    )
+    _replace_item(project_id, updated, projects_root)
+    return updated
+
+
+def set_gallery_locked(
+    project_id: str,
+    deliverable_id: str,
+    *,
+    locked: bool,
+    now: str,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+) -> Deliverable:
+    if not isinstance(locked, bool):
+        raise DeliverablesError("locked must be boolean")
+    current = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
+    if current.kind != KIND_GALLERY:
+        raise DeliverablesError("deliverable is not a gallery")
+    if current.locked == locked:
+        return current
+    payload = gallery_payload(current)
+    if locked:
+        _assert_gallery_limits(payload, current.targets)
+        _assert_gallery_selected(project_id, payload, projects_root)
+    updated = replace(
+        current,
+        locked=locked,
+        status="ready_for_approval" if locked else "drafting",
+        updated_at=_timestamp(now),
+    )
+    _replace_item(project_id, updated, projects_root)
+    return updated
+
+
+def list_galleries(
+    project_id: str,
+    *,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+) -> tuple[Deliverable, ...]:
+    return tuple(
+        item for item in load_deliverables(project_id, projects_root=projects_root).items
+        if item.kind == KIND_GALLERY
+    )
+
+
 def _from_variant(variant: variant_store.Variant) -> Deliverable:
     deliverable_id = seed_id_for(variant.platform)
     payload = {"summary": variant.summary, "body": variant.body, "locale": "zh-CN"}
@@ -194,8 +383,10 @@ def _item(value: Any) -> Deliverable:
         raise DeliverablesError("deliverable has missing or unknown fields")
     if not valid_sidecar_id(value["id"], "dlv_"):
         raise DeliverablesError("invalid deliverable id")
-    if value["kind"] not in {KIND_ARTICLE, "gallery", "video"}:
+    if value["kind"] not in {KIND_ARTICLE, KIND_GALLERY, "video"}:
         raise DeliverablesError("invalid deliverable kind")
+    if value["kind"] == KIND_GALLERY:
+        gallery_payload(value["payload"])
     if value["status"] not in {"drafting", "ready_for_approval", "approved", "superseded"}:
         raise DeliverablesError("invalid deliverable status")
     targets = value["targets"]
@@ -232,6 +423,102 @@ def _snapshot(value: Any) -> DeliverableSnapshot:
         value["kind"], tuple(targets), payload, _asset_ids(value["asset_ids"]),
         _timestamp(value["saved_at"]), _text("reason", value["reason"]),
     )
+
+
+def _gallery_slide(value: Any) -> GallerySlide:
+    if not isinstance(value, dict):
+        raise DeliverablesError("gallery slide must be an object")
+    allowed = {"asset_id", "order", "alt", "crop"}
+    if set(value) - allowed:
+        raise DeliverablesError("gallery slide has unknown fields")
+    if not valid_sidecar_id(value.get("asset_id"), "vas_"):
+        raise DeliverablesError("slide asset_id must be a visual asset id")
+    order = value.get("order")
+    if not isinstance(order, int) or isinstance(order, bool) or order < 0:
+        raise DeliverablesError("slide order must be a non-negative integer")
+    crop_raw = value.get("crop")
+    crop = None if crop_raw is None else _gallery_crop(crop_raw)
+    return GallerySlide(value["asset_id"], order, _text("alt", value.get("alt")), crop)
+
+
+def _gallery_crop(value: Any) -> GalleryCrop:
+    if not isinstance(value, dict) or set(value) != {"x", "y", "w", "h"}:
+        raise DeliverablesError("crop must be {x,y,w,h}")
+    numbers = {}
+    for key in ("x", "y", "w", "h"):
+        raw = value[key]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise DeliverablesError("crop values must be numbers")
+        numbers[key] = float(raw)
+    if numbers["w"] <= 0 or numbers["h"] <= 0:
+        raise DeliverablesError("crop width and height must be positive")
+    if numbers["x"] < 0 or numbers["y"] < 0:
+        raise DeliverablesError("crop origin must be >= 0")
+    if numbers["x"] + numbers["w"] > 1.0001 or numbers["y"] + numbers["h"] > 1.0001:
+        raise DeliverablesError("crop box must stay within the unit square")
+    return GalleryCrop(numbers["x"], numbers["y"], numbers["w"], numbers["h"])
+
+
+def _gallery_targets(targets: list[str] | None) -> tuple[str, ...]:
+    allowed = set(platforms_for(kind=KIND_GALLERY))
+    chosen = tuple(targets) if targets else tuple(allowed)
+    if not chosen:
+        raise DeliverablesError("no gallery-capable platform is registered")
+    if any(not isinstance(item, str) or not item for item in chosen):
+        raise DeliverablesError("targets must be a non-empty string array")
+    unknown = [item for item in chosen if item not in allowed]
+    if unknown:
+        raise DeliverablesError(f"targets do not support gallery: {', '.join(unknown)}")
+    return chosen
+
+
+def _assert_gallery_limits(payload: GalleryPayload, targets: tuple[str, ...]) -> None:
+    minimum, maximum = gallery_image_limits_for(targets)
+    count = len(payload.slides)
+    if count < minimum or count > maximum:
+        raise DeliverablesError(
+            f"gallery needs {minimum}..{maximum} images for {', '.join(targets)}; got {count}"
+        )
+
+
+def _assert_gallery_selected(
+    project_id: str,
+    payload: GalleryPayload,
+    root: str | Path,
+) -> None:
+    try:
+        plan = visual_store.load_visuals(project_id, projects_root=root)
+    except visual_store.VisualsError as exc:
+        raise DeliverablesError(f"cannot read visuals: {exc}") from exc
+    selected = {item.id for item in plan.assets if item.status == "selected"}
+    needed = {payload.cover_asset_id, *(slide.asset_id for slide in payload.slides)}
+    missing = sorted(needed - selected)
+    if missing:
+        raise DeliverablesError("gallery assets must be currently selected: " + ", ".join(missing))
+
+
+def _gallery_dict(payload: GalleryPayload) -> dict[str, Any]:
+    return {
+        "caption": payload.caption,
+        "tags": list(payload.tags),
+        "cover_asset_id": payload.cover_asset_id,
+        "slides": [_slide_dict(slide) for slide in payload.slides],
+    }
+
+
+def _slide_dict(slide: GallerySlide) -> dict[str, Any]:
+    row: dict[str, Any] = {"asset_id": slide.asset_id, "order": slide.order, "alt": slide.alt}
+    if slide.crop is not None:
+        row["crop"] = {"x": slide.crop.x, "y": slide.crop.y, "w": slide.crop.w, "h": slide.crop.h}
+    return row
+
+
+def _replace_item(project_id: str, item: Deliverable, root: str | Path) -> None:
+    bundle = load_deliverables(project_id, projects_root=root)
+    items = tuple(item if existing.id == item.id else existing for existing in bundle.items)
+    if item.id not in {existing.id for existing in bundle.items}:
+        raise DeliverablesError(f"deliverable not found: {item.id}")
+    _write(root, DeliverableSet(bundle.project_id, _SCHEMA_VERSION, items))
 
 
 def _ensure(project_id: str, root: str | Path) -> None:
@@ -301,13 +588,22 @@ __all__ = [
     "DeliverableSet",
     "DeliverableSnapshot",
     "DeliverablesError",
+    "GalleryCrop",
+    "GalleryPayload",
+    "GallerySlide",
     "KIND_ARTICLE",
+    "KIND_GALLERY",
     "SEED_IDS",
     "article_payload",
+    "create_gallery",
+    "gallery_payload",
     "get_deliverable",
+    "list_galleries",
     "load_deliverables",
     "platform_for_seed",
     "project_from_variants",
     "seed_id_for",
+    "set_gallery_locked",
     "sync_from_variant_set",
+    "update_gallery",
 ]

@@ -24,6 +24,11 @@ KIND_GALLERY = "gallery"
 KIND_VIDEO = "video"
 KNOWN_KINDS = (KIND_ARTICLE, KIND_GALLERY, KIND_VIDEO)
 
+# Platforms without an official image-count rule inherit these and they are
+# written onto Capability.limits so UI/approval/export read one place.
+DEFAULT_GALLERY_MIN_IMAGES = 1
+DEFAULT_GALLERY_MAX_IMAGES = 9
+
 REGISTRY_PLATFORMS = ("wechat_mp", "toutiao", "xiaohongshu", "douyin", "x")
 
 
@@ -133,12 +138,22 @@ _REGISTRY: dict[str, Capability] = {
         platform="xiaohongshu",
         label="小红书",
         formats=(KIND_GALLERY,),
-        delivery=_flags(draft=True, direct=True),
+        # Project path is assisted/export only. Adapter CLI may still exist,
+        # but product delivery must not expose draft/direct or treat unknown
+        # receipts as platform success.
+        delivery=_flags(draft=False, direct=False),
         auth=AuthSpec("cli", (), False, "XHS_SKILLS_PATH"),
         review=ReviewSpec(False, True, "public"),
-        limits=CapabilityLimits(min_images=1, max_images=9),
+        limits=CapabilityLimits(
+            min_images=DEFAULT_GALLERY_MIN_IMAGES,
+            max_images=DEFAULT_GALLERY_MAX_IMAGES,
+        ),
         receipts=ReceiptSpec(("platform_post_id",), True),
-        ui=UiSpec("slide_strip", "将通过外部 CLI 发布小红书图卡，需人工确认。", ("caption", "images")),
+        ui=UiSpec(
+            "slide_strip",
+            "仅本地安全导出，供人工导入小红书。无 post_id/URL 不得记为平台成功。",
+            ("caption", "images"),
+        ),
         adapter="xiaohongshu",
     ),
     "douyin": Capability(
@@ -181,6 +196,25 @@ def all_capabilities() -> tuple[Capability, ...]:
 
 def platforms_for(*, kind: str) -> tuple[str, ...]:
     return tuple(item.platform for item in all_capabilities() if kind in item.formats)
+
+
+def gallery_image_limits(platform: str) -> tuple[int, int]:
+    """Return (min, max) image counts, filling documented defaults when unset."""
+    cap = get_capability(platform)
+    minimum = cap.limits.min_images if cap.limits.min_images is not None else DEFAULT_GALLERY_MIN_IMAGES
+    maximum = cap.limits.max_images if cap.limits.max_images is not None else DEFAULT_GALLERY_MAX_IMAGES
+    if minimum < 1 or maximum < minimum:
+        raise ValueError(f"{platform} gallery image limits are invalid: {minimum}..{maximum}")
+    return minimum, maximum
+
+
+def gallery_image_limits_for(targets: Iterable[str]) -> tuple[int, int]:
+    """Intersect per-target limits; used when a gallery lists several platforms."""
+    names = tuple(targets)
+    if not names:
+        return DEFAULT_GALLERY_MIN_IMAGES, DEFAULT_GALLERY_MAX_IMAGES
+    lows, highs = zip(*(gallery_image_limits(name) for name in names))
+    return max(lows), min(highs)
 
 
 def intersect_delivery(product: DeliveryFlags, adapter: AdapterCapabilities) -> DeliveryFlags:
@@ -242,10 +276,14 @@ __all__ = [
     "ReceiptSpec",
     "ReviewSpec",
     "UiSpec",
+    "DEFAULT_GALLERY_MAX_IMAGES",
+    "DEFAULT_GALLERY_MIN_IMAGES",
     "all_capabilities",
     "assert_unknown_is_failure",
     "capabilities_payload",
     "effective_delivery",
+    "gallery_image_limits",
+    "gallery_image_limits_for",
     "get_capability",
     "intersect_delivery",
     "mode_allowed",

@@ -20,7 +20,14 @@ def test_registry_covers_five_adapters_and_wechat_hides_direct():
     assert toutiao.delivery.direct is False
     assert toutiao.delivery.export is True
     assert toutiao.delivery.draft is False
+    xhs = get_capability("xiaohongshu")
+    assert xhs.delivery.direct is False
+    assert xhs.delivery.draft is False
+    assert xhs.delivery.export is True
+    assert xhs.limits.min_images == 1
+    assert xhs.limits.max_images == 9
     assert set(platforms_for(kind="article")) >= {"wechat_mp", "toutiao", "x"}
+    assert platforms_for(kind="gallery") == ("xiaohongshu",)
 
 
 def test_x_without_user_context_direct_is_false():

@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
-import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useCapabilitiesStore, useWorkspaceStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult, type DeliveryAttemptResult, type VariantAdaptationPreview } from '../stores'
+import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useCapabilitiesStore, useWorkspaceStore, useGalleriesStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult, type DeliveryAttemptResult, type VariantAdaptationPreview, type GalleryDeliverable, type GallerySlide } from '../stores'
 import { llmForbiddenHint, policyLabel } from '../autonomy'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
@@ -16,6 +16,7 @@ const masterStore = useMasterStore()
 const visualsStore = useVisualsStore()
 const variantsStore = useVariantsStore()
 const approvalsStore = useApprovalsStore()
+const galleriesStore = useGalleriesStore()
 const capabilitiesStore = useCapabilitiesStore()
 const workspaceStore = useWorkspaceStore()
 const { items, total, loading, error } = storeToRefs(store)
@@ -24,6 +25,7 @@ const { master, suggestions, loading: masterLoading, error: masterError } = stor
 const { plan: visualPlan, provider: visualProvider, loading: visualsLoading, error: visualsError } = storeToRefs(visualsStore)
 const { variants, loading: variantsLoading, error: variantsError } = storeToRefs(variantsStore)
 const { status: approvalStatus, loading: approvalsLoading, error: approvalsError } = storeToRefs(approvalsStore)
+const { items: galleries, loading: galleriesLoading, error: galleriesError } = storeToRefs(galleriesStore)
 const project = ref<ProjectItem | null>(null)
 const detailError = ref<string | null>(null)
 const projectId = computed(() => typeof route.params.id === 'string' ? route.params.id : null)
@@ -45,7 +47,12 @@ const visualPrompts = ref<Record<string, string>>({})
 const variantForms = ref<Record<string, { title: string; summary: string; body: string }>>({})
 const approvalNotes = ref<Record<string, string>>({})
 const approvalActor = ref('本机创作者')
-const activeWorkbench = ref<'research' | 'master' | 'visuals' | 'variants' | 'approval'>('research')
+const activeWorkbench = ref<'research' | 'master' | 'visuals' | 'gallery' | 'variants' | 'approval'>('research')
+const gallerySaving = ref(false)
+const galleryExporting = ref<string | null>(null)
+const galleryExport = ref<DeliveryAttemptResult | null>(null)
+const galleryDraft = ref({ title: '', caption: '', tags: '' })
+const galleryForms = ref<Record<string, { title: string; caption: string; tags: string; cover_asset_id: string; slides: GallerySlide[] }>>({})
 const draftGenerating = ref(false)
 const draftProposal = ref<MasterDraftProposal | null>(null)
 const importingSlot = ref<string | null>(null)
@@ -72,12 +79,20 @@ const variantsReady = computed(() => ['wechat_mp', 'toutiao'].every(platform => 
   const item = variants.value.find(candidate => candidate.platform === platform)
   return Boolean(item && master.value && item.source_master_version === master.value.version && item.body.trim().length >= 600 && item.locked)
 }))
+const selectedVisuals = computed(() => visualPlan.value?.assets.filter(asset => asset.status === 'selected') ?? [])
+const xhsCapability = computed(() => capabilitiesStore.forPlatform('xiaohongshu'))
+const galleryLimits = computed(() => ({
+  min: xhsCapability.value?.limits?.min_images ?? 1,
+  max: xhsCapability.value?.limits?.max_images ?? 9,
+}))
+const galleriesReady = computed(() => galleries.value.length > 0 && galleries.value.every(item => item.locked && item.payload.slides.length >= (galleryLimits.value.min ?? 1)))
 const workflowSteps = computed(() => [
   { key: 'research' as const, label: '1 研究', done: researchReady.value },
   { key: 'master' as const, label: '2 主稿', done: masterReady.value },
   { key: 'visuals' as const, label: '3 视觉', done: visualsReady.value },
-  { key: 'variants' as const, label: '4 双平台', done: variantsReady.value },
-  { key: 'approval' as const, label: '5 审批导出', done: Boolean(approvalStatus.value?.complete && approvalStatus.value.ready && !approvalStatus.value.stale) },
+  { key: 'gallery' as const, label: '4 组图', done: galleries.value.length === 0 || galleriesReady.value },
+  { key: 'variants' as const, label: '5 图文', done: variantsReady.value },
+  { key: 'approval' as const, label: '6 审批导出', done: Boolean(approvalStatus.value?.complete && approvalStatus.value.ready && !approvalStatus.value.stale) },
 ])
 const nextStep = computed(() => workflowSteps.value.find(item => !item.done) ?? {
   key: 'approval' as const, label: '5 审批导出', done: true,
@@ -103,6 +118,8 @@ async function loadPage(): Promise<void> {
     await visualsStore.load(projectId.value)
     await variantsStore.load(projectId.value)
     await approvalsStore.load(projectId.value)
+    await galleriesStore.load(projectId.value)
+    galleryForms.value = Object.fromEntries(galleries.value.map(item => [item.id, galleryForm(item)]))
     await capabilitiesStore.load()
     await workspaceStore.load(projectId.value)
     if (master.value) masterForm.value = { title: master.value.title, body: master.value.body }
@@ -130,6 +147,7 @@ function goPrimaryCta(): void {
   const key = primaryCta.value.key
   if (key === 'research') activeWorkbench.value = 'research'
   else if (key === 'master') activeWorkbench.value = 'master'
+  else if (key === 'gallery') activeWorkbench.value = 'gallery'
   else activeWorkbench.value = 'approval'
 }
 async function proposeDraft(): Promise<void> {
@@ -223,8 +241,8 @@ async function importVisual(event: Event, slot: VisualSlot): Promise<void> {
   catch (e) { detailError.value = unwrapError(e) }
   finally { importingSlot.value = null; input.value = '' }
 }
-function platformName(platform: PlatformVariant['platform']): string {
-  return capabilitiesStore.forPlatform(platform)?.label ?? (platform === 'wechat_mp' ? '微信公众号' : '今日头条')
+function platformName(platform: string): string {
+  return capabilitiesStore.forPlatform(platform)?.label ?? platform
 }
 function variantForm(platform: PlatformVariant['platform']): { title: string; summary: string; body: string } { return variantForms.value[platform] ?? { title: '', summary: '', body: '' } }
 async function createVariant(platform: PlatformVariant['platform'], adaptWithAi = false): Promise<void> {
@@ -262,10 +280,99 @@ function previewVariant(item: PlatformVariant): void { if (!projectId.value) ret
 function approvalLabel(checkId: string): string {
   if (checkId === 'master') return '主稿内容与事实边界'
   if (checkId === 'visuals') return '已选封面与插图'
-  if (checkId === 'wechat_mp' || checkId.endsWith('wechat_mp')) return '微信公众号版本'
-  if (checkId === 'toutiao' || checkId.endsWith('toutiao')) return '头条版本'
-  if (checkId.startsWith('deliverable:')) return `交付物 ${checkId.slice('deliverable:'.length)}`
-  return checkId
+  const id = checkId.startsWith('deliverable:') ? checkId.slice('deliverable:'.length) : checkId
+  if (id === 'wechat_mp' || id.endsWith('wechat_mp')) return `${wechatLabel.value}版本`
+  if (id === 'toutiao' || id.endsWith('toutiao')) return `${toutiaoLabel.value}版本`
+  const gallery = galleries.value.find(item => item.id === id)
+  if (gallery) {
+    const target = gallery.targets[0]
+    return `组图 · ${platformName(target)}`
+  }
+  return id
+}
+function galleryForm(item: GalleryDeliverable) {
+  return {
+    title: item.title,
+    caption: item.payload.caption,
+    tags: item.payload.tags.join(', '),
+    cover_asset_id: item.payload.cover_asset_id,
+    slides: item.payload.slides.map(slide => ({ ...slide })),
+  }
+}
+function selectedAsset(assetId: string): VisualAsset | undefined {
+  return visualPlan.value?.assets.find(asset => asset.id === assetId)
+}
+function gallerySlideUrl(assetId: string): string | null {
+  const asset = selectedAsset(assetId)
+  if (asset) return visualAssetUrl(asset)
+  return projectId.value ? `/output/projects/${projectId.value}/assets/${assetId}.png` : null
+}
+function ensureCrop(slide: GallerySlide): NonNullable<GallerySlide['crop']> {
+  slide.crop ??= { x: 0, y: 0, w: 1, h: 1 }
+  return slide.crop
+}
+async function createGalleryFromSelected(): Promise<void> {
+  if (!projectId.value) return
+  const chosen = selectedVisuals.value.slice(0, galleryLimits.value.max)
+  if (chosen.length < galleryLimits.value.min) {
+    detailError.value = `组图需要 ${galleryLimits.value.min}–${galleryLimits.value.max} 张已选图`
+    return
+  }
+  gallerySaving.value = true
+  try {
+    const created = await galleriesStore.create(projectId.value, {
+      title: galleryDraft.value.title.trim() || project.value?.title || '组图',
+      caption: galleryDraft.value.caption.trim() || project.value?.idea || '组图说明',
+      tags: galleryDraft.value.tags.split(/[,，\s]+/).map(item => item.trim()).filter(Boolean),
+      cover_asset_id: chosen[0].id,
+      slides: chosen.map((asset, index) => ({ asset_id: asset.id, order: index, alt: asset.prompt || `第${index + 1}张` })),
+      targets: ['xiaohongshu'],
+    })
+    galleryForms.value[created.id] = galleryForm(created)
+    await refreshApprovalStatus()
+  } catch (e) { detailError.value = unwrapError(e) }
+  finally { gallerySaving.value = false }
+}
+async function saveGallery(item: GalleryDeliverable, form: ReturnType<typeof galleryForm>): Promise<void> {
+  if (!projectId.value) return
+  gallerySaving.value = true
+  try {
+    const slides = form.slides.map((slide, index) => ({ ...slide, order: index }))
+    const saved = await galleriesStore.save(projectId.value, item.id, {
+      title: form.title,
+      caption: form.caption,
+      tags: form.tags.split(/[,，\s]+/).map(tag => tag.trim()).filter(Boolean),
+      cover_asset_id: form.cover_asset_id,
+      slides,
+    })
+    galleryForms.value[saved.id] = galleryForm(saved)
+    await refreshApprovalStatus()
+  } catch (e) { detailError.value = unwrapError(e) }
+  finally { gallerySaving.value = false }
+}
+async function lockGallery(item: GalleryDeliverable, locked: boolean): Promise<void> {
+  if (!projectId.value) return
+  try {
+    const updated = await galleriesStore.lock(projectId.value, item.id, locked)
+    galleryForms.value[updated.id] = galleryForm(updated)
+    await refreshApprovalStatus()
+  } catch (e) { detailError.value = unwrapError(e) }
+}
+function moveSlide(slides: GallerySlide[], index: number, delta: number): void {
+  const next = index + delta
+  if (next < 0 || next >= slides.length) return
+  const copy = slides.splice(index, 1)[0]
+  slides.splice(next, 0, copy)
+  slides.forEach((slide, order) => { slide.order = order })
+}
+async function exportGallery(item: GalleryDeliverable): Promise<void> {
+  if (!projectId.value) return
+  const actor = approvalActor.value.trim()
+  if (!actor) { detailError.value = '请填写真实审批人或角色。'; return }
+  galleryExporting.value = item.id
+  try { galleryExport.value = await approvalsStore.exportGallery(projectId.value, item.id, actor) }
+  catch (e) { detailError.value = unwrapError(e) }
+  finally { galleryExporting.value = null }
 }
 async function recheckApproval(): Promise<void> { if (!projectId.value) return; const actor = approvalActor.value.trim(); if (!actor) { detailError.value = '请填写真实审批人或角色。'; return } try { await approvalsStore.recheck(projectId.value, actor) } catch (e) { detailError.value = unwrapError(e) } }
 async function decideApproval(check: ApprovalCheck, approved: boolean): Promise<void> { if (!projectId.value) return; const actor = approvalActor.value.trim(); if (!actor) { detailError.value = '请填写真实审批人或角色。'; return } try { await approvalsStore.decide(projectId.value, check.id, approved, actor, approvalNotes.value[check.id]?.trim() || undefined); approvalNotes.value[check.id] = '' } catch (e) { detailError.value = unwrapError(e) } }
@@ -384,8 +491,66 @@ watch(projectId, loadPage)
           <div v-if="visualPlan?.assets.some(asset => visualAssetUrl(asset))" class="asset-gallery"><figure v-for="asset in visualPlan.assets.filter(item => visualAssetUrl(item))" :key="`preview-${asset.id}`"><img :src="visualAssetUrl(asset) || ''" :alt="asset.prompt" /><figcaption>{{ visualSlots.find(slot => slot.id === asset.slot_id)?.purpose }} · {{ asset.status === 'selected' ? '已选择' : '候选' }}</figcaption></figure></div>
           <a-spin :spinning="visualsLoading"><a-card :bordered="false" class="visual-card"><a-form layout="vertical"><a-form-item label="视觉圣经"><a-textarea v-model:value="visualBible" :rows="3" placeholder="例如：风格: 克制的编辑插画\n色彩: 暖白纸张与墨蓝" /></a-form-item><div class="visual-slot-list"><article v-for="(slot, index) in visualSlots" :key="slot.id" class="visual-slot"><div class="slot-heading"><strong>{{ slot.purpose || `槽位 ${index + 1}` }}</strong><a-button type="link" danger size="small" @click="visualSlots.splice(index, 1)">移除</a-button></div><div class="form-pair"><a-form-item label="用途"><a-input v-model:value="slot.purpose" placeholder="封面 / 正文插图" /></a-form-item><a-form-item label="比例"><a-select v-model:value="slot.aspect_ratio"><a-select-option value="16:9">16:9 横图</a-select-option><a-select-option value="1:1">1:1 方图</a-select-option><a-select-option value="9:16">9:16 竖图</a-select-option><a-select-option value="4:3">4:3</a-select-option><a-select-option value="3:4">3:4</a-select-option></a-select></a-form-item></div><a-form-item label="对应段落（可选）"><a-input v-model:value="slot.paragraph_anchor" placeholder="例如：开头的核心问题" /></a-form-item><a-form-item label="画面方向"><a-textarea v-model:value="slot.direction" :rows="2" placeholder="这张图要帮助读者理解什么？" /></a-form-item><a-form-item label="生成或编辑提示词"><a-textarea v-model:value="visualPrompts[slot.id]" :rows="2" placeholder="显式点击后才会调用 GPT Image 2" /></a-form-item><div class="visual-actions"><a-button :loading="visualGenerating === slot.id" :disabled="!llmAllowed || !visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot)">生成候选</a-button></div><div v-if="visualPlan?.assets.filter(asset => asset.slot_id === slot.id).length" class="asset-list"><article v-for="asset in visualPlan.assets.filter(item => item.slot_id === slot.id).slice().reverse()" :key="asset.id" :class="['visual-asset', asset.status]"><div><a-tag :color="asset.status === 'selected' ? 'green' : asset.status === 'failed' ? 'red' : 'blue'">{{ asset.status === 'selected' ? '已选择' : asset.status === 'failed' ? '失败' : '候选' }}</a-tag><span>v{{ asset.version }} · {{ asset.model }} · 预估 ${{ asset.cost_usd.toFixed(2) }}</span></div><p>{{ asset.prompt }}</p><p v-if="asset.failure" class="failure">{{ asset.failure }}</p><div v-if="asset.status !== 'failed'" class="asset-actions"><a-button v-if="asset.status !== 'selected'" size="small" @click="selectVisual(asset.id)">选择</a-button><a-button size="small" :loading="visualGenerating === slot.id" :disabled="!llmAllowed || !visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot, asset.id)">基于此编辑</a-button></div></article></div></article></div><div class="visual-plan-actions"><a-button @click="addVisualSlot">添加插图槽位</a-button><a-button type="primary" :loading="visualSaving" @click="saveVisualPlan">保存视觉计划</a-button></div></a-form></a-card></a-spin>
         </section>
+        <section v-show="activeWorkbench === 'gallery'" class="gallery-workbench">
+          <header class="section-heading"><div><p class="eyebrow">组图画布</p><h2>选封面、排顺序、写说明，再送审批导出。</h2><p>{{ xhsCapability?.label || '目标平台' }} 允许 {{ galleryLimits.min }}–{{ galleryLimits.max }} 张。只引用当前 selected 资产，不复制像素文件。交付只有预览和本地导出，没有直发。</p></div></header>
+          <a-alert v-if="galleriesError" type="error" :message="galleriesError" show-icon class="notice" />
+          <div class="draft-actions">
+            <div>
+              <strong>从已选视觉创建组图</strong>
+              <p class="muted">当前已选 {{ selectedVisuals.length }} 张。{{ xhsCapability?.ui.confirm_copy }}</p>
+            </div>
+            <a-button type="primary" :loading="gallerySaving" :disabled="selectedVisuals.length < galleryLimits.min" @click="createGalleryFromSelected">用已选图创建组图</a-button>
+          </div>
+          <a-form layout="vertical" class="gallery-create">
+            <div class="form-pair">
+              <a-form-item label="组图标题"><a-input v-model:value="galleryDraft.title" placeholder="可留空，默认用项目标题" /></a-form-item>
+              <a-form-item label="标签"><a-input v-model:value="galleryDraft.tags" placeholder="逗号分隔，可选" /></a-form-item>
+            </div>
+            <a-form-item label="文案"><a-textarea v-model:value="galleryDraft.caption" :rows="2" placeholder="组图说明 / caption" /></a-form-item>
+          </a-form>
+          <a-spin :spinning="galleriesLoading">
+            <a-empty v-if="!galleries.length" description="还没有组图。先在视觉计划里选图，再创建。" />
+            <a-card v-for="item in galleries" :key="item.id" :title="item.title" :bordered="false" class="gallery-card">
+              <template #extra>
+                <a-tag v-if="item.locked" color="gold">已锁定</a-tag>
+                <a-tag>{{ platformName(item.targets[0]) }} · v{{ item.version }}</a-tag>
+              </template>
+              <a-form v-if="galleryForms[item.id]" layout="vertical">
+                <div class="form-pair">
+                  <a-form-item label="标题"><a-input v-model:value="galleryForms[item.id].title" :disabled="item.locked" /></a-form-item>
+                  <a-form-item label="封面"><a-select v-model:value="galleryForms[item.id].cover_asset_id" :disabled="item.locked"><a-select-option v-for="slide in galleryForms[item.id].slides" :key="slide.asset_id" :value="slide.asset_id">{{ slide.alt || slide.asset_id }}</a-select-option></a-select></a-form-item>
+                </div>
+                <a-form-item label="文案"><a-textarea v-model:value="galleryForms[item.id].caption" :rows="2" :disabled="item.locked" /></a-form-item>
+                <a-form-item label="标签"><a-input v-model:value="galleryForms[item.id].tags" :disabled="item.locked" /></a-form-item>
+                <div class="gallery-canvas">
+                  <article v-for="(slide, index) in galleryForms[item.id].slides" :key="slide.asset_id" :class="{ cover: slide.asset_id === galleryForms[item.id].cover_asset_id }">
+                    <img v-if="gallerySlideUrl(slide.asset_id)" :src="gallerySlideUrl(slide.asset_id) || ''" :alt="slide.alt" />
+                    <p>{{ slide.asset_id }}</p>
+                    <a-input v-model:value="slide.alt" :disabled="item.locked" placeholder="说明 / alt" size="small" />
+                    <div class="crop-row">
+                      <a-input-number v-model:value="ensureCrop(slide).x" :min="0" :max="1" :step="0.05" :disabled="item.locked" size="small" />
+                      <a-input-number v-model:value="ensureCrop(slide).y" :min="0" :max="1" :step="0.05" :disabled="item.locked" size="small" />
+                      <a-input-number v-model:value="ensureCrop(slide).w" :min="0.05" :max="1" :step="0.05" :disabled="item.locked" size="small" />
+                      <a-input-number v-model:value="ensureCrop(slide).h" :min="0.05" :max="1" :step="0.05" :disabled="item.locked" size="small" />
+                    </div>
+                    <div class="asset-actions">
+                      <a-button size="small" :disabled="item.locked || index === 0" @click="moveSlide(galleryForms[item.id].slides, index, -1)">上移</a-button>
+                      <a-button size="small" :disabled="item.locked || index === galleryForms[item.id].slides.length - 1" @click="moveSlide(galleryForms[item.id].slides, index, 1)">下移</a-button>
+                      <a-button size="small" :disabled="item.locked" @click="galleryForms[item.id].cover_asset_id = slide.asset_id">设为封面</a-button>
+                      <a-button size="small" danger :disabled="item.locked || galleryForms[item.id].slides.length <= galleryLimits.min" @click="galleryForms[item.id].slides.splice(index, 1)">移除</a-button>
+                    </div>
+                  </article>
+                </div>
+                <div class="variant-actions">
+                  <a-button type="primary" :disabled="item.locked" :loading="gallerySaving" @click="saveGallery(item, galleryForms[item.id])">保存组图</a-button>
+                  <a-button @click="lockGallery(item, !item.locked)">{{ item.locked ? '解锁编辑' : '锁定版本' }}</a-button>
+                </div>
+              </a-form>
+            </a-card>
+          </a-spin>
+        </section>
         <section v-show="activeWorkbench === 'variants'" class="variants-workbench">
-          <header class="section-heading"><div><p class="eyebrow">平台版本</p><h2>共享主张，各自完成排版。</h2><p>创建后，微信和头条各自独立编辑。主稿更新只会提示你，不会自动覆盖人工修改。</p></div></header>
+          <header class="section-heading"><div><p class="eyebrow">平台版本</p><h2>共享主张，各自完成排版。</h2><p>创建后，{{ wechatLabel }} 与 {{ toutiaoLabel }} 各自独立编辑。展示名来自能力注册表。主稿更新只会提示你，不会自动覆盖人工修改。</p></div></header>
           <a-alert v-if="variantsError" type="error" :message="variantsError" show-icon class="notice" />
           <div class="variant-adapt"><div v-for="platform in ['wechat_mp', 'toutiao']" :key="`adapt-${platform}`"><strong>{{ platformName(platform as PlatformVariant['platform']) }}</strong><a-button type="primary" :loading="variantGenerating === platform" :disabled="!llmAllowed || variants.some(item => item.platform === platform) || !master" @click="createVariant(platform as PlatformVariant['platform'], true)">AI 适配平台初稿</a-button></div><p class="muted">协作模式下 AI 适配只出预览，接受后才落盘。如不可用，可使用下方“复制主稿”兜底。</p></div>
           <a-card v-for="(preview, platform) in adaptPreviews" :key="`preview-${platform}`" :title="`${platformName(platform as PlatformVariant['platform'])} 适配预览（未落盘）`" :bordered="false" class="draft-proposal"><h3>{{ preview?.title }}</h3><p class="proposal-copy">{{ preview?.body }}</p><div class="proposal-actions"><a-button type="primary" @click="acceptAdaptPreview(platform as PlatformVariant['platform'])">采用为平台初稿</a-button><a-button @click="delete adaptPreviews[platform as PlatformVariant['platform']]">丢弃</a-button></div></a-card>
@@ -396,8 +561,9 @@ watch(projectId, loadPage)
           <a-alert v-if="approvalsError" type="error" :message="approvalsError" show-icon class="notice" />
           <div class="approval-actor"><label for="approval-actor">真实审批人或角色</label><a-input id="approval-actor" v-model:value="approvalActor" placeholder="例如：张三 / Codex 自测（受用户委托）" /></div>
           <a-spin :spinning="approvalsLoading"><a-card :bordered="false" class="approval-card"><a-alert v-if="approvalStatus?.blockers.length" type="warning" show-icon :message="`尚不可审批：${approvalStatus?.blockers.join('；')}`" class="notice"/><a-alert v-else-if="approvalStatus?.stale" type="warning" show-icon message="上游内容已改变，请重新检查。历史批准不会被静默沿用；所有批准与撤回动作已暂停。" class="notice"/><div class="approval-actions"><a-button type="primary" @click="recheckApproval">重新检查内容包</a-button></div><div v-if="approvalStatus?.approval.checks.length" class="approval-list"><article v-for="check in approvalStatus.approval.checks" :key="check.id"><div><strong>{{ approvalLabel(check.id) }}</strong><p>{{ check.status === 'approved' ? `已由 ${check.approved_by} 批准` : '待人工检查' }}</p><small v-if="check.note">当前备注：{{ check.note }}</small></div><div class="approval-decision"><a-input v-model:value="approvalNotes[check.id]" :disabled="!approvalStatus.ready || approvalStatus.stale" placeholder="可选审批备注" size="small"/><a-button v-if="check.status !== 'approved'" type="primary" size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, true)">批准</a-button><a-button v-else size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, false)">撤回批准</a-button></div></article></div><a-empty v-else description="先重新检查，生成当前内容包的审批清单。" :image-style="{ height: '40px' }"/><p v-if="approvalStatus?.complete" class="approval-complete">所有项目已批准。下一步仅可进入草稿箱或安全导出，仍不等于真实发布。</p><div v-if="approvalStatus?.approval.history.length" class="approval-history"><strong>审批历史</strong><p v-for="event in approvalStatus.approval.history.slice().reverse().slice(0, 8)" :key="`${event.at}-${event.action}-${event.check_id}`">{{ event.at }} · {{ event.actor }} · {{ event.action }}{{ event.check_id ? ` (${approvalLabel(event.check_id)})` : '' }}{{ event.note ? ` · ${event.note}` : '' }}</p></div></a-card></a-spin>
-          <div v-if="approvalStatus?.complete" class="export-panel"><div><strong>{{ toutiaoLabel }}安全导出</strong><p>{{ toutiaoCopy }}</p></div><a-button type="primary" :loading="exporting" @click="exportPackage">导出 ZIP</a-button><a v-if="exportResult" :href="exportResult.url" target="_blank" rel="noreferrer">下载 {{ exportResult.file_name }}</a></div>
-          <div v-if="approvalStatus?.complete && project.autonomy !== 'pack'" class="export-panel"><div><strong>创建{{ wechatLabel }}草稿</strong><p>{{ wechatCopy }}</p></div><a-button :loading="drafting" @click="createWechatDraft">创建草稿</a-button><p v-if="draftResult" class="muted">{{ draftResult.label }}{{ draftResult.media_id ? ` · media_id=${draftResult.media_id}` : '' }}{{ draftResult.error ? ` · ${draftResult.error}` : '' }}</p></div>
+          <div v-if="approvalStatus?.complete && variants.length" class="export-panel"><div><strong>{{ toutiaoLabel }}安全导出</strong><p>{{ toutiaoCopy }}</p></div><a-button type="primary" :loading="exporting" @click="exportPackage">导出 ZIP</a-button><a v-if="exportResult" :href="exportResult.url" target="_blank" rel="noreferrer">下载 {{ exportResult.file_name }}</a></div>
+          <div v-for="item in galleries" :key="`export-${item.id}`" v-show="approvalStatus?.complete" class="export-panel"><div><strong>{{ platformName(item.targets[0]) }}组图导出</strong><p>{{ xhsCapability?.ui.confirm_copy }}</p></div><a-button type="primary" :loading="galleryExporting === item.id" @click="exportGallery(item)">导出组图 ZIP</a-button><a v-if="galleryExport?.export" :href="galleryExport.export.url" target="_blank" rel="noreferrer">下载 {{ galleryExport.export.file_name }}</a></div>
+          <div v-if="approvalStatus?.complete && project.autonomy !== 'pack' && variants.some(item => item.platform === 'wechat_mp')" class="export-panel"><div><strong>创建{{ wechatLabel }}草稿</strong><p>{{ wechatCopy }}</p></div><a-button :loading="drafting" @click="createWechatDraft">创建草稿</a-button><p v-if="draftResult" class="muted">{{ draftResult.label }}{{ draftResult.media_id ? ` · media_id=${draftResult.media_id}` : '' }}{{ draftResult.error ? ` · ${draftResult.error}` : '' }}</p></div>
         </section>
       </article>
     </template>
@@ -420,12 +586,13 @@ watch(projectId, loadPage)
 h1, h2 { color: #292522; font-family: Georgia, 'Songti SC', serif; } h1 { margin: 0 0 12px; font-size: clamp(30px, 4vw, 44px); line-height: 1.2; } h2 { margin: 0 0 8px; font-size: 22px; }
 .list-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-bottom: 28px; }.list-header > div { max-width: 720px; }.list-header p, .idea, .project-row p, .project-row span, .project-workspace p { color: #706b65; line-height: 1.7; }.notice { margin-bottom: 16px; }
 .project-list { border-top: 1px solid #ded7cd; }.project-row { width: 100%; display: flex; justify-content: space-between; gap: 24px; padding: 22px 4px; text-align: left; border: 0; border-bottom: 1px solid #ded7cd; background: transparent; cursor: pointer; }.project-row:hover h2 { color: #886d4b; }.project-row p { max-width: 700px; margin: 0 0 6px; }.project-row span, .row-meta { color: #948d84; font-size: 13px; }.row-meta { display: flex; align-items: center; gap: 16px; white-space: nowrap; }.empty-icon { color: #b39b79; font-size: 44px; }.count { color: #948d84; font-size: 13px; }.back { margin-bottom: 12px; padding-left: 0; }.project-workspace > header { max-width: 760px; margin-bottom: 28px; }.idea { font-size: 18px; }.project-grid, .research-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.project-grid :deep(.ant-card), .research-grid :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.project-grid dd { margin: 4px 0 16px; color: #4e4943; }.project-grid dt { color: #948d84; font-size: 12px; }.muted { color: #948d84 !important; }.research-board { margin-top: 34px; max-width: 1000px; }.section-heading { margin-bottom: 18px; }.section-heading p { max-width: 680px; }.research-alerts { display: grid; gap: 8px; margin-bottom: 16px; }.record-list { display: grid; gap: 10px; margin-bottom: 20px; }.record-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.record-list p { margin: 6px 0; color: #5e5851; }.record-list small { color: #897f75; word-break: break-word; }.claim-meta { display: flex; gap: 6px; }.claim-list .unverified { border-left-color: #d89614; }.claim-list .unresolved { border-left-color: #7f59b0; }.caveat { color: #7a5d3d !important; }.research-form { padding-top: 12px; border-top: 1px solid #e8e1d5; }.form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.workflow-cockpit { position: sticky; top: 12px; z-index: 4; display: grid; grid-template-columns: minmax(240px, .7fr) 1.3fr; gap: 20px; margin: 26px 0 6px; padding: 18px; border: 1px solid #ded7cd; border-radius: 12px; background: rgba(255, 253, 248, .96); box-shadow: 0 10px 30px rgba(75, 60, 40, .08); backdrop-filter: blur(8px); }.workflow-cockpit h2 { font-size: 18px; }.workflow-cockpit p { margin: 0; font-size: 13px; }.workflow-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: stretch; gap: 6px; }.workflow-steps button { display: grid; place-content: center; gap: 3px; min-height: 62px; padding: 7px; border: 1px solid #ded7cd; border-radius: 8px; color: #706b65; background: #fff; cursor: pointer; }.workflow-steps button.active { color: #60482d; border-color: #a6845b; background: #f5eee3; }.workflow-steps button.done { color: #39704b; }.workflow-steps span { font-weight: 700; }
+.workflow-cockpit { position: sticky; top: 12px; z-index: 4; display: grid; grid-template-columns: minmax(240px, .7fr) 1.3fr; gap: 20px; margin: 26px 0 6px; padding: 18px; border: 1px solid #ded7cd; border-radius: 12px; background: rgba(255, 253, 248, .96); box-shadow: 0 10px 30px rgba(75, 60, 40, .08); backdrop-filter: blur(8px); }.workflow-cockpit h2 { font-size: 18px; }.workflow-cockpit p { margin: 0; font-size: 13px; }.workflow-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); align-items: stretch; gap: 6px; }.workflow-steps button { display: grid; place-content: center; gap: 3px; min-height: 62px; padding: 7px; border: 1px solid #ded7cd; border-radius: 8px; color: #706b65; background: #fff; cursor: pointer; }.workflow-steps button.active { color: #60482d; border-color: #a6845b; background: #f5eee3; }.workflow-steps button.done { color: #39704b; }.workflow-steps span { font-weight: 700; }
 .master-workbench { margin-top: 34px; }.master-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 16px; }.master-grid :deep(.ant-card), .version-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.suggestion-actions, .proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; }.proposal-list { display: grid; gap: 10px; margin-top: 16px; }.proposal-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.proposal-meta { display: flex; justify-content: space-between; gap: 8px; color: #948d84; font-size: 12px; }.proposal-copy { max-height: 160px; overflow: auto; white-space: pre-wrap; color: #4e4943; }.version-card { margin-top: 16px; }.version-list { display: grid; gap: 8px; }.version-list article { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #e8e1d5; }.version-list span { margin-left: 8px; color: #948d84; font-size: 12px; }.version-list p { margin: 4px 0 0; color: #706b65; }.selection-note { color: #7a6650; font-size: 13px; }
 .draft-actions, .export-panel, .variant-adapt, .local-imports { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; padding: 14px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fffdf8; }.draft-actions p, .export-panel p { margin: 4px 0 0; }.draft-proposal { margin-bottom: 16px; border-color: #c7b497; background: #fbf6ed; }.draft-proposal .proposal-copy { max-height: 360px; }.master-count { color: #7a6650 !important; font-size: 13px; }.variant-adapt > div { display: flex; align-items: center; gap: 10px; }.variant-adapt > p { flex-basis: 100%; margin: 0; }.local-imports { justify-content: flex-start; }.import-button { display: inline-flex; padding: 6px 11px; border: 1px dashed #a6845b; border-radius: 6px; color: #60482d; cursor: pointer; background: #fff; }.import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.visual-bootstrap { margin-bottom: 12px; }
 .asset-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }.asset-gallery figure { margin: 0; padding: 8px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fff; }.asset-gallery img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 5px; }.asset-gallery figcaption { padding-top: 7px; color: #706b65; font-size: 12px; }
 .visual-workbench { margin-top: 34px; }.visual-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.visual-slot-list { display: grid; gap: 14px; }.visual-slot { padding: 14px; border: 1px solid #e8e1d5; background: #faf7f1; }.slot-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }.visual-actions, .visual-plan-actions, .asset-actions { display: flex; flex-wrap: wrap; gap: 8px; }.visual-plan-actions { margin-top: 16px; }.asset-list { display: grid; gap: 8px; margin-top: 12px; }.visual-asset { padding: 10px; border-left: 3px solid #9db7cc; background: #fffdf8; }.visual-asset.selected { border-left-color: #52a36b; }.visual-asset.failed { border-left-color: #cf5d50; }.visual-asset span { margin-left: 8px; color: #897f75; font-size: 12px; }.visual-asset p { margin: 7px 0; color: #5e5851; white-space: pre-wrap; }.failure { color: #b44336 !important; }
 .variants-workbench { margin-top: 34px; }.variant-create, .variant-actions { display: flex; flex-wrap: wrap; gap: 8px; }.variant-create { margin-bottom: 12px; }.variant-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.variant-list :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }
+.gallery-workbench { margin-top: 34px; }.gallery-create { margin-bottom: 16px; }.gallery-card { margin-bottom: 16px; background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.gallery-canvas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }.gallery-canvas article { padding: 8px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fff; }.gallery-canvas article.cover { border-color: #a6845b; }.gallery-canvas img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; }.gallery-canvas p { margin: 6px 0; color: #897f75; font-size: 12px; }.crop-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 6px 0; }
 .approval-workbench { margin-top: 34px; }.approval-actor { display: grid; grid-template-columns: 150px minmax(220px, 420px); align-items: center; gap: 10px; margin-bottom: 14px; color: #706b65; font-size: 13px; }.approval-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.approval-actions { margin-bottom: 14px; }.approval-list { display: grid; gap: 8px; }.approval-list article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid #e8e1d5; }.approval-list p, .approval-list small { margin: 4px 0 0; color: #706b65; }.approval-decision { display: grid; grid-template-columns: minmax(130px, 220px) auto; gap: 8px; align-items: center; }.approval-complete { margin-top: 16px; color: #39704b !important; }.approval-history { margin-top: 18px; padding-top: 14px; border-top: 1px solid #e8e1d5; }.approval-history p { margin: 5px 0; color: #897f75; font-size: 12px; }
-@media (max-width: 760px) { .list-header, .project-row { align-items: flex-start; flex-direction: column; }.project-grid, .research-grid, .form-pair, .variant-list, .workflow-cockpit { grid-template-columns: 1fr; }.workflow-cockpit { position: static; }.workflow-steps { grid-template-columns: repeat(5, minmax(110px, 1fr)); overflow-x: auto; }.row-meta { width: 100%; justify-content: space-between; } }
+@media (max-width: 760px) { .list-header, .project-row { align-items: flex-start; flex-direction: column; }.project-grid, .research-grid, .form-pair, .variant-list, .workflow-cockpit { grid-template-columns: 1fr; }.workflow-cockpit { position: static; }.workflow-steps { grid-template-columns: repeat(6, minmax(110px, 1fr)); overflow-x: auto; }.row-meta { width: 100%; justify-content: space-between; } }
 </style>

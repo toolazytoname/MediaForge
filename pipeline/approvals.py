@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pipeline import master_documents, projects as project_store, research, variants, visuals
+from pipeline import deliverables as deliverable_store, master_documents, projects as project_store, research, variants, visuals
 from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 _NAME = "approval.json"
@@ -33,7 +33,7 @@ class ApprovalError(ValueError):
 
 @dataclass(frozen=True)
 class ApprovalSnapshot:
-    master_version: int
+    master_version: int | None
     variant_versions: dict[str, int]
     visual_asset_ids: tuple[str, ...]
     research_fingerprint: str
@@ -146,48 +146,89 @@ def _current_snapshot(project_id: str, root: str | Path) -> tuple[ApprovalSnapsh
     blockers: list[str] = []
     try: master = master_documents.load_master(project_id, projects_root=root)
     except master_documents.MasterDocumentError as exc: raise ApprovalError(f"cannot read master: {exc}") from exc
-    if master is None:
-        blockers.append("缺少主稿")
-    elif len(master.body.strip()) < 800:
-        blockers.append("主稿不足 800 字，尚未达到双平台长文的最低检查线")
     try: board = research.load_research(project_id, projects_root=root)
     except research.ResearchManifestError as exc: raise ApprovalError(f"cannot read research: {exc}") from exc
-    if len(board.sources) < 3: blockers.append("可靠来源少于 3 个")
-    if not any(item.kind == "judgment" for item in board.claims): blockers.append("缺少明确的个人判断")
-    if any(item.kind == "fact" and item.status != "verified" for item in board.claims): blockers.append("仍有事实声明未核查")
-    if any(item.kind == "open_question" and item.status == "open" for item in board.claims): blockers.append("仍有待确认问题未解决")
     try: items = variants.load_variants(project_id, projects_root=root).variants
     except variants.VariantsError as exc: raise ApprovalError(f"cannot read variants: {exc}") from exc
-    by_platform = {item.platform: item for item in items}
-    for platform, label in (("wechat_mp", "缺少微信公众号版本"), ("toutiao", "缺少头条版本")):
-        item = by_platform.get(platform)
-        if item is None: blockers.append(label)
-        elif master is not None and item.source_master_version != master.version:
-            blockers.append(f"{platform} 仍基于旧主稿 v{item.source_master_version}")
-        elif item.upstream_updated: blockers.append(f"{platform} 有未处理上游更新")
-        elif len(item.body.strip()) < 600: blockers.append(f"{platform} 正文不足 600 字")
-        elif not item.locked: blockers.append(f"{platform} 尚未锁定最终版本")
     try: plan = visuals.load_visuals(project_id, projects_root=root)
     except visuals.VisualsError as exc: raise ApprovalError(f"cannot read visuals: {exc}") from exc
+    try: bundle = deliverable_store.load_deliverables(project_id, projects_root=root)
+    except deliverable_store.DeliverablesError as exc: raise ApprovalError(f"cannot read deliverables: {exc}") from exc
+    articles = [item for item in bundle.items if item.kind == deliverable_store.KIND_ARTICLE]
+    galleries = [item for item in bundle.items if item.kind == deliverable_store.KIND_GALLERY]
+    require_article_package = bool(articles) or not galleries
+    by_platform = {item.platform: item for item in items}
     selected = tuple(sorted(item.id for item in plan.assets if item.status == "selected"))
-    if len(plan.slots) < 3: blockers.append("视觉计划需要至少 1 张封面和 2 张插图")
-    if not any("封面" in item.purpose for item in plan.slots): blockers.append("视觉计划缺少封面槽位")
-    selected_slots = {item.slot_id for item in plan.assets if item.status == "selected"}
-    missing_slots = [item.purpose for item in plan.slots if item.id not in selected_slots]
-    if not selected: blockers.append("尚未选择视觉资产")
-    if missing_slots: blockers.append("仍有视觉槽位未选图：" + "、".join(missing_slots))
     selected_set = set(selected)
-    for item in by_platform.values():
-        if not set(item.asset_ids) <= selected_set: blockers.append(f"{item.platform} 引用了不可解析的视觉资产")
-    if blockers or master is None or len(by_platform) < 2: return None, blockers
-    variant_versions = {"wechat_mp": by_platform["wechat_mp"].version, "toutiao": by_platform["toutiao"].version}
+    if require_article_package:
+        if master is None:
+            blockers.append("缺少主稿")
+        elif len(master.body.strip()) < 800:
+            blockers.append("主稿不足 800 字，尚未达到双平台长文的最低检查线")
+        if len(board.sources) < 3: blockers.append("可靠来源少于 3 个")
+        if not any(item.kind == "judgment" for item in board.claims): blockers.append("缺少明确的个人判断")
+        if any(item.kind == "fact" and item.status != "verified" for item in board.claims): blockers.append("仍有事实声明未核查")
+        if any(item.kind == "open_question" and item.status == "open" for item in board.claims): blockers.append("仍有待确认问题未解决")
+        for platform, label in (("wechat_mp", "缺少微信公众号版本"), ("toutiao", "缺少头条版本")):
+            item = by_platform.get(platform)
+            if item is None: blockers.append(label)
+            elif master is not None and item.source_master_version != master.version:
+                blockers.append(f"{platform} 仍基于旧主稿 v{item.source_master_version}")
+            elif item.upstream_updated: blockers.append(f"{platform} 有未处理上游更新")
+            elif len(item.body.strip()) < 600: blockers.append(f"{platform} 正文不足 600 字")
+            elif not item.locked: blockers.append(f"{platform} 尚未锁定最终版本")
+        if len(plan.slots) < 3: blockers.append("视觉计划需要至少 1 张封面和 2 张插图")
+        if not any("封面" in item.purpose for item in plan.slots): blockers.append("视觉计划缺少封面槽位")
+        selected_slots = {item.slot_id for item in plan.assets if item.status == "selected"}
+        missing_slots = [item.purpose for item in plan.slots if item.id not in selected_slots]
+        if not selected: blockers.append("尚未选择视觉资产")
+        if missing_slots: blockers.append("仍有视觉槽位未选图：" + "、".join(missing_slots))
+        for item in by_platform.values():
+            if not set(item.asset_ids) <= selected_set: blockers.append(f"{item.platform} 引用了不可解析的视觉资产")
+    for gallery in galleries:
+        blockers.extend(_gallery_blockers(gallery, selected_set))
+    if blockers:
+        return None, blockers
+    if require_article_package:
+        if master is None or len(by_platform) < 2:
+            return None, blockers
+        variant_versions = {"wechat_mp": by_platform["wechat_mp"].version, "toutiao": by_platform["toutiao"].version}
+        deliverable_versions = {item.id: item.version for item in (*articles, *galleries)}
+        if not any(item.id.startswith("dlv_article_") for item in articles):
+            deliverable_versions.update(
+                {f"dlv_article_{platform}": version for platform, version in variant_versions.items()}
+            )
+        if not deliverable_versions:
+            deliverable_versions = {f"dlv_article_{platform}": version for platform, version in variant_versions.items()}
+        return ApprovalSnapshot(
+            master.version, variant_versions, selected, _research_fingerprint(board), deliverable_versions,
+        ), blockers
+    referenced: list[str] = []
+    for gallery in galleries:
+        payload = deliverable_store.gallery_payload(gallery)
+        referenced.extend(slide.asset_id for slide in payload.slides)
+    visual_ids = tuple(sorted({item for item in referenced if item in selected_set}))
+    if not visual_ids:
+        return None, ["组图尚未引用已选择的视觉资产"]
     return ApprovalSnapshot(
-        master.version,
-        variant_versions,
-        selected,
-        _research_fingerprint(board),
-        {f"dlv_article_{platform}": version for platform, version in variant_versions.items()},
+        None, {}, visual_ids, _research_fingerprint(board),
+        {item.id: item.version for item in galleries},
     ), blockers
+
+
+def _gallery_blockers(gallery: deliverable_store.Deliverable, selected: set[str]) -> list[str]:
+    try:
+        payload = deliverable_store.gallery_payload(gallery)
+    except deliverable_store.DeliverablesError as error:
+        return [f"组图无效：{error}"]
+    if not gallery.locked:
+        return [f"组图尚未锁定最终版本：{gallery.title}"]
+    if payload.cover_asset_id not in selected:
+        return [f"组图封面未处于 selected：{payload.cover_asset_id}"]
+    missing = [slide.asset_id for slide in payload.slides if slide.asset_id not in selected]
+    if missing:
+        return ["组图引用了未选择的视觉资产：" + "、".join(missing)]
+    return []
 
 
 def _snapshot(value: Any) -> ApprovalSnapshot:
@@ -202,14 +243,26 @@ def _snapshot(value: Any) -> ApprovalSnapshot:
     if fields not in allowed:
         raise ApprovalError("approval snapshot has missing or unknown fields")
     versions = value["variant_versions"]
-    if not isinstance(versions, dict) or set(versions) != {"wechat_mp", "toutiao"}: raise ApprovalError("approval snapshot needs two platform versions")
+    if not isinstance(versions, dict):
+        raise ApprovalError("approval snapshot needs two platform versions")
+    master_raw = value["master_version"]
+    if master_raw is None:
+        if versions:
+            raise ApprovalError("gallery snapshot cannot include article platform versions")
+        master_version = None
+    else:
+        if set(versions) != {"wechat_mp", "toutiao"}:
+            raise ApprovalError("approval snapshot needs two platform versions")
+        master_version = _positive("master_version", master_raw)
     deliverable_versions = value.get("deliverable_versions")
     if deliverable_versions is None:
+        if master_version is None:
+            raise ApprovalError("approval snapshot needs deliverable versions")
         deliverable_versions = {f"dlv_article_{platform}": versions[platform] for platform in versions}
     elif not isinstance(deliverable_versions, dict) or not deliverable_versions:
         raise ApprovalError("approval snapshot needs deliverable versions")
     return ApprovalSnapshot(
-        _positive("master_version", value["master_version"]),
+        master_version,
         {key: _positive(key, versions[key]) for key in versions},
         _assets(value["visual_asset_ids"]),
         _fingerprint(value["research_fingerprint"]) if "research_fingerprint" in value else "0" * 64,
@@ -237,6 +290,7 @@ def _check_ids_for(snapshot: ApprovalSnapshot) -> tuple[str, ...]:
         f"dlv_article_{platform}": version for platform, version in snapshot.variant_versions.items()
     }
     ordered: list[str] = []
+    prefix = ("master", "visuals") if snapshot.master_version is not None else ("visuals",)
     for seed in _SEED_ORDER:
         if seed in versions:
             ordered.append(f"deliverable:{seed}")
@@ -244,7 +298,7 @@ def _check_ids_for(snapshot: ApprovalSnapshot) -> tuple[str, ...]:
         label = f"deliverable:{key}"
         if label not in ordered:
             ordered.append(label)
-    return ("master", "visuals", *ordered)
+    return (*prefix, *ordered)
 
 
 def _checks_match(ids: tuple[str, ...], snapshot: ApprovalSnapshot | None) -> bool:

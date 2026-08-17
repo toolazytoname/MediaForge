@@ -34,6 +34,8 @@ bash scripts/verify.sh
 
 图文安全交付契约（不需要真实平台密钥）：`tests/test_capability_registry.py`、`tests/test_deliverables.py`、`tests/test_delivery_kernel.py`、`tests/test_adapter_capabilities.py`、`tests/test_dryrun_invariance.py`。
 
+组图交付契约（不需要真实平台密钥）：`tests/test_gallery_deliverable.py`。覆盖 3 个夹具审批→导出、未批准 409、非法 `vas_` 拒绝、无回执不记平台成功、小红书 unknown 失败、Project 无 direct。
+
 自主程度契约（RFC §5.7，不需要真实平台密钥）：`tests/test_autonomy_policy.py`、`tests/webui/test_autonomy_api.py`。
 
 GitHub Actions（`.github/workflows/verify.yml`）调用同一条 `scripts/verify.sh`，避免本地与远端两套逻辑。

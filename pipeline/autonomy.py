@@ -218,12 +218,27 @@ def next_action(
     board = research.load_research(project_id, projects_root=projects_root)
     master = master_documents.load_master(project_id, projects_root=projects_root)
     approval = approvals.status(project_id, projects_root=projects_root)
-    cta = next_cta(
-        research_ready=research_is_ready(board),
-        master_ready=master_is_ready(master),
-        approval_complete=approval.complete,
-        autonomy=project.autonomy,
-    )
+    from pipeline.deliverables import KIND_ARTICLE, KIND_GALLERY, load_deliverables
+    try:
+        bundle = load_deliverables(project_id, projects_root=projects_root)
+    except Exception:
+        bundle = None
+    galleries = () if bundle is None else tuple(item for item in bundle.items if item.kind == KIND_GALLERY)
+    articles = () if bundle is None else tuple(item for item in bundle.items if item.kind == KIND_ARTICLE)
+    if galleries and not articles:
+        if any(not item.locked for item in galleries):
+            cta = {"key": "gallery", "label": "去组图"}
+        elif not approval.complete:
+            cta = {"key": "approval", "label": "去审批"}
+        else:
+            cta = {"key": "export", "label": "去导出"}
+    else:
+        cta = next_cta(
+            research_ready=research_is_ready(board),
+            master_ready=master_is_ready(master),
+            approval_complete=approval.complete,
+            autonomy=project.autonomy,
+        )
     return {
         "project_id": project.id,
         "autonomy": project.autonomy,
