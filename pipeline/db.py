@@ -111,6 +111,104 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 """
 
 
+# Append-only delivery kernel (LAZY-40 / RFC §5.6). Does not ALTER frozen tables.
+_DELIVERY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version     INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    applied_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS delivery_attempts (
+    id                    TEXT PRIMARY KEY,
+    project_id            TEXT NOT NULL,
+    deliverable_id        TEXT NOT NULL,
+    deliverable_version   INTEGER NOT NULL,
+    approval_fingerprint  TEXT NOT NULL,
+    publication_id        TEXT,
+    content_id            TEXT,
+    platform              TEXT NOT NULL,
+    account_id            TEXT NOT NULL,
+    mode                  TEXT NOT NULL,
+    outcome               TEXT NOT NULL,
+    idempotency_key       TEXT NOT NULL UNIQUE,
+    retry_of_id           TEXT,
+    compensation_of_id    TEXT,
+    request_hash          TEXT NOT NULL,
+    platform_post_id      TEXT,
+    platform_url          TEXT,
+    raw_receipt           TEXT,
+    error                 TEXT,
+    actor                 TEXT NOT NULL,
+    confirm_token_hash    TEXT,
+    created_at            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_da_project ON delivery_attempts(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_da_pub ON delivery_attempts(publication_id);
+
+CREATE TABLE IF NOT EXISTS durable_jobs (
+    id               TEXT PRIMARY KEY,
+    kind             TEXT NOT NULL,
+    project_id       TEXT,
+    deliverable_id   TEXT,
+    content_id       TEXT,
+    engine           TEXT,
+    state            TEXT NOT NULL,
+    progress         REAL,
+    attempt          INTEGER NOT NULL DEFAULT 1,
+    idempotency_key  TEXT NOT NULL UNIQUE,
+    request_json     TEXT NOT NULL,
+    result_path      TEXT,
+    error            TEXT,
+    cost_usd         REAL,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    finished_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS oauth_token_metadata (
+    id                 TEXT PRIMARY KEY,
+    platform           TEXT NOT NULL,
+    account_id         TEXT NOT NULL,
+    auth_kind          TEXT NOT NULL,
+    key_ref            TEXT NOT NULL,
+    last4              TEXT,
+    scopes             TEXT,
+    user_id            TEXT,
+    expires_at         TEXT,
+    has_user_context   INTEGER NOT NULL DEFAULT 0,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    UNIQUE(platform, account_id, auth_kind)
+);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    at              TEXT NOT NULL,
+    actor           TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    project_id      TEXT,
+    deliverable_id  TEXT,
+    publication_id  TEXT,
+    payload         TEXT NOT NULL,
+    prev_hash       TEXT,
+    event_hash      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS legacy_bindings (
+    project_id       TEXT NOT NULL,
+    deliverable_id   TEXT NOT NULL,
+    content_id       TEXT NOT NULL,
+    publication_id   TEXT,
+    platform         TEXT NOT NULL,
+    account_id       TEXT NOT NULL,
+    materialize_dir  TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    UNIQUE(deliverable_id, platform, account_id)
+);
+"""
+
+
 # ── Connection / init ──────────────────────────────────────
 
 def connect(path: str | Path = "state.db") -> sqlite3.Connection:
@@ -152,7 +250,21 @@ def init_db(conn: sqlite3.Connection) -> None:
     """幂等建表，多次调用无副作用。"""
     conn.executescript(_SCHEMA)
     _migrate_add_cover_path(conn)  # M-x：老库平滑升级
+    _migrate_delivery_kernel(conn)
     conn.commit()
+
+
+def _migrate_delivery_kernel(conn: sqlite3.Connection) -> None:
+    """LAZY-40: append-only delivery tables. Never ALTER frozen columns."""
+    conn.executescript(_DELIVERY_SCHEMA)
+    existing = conn.execute(
+        "SELECT 1 FROM schema_migrations WHERE version = 2"
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+            (2, "2_delivery_kernel", now_utc()),
+        )
 
 
 def _migrate_add_cover_path(conn: sqlite3.Connection) -> None:

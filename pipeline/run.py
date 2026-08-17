@@ -679,6 +679,14 @@ def cmd_publish(args: argparse.Namespace) -> int:
         skipped = 0
         failed = 0
         for pub in queued:
+            from pipeline.delivery.store import is_project_bridged_publication
+            if is_project_bridged_publication(conn, pub.id):
+                print(
+                    f"publish: SKIP {pub.id} project-bridged; "
+                    "not eligible for publish-due"
+                )
+                skipped += 1
+                continue
             # 取对应 platform 的账号配置（多账号由 M4-3+ 扩展，本任务单账号）
             plat_obj = getattr(cfg.platforms, pub.platform, None)
             if plat_obj is None or not plat_obj.accounts:

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
 # ── Pillars ───────────────────────────────────────────────
@@ -156,6 +156,21 @@ class PublishConfig(BaseModel):
     cross_platform_gap_minutes: int = 30
 
 
+class DeliveryConfig(BaseModel):
+    """Project → Publication bridge. `bridge=off` rolls delivery APIs back."""
+    model_config = ConfigDict(extra="forbid")
+    bridge: Literal["on", "off"] = "on"
+
+    @field_validator("bridge", mode="before")
+    @classmethod
+    def _coerce_bridge(cls, value: Any) -> str:
+        if value is True:
+            return "on"
+        if value is False:
+            return "off"
+        return value
+
+
 # ── Platforms ─────────────────────────────────────────────
 
 class AccountAPI(BaseModel):
@@ -238,6 +253,7 @@ class AppConfig(BaseModel):
     image_gen: ImageGenConfig = Field(default_factory=ImageGenConfig)
     video: VideoConfig = Field(default_factory=VideoConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
+    delivery: DeliveryConfig = Field(default_factory=DeliveryConfig)
     platforms: PlatformsConfig = Field(default_factory=PlatformsConfig)
     webui: WebUIConfig = Field(default_factory=WebUIConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)

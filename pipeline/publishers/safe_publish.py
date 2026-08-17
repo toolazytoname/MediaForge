@@ -81,6 +81,7 @@ def safe_publish(
     dry_run: bool,
     now_iso: str,
     log_dir: Path | str = "logs",
+    content: Content | None = None,
 ) -> SafePublishResult:
     """单条 publication 安全发布编排。
 
@@ -129,7 +130,8 @@ def safe_publish(
         )
 
     # ── 构建 bundle（查 content 拿正文/标题等） ──
-    content = db.get_content(conn, publication.content_id)
+    if content is None:
+        content = db.get_content(conn, publication.content_id)
     if content is None:
         return SafePublishResult(
             published=False,
