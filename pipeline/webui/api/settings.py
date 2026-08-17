@@ -67,12 +67,16 @@ def _reload_providers() -> str | None:
     from pipeline.creators import image_gen
     from pipeline.creators import llm as llm_mod
 
-    llm_mod.setup_provider_from_env()
+    errors: list[str] = []
+    try:
+        llm_mod.setup_provider_from_env()
+    except Exception as e:
+        errors.append(f"llm {type(e).__name__}: {e}")
     try:
         image_gen.setup_provider_from_env()
     except Exception as e:
-        return f"{type(e).__name__}: {e}"
-    return None
+        errors.append(f"image {type(e).__name__}: {e}")
+    return "; ".join(errors) or None
 
 
 @router.get("/settings")
@@ -122,7 +126,23 @@ def get_keys() -> dict[str, Any]:
                 "masked": mask(value) if value else None,
             })
         groups.append({"group": group, "label": label, "keys": keys})
-    return {"groups": groups}
+    from pipeline.creators import llm as llm_mod
+    provider_error = None
+    resolved = None
+    reason = None
+    try:
+        resolved, reason = llm_mod.resolve_text_provider()
+    except Exception as e:
+        provider_error = f"{type(e).__name__}: {e}"
+    return {
+        "groups": groups,
+        "text_provider": {
+            "name": resolved,
+            "reason": reason,
+            "available": llm_mod.available_text_providers(),
+            "error": provider_error,
+        },
+    }
 
 
 @router.post("/settings/keys")

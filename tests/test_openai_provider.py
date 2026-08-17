@@ -10,7 +10,7 @@
   - HTTP 4xx（除 429）→ ValueError
   - 网络异常 → RetryableError
   - 响应 JSON 残缺 → ValueError
-  - setup_provider_from_env 优先级：AGNES > MiniMax > OPENAI > Mock
+  - setup_provider_from_env 显式选择；多 key 不静默改选
 """
 from __future__ import annotations
 
@@ -248,13 +248,24 @@ def test_call_missing_usage_defaults_to_zero_tokens() -> None:
 
 # ── setup_provider_from_env 优先级 ─────────────────────────
 
-def test_setup_provider_agnes_wins_over_minimax(monkeypatch) -> None:
-    """AGNES_API_KEY 存在 → OpenAIProvider(agnes)；MINIMAX 忽略。"""
+def test_setup_provider_multiple_keys_requires_explicit(monkeypatch) -> None:
+    """多个文本 key 同时存在且未设 LLM_PROVIDER → 拒绝静默改选。"""
+    from pipeline.utils.errors import AmbiguousProviderError
     monkeypatch.setenv("AGNES_API_KEY", "ak")
     monkeypatch.setenv("MINIMAX_API_KEY", "mk")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ank")
     monkeypatch.setenv("OPENAI_API_KEY", "ok")
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
 
+    with pytest.raises(AmbiguousProviderError):
+        setup_provider_from_env()
+
+
+def test_setup_provider_explicit_agnes(monkeypatch) -> None:
+    """LLM_PROVIDER=agnes 时即使用了其它 key 也走 Agnes。"""
+    monkeypatch.setenv("AGNES_API_KEY", "ak")
+    monkeypatch.setenv("MINIMAX_API_KEY", "mk")
+    monkeypatch.setenv("LLM_PROVIDER", "agnes")
     p = setup_provider_from_env()
     assert isinstance(p, OpenAIProvider)
     assert p._spec.name == "agnes"  # noqa: SLF001
@@ -262,10 +273,12 @@ def test_setup_provider_agnes_wins_over_minimax(monkeypatch) -> None:
 
 
 def test_setup_provider_falls_back_to_minimax(monkeypatch) -> None:
-    """AGNES 未设，MINIMAX 有 → MiniMaxProvider。"""
+    """仅 MINIMAX_API_KEY → MiniMaxProvider。"""
     monkeypatch.delenv("AGNES_API_KEY", raising=False)
     monkeypatch.setenv("MINIMAX_API_KEY", "mk")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     from pipeline.creators.llm import MiniMaxProvider
     p = setup_provider_from_env()
     assert isinstance(p, MiniMaxProvider)
@@ -276,6 +289,7 @@ def test_setup_provider_falls_back_to_openai(monkeypatch) -> None:
     monkeypatch.delenv("AGNES_API_KEY", raising=False)
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "ok")
     p = setup_provider_from_env()
     assert isinstance(p, OpenAIProvider)
@@ -288,5 +302,6 @@ def test_setup_provider_falls_back_to_mock(monkeypatch) -> None:
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     p = setup_provider_from_env()
     assert isinstance(p, MockProvider)

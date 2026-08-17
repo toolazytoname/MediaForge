@@ -231,7 +231,8 @@ def _get_run(client: TestClient, run_id: str) -> dict:
 
 
 def test_endpoint_source_path_has_no_preview_suffix() -> None:
-    source = Path("/Users/lazy/Code/crack/MediaForge/pipeline/webui/api/publish.py").read_text(
+    from tests.repo_root import REPO_ROOT
+    source = (REPO_ROOT / "pipeline/webui/api/publish.py").read_text(
         encoding="utf-8",
     )
     assert '"/publications/{publication_id}/publish"' in source

@@ -74,7 +74,7 @@ mkdir -p secrets
 
 LLM 是创作管道（`create`）和门禁（`gate`）的核心，**没设 key 跑不动真 LLM**。
 
-三种 provider 可叠加（实际读取逻辑见 `pipeline/creators/llm.py::setup_provider_from_env` + `pipeline/creators/image_gen.py::setup_provider_from_env`）：
+文本 provider 必须显式选择：`export LLM_PROVIDER=MiniMax|anthropic|openai|agnes`，或在 `config.yaml` 写 `llm.provider`。只配置了一个 key 时可以省略。多个 key 同时存在且未指定时会拒绝启动，避免把 Anthropic key 静默路由给 MiniMax。
 
 ### 优先：MiniMax-M3（Anthropic 兼容协议，便宜）
 
@@ -103,8 +103,9 @@ export MINIMAX_IMAGE_TIMEOUT_S=90                           # 默认（docs 推�
 
 不设 `MINIMAX_IMAGE_*` 时 fallback 到 `MINIMAX_API_KEY`——一个 key 同时跑 chat + image。
 
-> `MINIMAX_API_KEY` 和 `ANTHROPIC_API_KEY` 同时设置时优先 MiniMax。
-> **别把 key 写进 config.yaml 或任何文件**——只走环境变量。
+> `ANTHROPIC_API_KEY` 只走官方 Anthropic，不会落到 MiniMax。
+> 也可以在 Settings 页写入 `secrets/env.json`（原子替换 + `0600`）。不要把 key 写进 `config.yaml`。
+> 凭据边界见 [SECURITY.md](./SECURITY.md)。本地质量门见 [VERIFY.md](./VERIFY.md)。
 
 ## §6 初始化数据库 state.db
 

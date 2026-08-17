@@ -48,10 +48,10 @@ __all__ = [
 
 
 def _build_x(account: AccountConfig, config: Any) -> PublisherAdapter:
-    """X / Twitter → XApiPublisher（从 account.credentials_path 读 bearer_token）。"""
-    from pipeline.publishers.x_api import XApiPublisher, load_x_credentials
-    token = load_x_credentials(account.credentials_path)
-    return XApiPublisher(bearer_token=token)
+    """X / Twitter → XApiPublisher（从 account.credentials_path 读凭据）。"""
+    from pipeline.publishers.x_api import XApiPublisher, load_x_credential_set
+    creds = load_x_credential_set(account.credentials_path)
+    return XApiPublisher(bearer_token=creds.access_token, credentials=creds)
 
 
 def _build_toutiao(account: AccountConfig, config: Any) -> PublisherAdapter:

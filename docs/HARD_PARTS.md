@@ -170,8 +170,10 @@
 ## §9 凭据与安全清单
 
 - `secrets/` 整目录 gitignore；`config.yaml` 也 gitignore（含 webhook 等），只提交 `config.example.yaml`
-- Anthropic key 从环境变量 `ANTHROPIC_API_KEY` 读，不进 config 文件
-- cookie 文件权限 `chmod 600`
+- Anthropic key 从环境变量 `ANTHROPIC_API_KEY` 读，不进 config 文件，且不得路由给 MiniMax
+- 文本 provider 由 `LLM_PROVIDER` / `llm.provider` 显式选择；多个 key 禁止按存在顺序静默改选
+- `secrets/env.json` 原子写入 + `0600`；cookie 文件权限 `chmod 600`
+- 详见 [SECURITY.md](./SECURITY.md)
 - IM 通知内容不包含 cookie/token/完整错误堆栈（可能含敏感 header）
 - 定期备份：`state.db` 每日 launchd 任务备份到 `backups/`（保留 14 天）——SQLite 单文件是唯一的真相源，丢了 = 全部发布历史丢失
 

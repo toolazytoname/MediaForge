@@ -6,10 +6,10 @@
     extra_fence_strip / env_var_prefix）
   - MiniMaxProvider 默认值 = spec.default_*
   - 显式参数覆盖 spec 默认值
-  - MiniMaxProvider.from_env() 行为完全等价（MINIMAX_* 优先，回退 ANTHROPIC_*）
+  - MiniMaxProvider.from_env() 只读 MINIMAX_*
   - build_provider("MiniMax", api_key="x") ≡ MiniMaxProvider(api_key="x")
   - build_provider("agnes", api_key="x") ≡ OpenAIProvider(spec=spec, api_key="x")
-  - build_provider("anthropic", ...) → NotImplementedError
+  - build_provider("anthropic", ...) → AnthropicProvider
 """
 from __future__ import annotations
 
@@ -166,8 +166,8 @@ def test_minimax_constructor_still_requires_api_key() -> None:
 
 # ── MiniMaxProvider.from_env() 行为不变 ────────────────────
 
-def test_from_env_minimax_prefers_anthropic_fallback(monkeypatch) -> None:
-    """MINIMAX_API_KEY 优先；ANTHROPIC_* env 仍作为回退（用户实测兼容）。"""
+def test_from_env_minimax_ignores_anthropic_key(monkeypatch) -> None:
+    """MINIMAX_API_KEY 存在时只用它；ANTHROPIC_* 不影响 MiniMax。"""
     monkeypatch.setenv("MINIMAX_API_KEY", "mk")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ak")
     monkeypatch.setenv("MINIMAX_BASE_URL", "https://custom.example/v1")
@@ -178,17 +178,15 @@ def test_from_env_minimax_prefers_anthropic_fallback(monkeypatch) -> None:
     assert p._base_url == "https://custom.example/v1"  # noqa: SLF001
 
 
-def test_from_env_falls_back_to_anthropic_vars(monkeypatch) -> None:
-    """MINIMAX_* 未设时回退到 ANTHROPIC_*。"""
+def test_from_env_does_not_fall_back_to_anthropic_vars(monkeypatch) -> None:
+    """MINIMAX_* 未设时不得回退到 ANTHROPIC_*。"""
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
     monkeypatch.setenv("ANTHROPIC_MODEL", "MiniMax-M3")
 
-    p = MiniMaxProvider.from_env()
-    assert p._api_key == "anthropic-key"  # noqa: SLF001
-    assert p._base_url == "https://api.minimaxi.com/anthropic"  # noqa: SLF001
-    assert p._model == "MiniMax-M3"  # noqa: SLF001
+    with pytest.raises(ValueError, match="MINIMAX_API_KEY"):
+        MiniMaxProvider.from_env()
 
 
 def test_from_env_missing_any_key_raises(monkeypatch) -> None:
@@ -220,10 +218,14 @@ def test_build_provider_minimax_passes_overrides() -> None:
     assert p._model == "m1"  # noqa: SLF001
 
 
-def test_build_provider_anthropic_not_implemented() -> None:
-    """anthropic 仅在 PROVIDER_SPECS 占位，类未实装 → NotImplementedError。"""
-    with pytest.raises(NotImplementedError):
-        build_provider("anthropic", api_key="x")
+def test_build_provider_anthropic_returns_anthropic_provider() -> None:
+    """anthropic spec 实装 → AnthropicProvider，且不走 MiniMax 默认 URL。"""
+    from pipeline.creators.llm import AnthropicProvider
+    p = build_provider("anthropic", api_key="x")
+    assert isinstance(p, AnthropicProvider)
+    assert p._spec.name == "anthropic"  # noqa: SLF001
+    assert p._base_url == PROVIDER_SPECS["anthropic"].default_base_url.rstrip("/")  # noqa: SLF001
+    assert p._model == PROVIDER_SPECS["anthropic"].default_model  # noqa: SLF001
 
 
 def test_build_provider_openai_returns_openai_provider() -> None:

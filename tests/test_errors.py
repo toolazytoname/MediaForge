@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from pipeline.utils.errors import (
+    AmbiguousProviderError,
     BudgetExceeded,
     CreateError,
     GateError,
@@ -20,6 +21,7 @@ from pipeline.utils.errors import (
     PublishError,
     SourceError,
     StaleState,
+    UnpricedModelError,
 )
 
 
@@ -33,6 +35,8 @@ ALL_EXCEPTIONS = [
     GateError,
     PublishError,
     BudgetExceeded,
+    UnpricedModelError,
+    AmbiguousProviderError,
 ]
 
 

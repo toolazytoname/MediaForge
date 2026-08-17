@@ -877,10 +877,18 @@ export interface SettingsKeyGroup {
   keys: SettingsKeyItem[]
 }
 
+export interface TextProviderStatus {
+  name: string | null
+  reason: string | null
+  available: string[]
+  error: string | null
+}
+
 export const useSettingsStore = defineStore('settings', () => {
   const config = ref<Record<string, any> | null>(null)
   const doctor = ref<DoctorItem[]>([])
   const keyGroups = ref<SettingsKeyGroup[]>([])
+  const textProvider = ref<TextProviderStatus | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
   async function load() {
@@ -898,8 +906,9 @@ export const useSettingsStore = defineStore('settings', () => {
   }
   async function loadKeys() {
     try {
-      const r = await api.get<{ groups: SettingsKeyGroup[] }>('/settings/keys')
+      const r = await api.get<{ groups: SettingsKeyGroup[]; text_provider?: TextProviderStatus }>('/settings/keys')
       keyGroups.value = r.data.groups
+      textProvider.value = r.data.text_provider ?? null
     } catch (e) {
       message.error(`加载 key 状态失败：${unwrapError(e)}`)
     }
@@ -950,7 +959,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
   return {
-    config, doctor, keyGroups, loading, error,
+    config, doctor, keyGroups, textProvider, loading, error,
     load, loadKeys, saveKey, clearKey,
     setPublishEnabled, setPublishAllowedPlatforms,
   }

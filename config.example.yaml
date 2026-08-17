@@ -42,6 +42,9 @@ topics:
 
 # ── LLM ──────────────────────────────────────────────────
 llm:
+  # auto = 仅当恰好一个文本 key 存在时选用该 provider。
+  # 多个 key 必须显式写成 MiniMax | anthropic | openai | agnes，或 export LLM_PROVIDER=...
+  provider: auto
   tiers:
     cheap: claude-haiku-4-5-20251001     # 选题初筛
     creative: claude-sonnet-5            # 创作

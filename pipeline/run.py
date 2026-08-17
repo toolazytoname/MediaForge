@@ -740,7 +740,13 @@ def cmd_publish(args: argparse.Namespace) -> int:
                 config=cfg.publish, account=account,
                 dry_run=dry_run, now_iso=now,
             )
-            if result.published:
+            if result.dry_run:
+                print(
+                    f"publish: DRY-RUN {pub.id} platform={pub.platform!r}: "
+                    f"{result.reason or 'preview'}"
+                )
+                skipped += 1
+            elif result.published:
                 published += 1
             elif "lock" in result.reason.lower() or "due" in result.reason.lower():
                 # 排期未到/另一进程抢占 → 正常跳过（不计入 failed）

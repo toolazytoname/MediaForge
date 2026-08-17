@@ -44,6 +44,11 @@ class LoginExpired(PublishError):
 class PublisherAdapter(ABC):
     platform: str                # 'toutiao'|'xiaohongshu'|'x'|...
 
+    def capabilities(self):
+        """preview/export/draft/direct 能力标记。缺省按平台静态表。"""
+        from pipeline.publishers.capabilities import capabilities_for_platform
+        return capabilities_for_platform(self.platform)
+
     @abstractmethod
     def validate(self, bundle: PostBundle) -> list[str]:
         """本地校验平台格式要求（字数/图片数/尺寸）。返回问题列表，空=通过。

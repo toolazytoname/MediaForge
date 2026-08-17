@@ -281,7 +281,15 @@ def main() -> int:
     # 按 env 选真实 provider（否则全程 MockProvider，衍生/出图必然失败）。
     # llm 有 MockProvider 兜底不会抛；image_gen 没有兜底，key 缺失会直接
     # ValueError——图片出图是可选功能，不应该因为没配 key 就拖垮整个服务。
-    llm_mod.setup_provider_from_env()
+    try:
+        llm_mod.setup_provider_from_env()
+    except Exception as e:
+        log_event(
+            _LOGGER, logging.WARNING,
+            f"llm provider init failed, falling back to MockProvider: {e}",
+            stage="webui_startup",
+        )
+        llm_mod.set_provider(llm_mod.MockProvider())
     try:
         image_gen.setup_provider_from_env()
     except Exception as e:

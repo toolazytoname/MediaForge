@@ -79,6 +79,28 @@ class PublishError(PipelineError):
     """
 
 
+class UnpricedModelError(PipelineError):
+    """模型不在价格表中：禁止把成本静默记为 0。"""
+
+    def __init__(self, model: str) -> None:
+        super().__init__(
+            f"model {model!r} is unknown/unpriced; refusing to record cost as 0"
+        )
+        self.model = model
+
+
+class AmbiguousProviderError(PipelineError):
+    """多个文本 provider 同时配置，但未显式选择。"""
+
+    def __init__(self, available: list[str]) -> None:
+        super().__init__(
+            "multiple text providers configured: "
+            f"{available}; set LLM_PROVIDER to one of {available} "
+            "(no silent fallback)"
+        )
+        self.available = list(available)
+
+
 class BudgetExceeded(PipelineError):
     """LLM 月度预算超限（HARD_PARTS §4）。
 

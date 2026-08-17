@@ -35,6 +35,8 @@
 | [docs/TASKS.md](./docs/TASKS.md) | 分里程碑任务清单（含验收标准） | 逐条执行 |
 | [docs/MILESTONES.md](./docs/MILESTONES.md) | 已达成的里程碑（commit 锚点 + 真实冒烟记录）| 运营期参考 |
 | [docs/HARD_PARTS.md](./docs/HARD_PARTS.md) | 难点攻坚 + 实施注意事项 | 卡住时先查这里 |
+| [docs/VERIFY.md](./docs/VERIFY.md) | 本地/CI 同一条 `verify` 质量门 | 全新 clone 后先跑 |
+| [docs/SECURITY.md](./docs/SECURITY.md) | LLM key / OAuth / cookie 安全边界 | 配凭据前必读 |
 | [docs/research/opensource-survey.md](./docs/research/opensource-survey.md) | 开源方案调研结论 | 选型溯源 |
 
 ## 快速开始
@@ -44,6 +46,9 @@
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp config.example.yaml config.yaml   # 填入你的配置
+
+# 可选：一条命令跑完全部本地质量门（不需要真实平台密钥）
+bash scripts/verify.sh
 
 # 1. 初始化数据库 + 拉取今日选题候选
 python -m pipeline.run init-db

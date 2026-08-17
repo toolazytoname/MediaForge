@@ -28,7 +28,7 @@ from pipeline.creators.llm import (
     complete,
     set_provider,
 )
-from pipeline.utils.errors import BudgetExceeded
+from pipeline.utils.errors import BudgetExceeded, UnpricedModelError
 
 
 # ── helpers ──────────────────────────────────────────────
@@ -132,6 +132,15 @@ def test_records_llm_call_row(conn) -> None:
     assert row["input_tokens"] == 200
     assert row["output_tokens"] == 100
     assert row["cost_usd"] > 0
+
+
+def test_unknown_model_cost_is_unpriced(conn) -> None:
+    """未知模型不得静默记 0，必须明确 unpriced。"""
+    from pipeline.creators.llm import _cost_usd
+    with pytest.raises(UnpricedModelError, match="unknown/unpriced"):
+        _cost_usd("totally-unknown-model", 10, 10)
+    rows = conn.execute("SELECT * FROM llm_calls").fetchall()
+    assert rows == []
 
 
 def test_cost_matches_pricing(conn) -> None:

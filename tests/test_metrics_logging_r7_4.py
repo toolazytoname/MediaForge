@@ -18,6 +18,7 @@ import pytest
 
 from pipeline import db
 from pipeline.config import AppConfig
+from tests.repo_root import REPO_ROOT
 from pipeline.metrics import run_collect
 from pipeline.metrics.collectors import (
     DouyinMetricsCollector,
@@ -152,9 +153,7 @@ def test_collectors_except_blocks_all_call_logger_warning() -> None:
     """源码静态扫描：collectors.py 里每个 except Exception 块下方 3 行
     都能看到 logger.warning(...)（防「漏补一处」）。
     """
-    src = Path(
-        "/Users/lazy/Code/crack/MediaForge/pipeline/metrics/collectors.py"
-    ).read_text(encoding="utf-8")
+    src = (REPO_ROOT / "pipeline/metrics/collectors.py").read_text(encoding="utf-8")
     lines = src.splitlines()
     missing: list[int] = []
     for i, line in enumerate(lines):
@@ -173,9 +172,7 @@ def test_runner_except_blocks_all_call_logger_warning() -> None:
     """源码静态扫描：runner.py 里每个 except Exception 块下方 3 行
     都能看到 logger.warning(...)。
     """
-    src = Path(
-        "/Users/lazy/Code/crack/MediaForge/pipeline/metrics/runner.py"
-    ).read_text(encoding="utf-8")
+    src = (REPO_ROOT / "pipeline/metrics/runner.py").read_text(encoding="utf-8")
     lines = src.splitlines()
     missing: list[int] = []
     for i, line in enumerate(lines):

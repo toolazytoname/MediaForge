@@ -457,14 +457,15 @@ class TestDryRun:
             dry_run=True, now_iso=_NOW_ISO,
         )
 
-        assert result.published is True
+        assert result.published is False
         assert result.dry_run is True
-        # 状态应推进（虽没真发，但状态机走完）
+        assert result.platform_post_id == "dry-remote_123"
         row = conn.execute(
             "SELECT status, platform_post_id FROM publications WHERE id=?",
             (pub.id,),
         ).fetchone()
-        assert row["platform_post_id"] == "dry-remote_123"
+        assert row["status"] == PublicationStatus.QUEUED.value
+        assert row["platform_post_id"] is None
 
 
 # ── 跨进程并发真锁测试（HARD_PARTS §1 验证要求）────────
