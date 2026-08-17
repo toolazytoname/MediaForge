@@ -40,6 +40,7 @@ def test_example_yaml_top_level_fields():
     assert c.gate.threshold_total == 24
     assert c.gate.threshold_each == 6
     assert c.publish.enabled is False
+    assert c.delivery.bridge == "on"
     assert c.video.engine == "mpt"
 
 

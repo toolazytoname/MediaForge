@@ -2,7 +2,7 @@
 
 Approval deliberately has no connection to publications or publishers.  It is
 only a local record that the current master, selected visual assets, and the
-two supported platform variants have been inspected by a person.
+article deliverables (projected from variants) have been inspected by a person.
 """
 from __future__ import annotations
 
@@ -17,7 +17,13 @@ from pipeline import master_documents, projects as project_store, research, vari
 from pipeline.utils.sidecar_ids import valid_sidecar_id
 
 _NAME = "approval.json"
-_CHECK_IDS = ("master", "visuals", "wechat_mp", "toutiao")
+_LEGACY_CHECK_IDS = ("master", "visuals", "wechat_mp", "toutiao")
+_CHECK_IDS = _LEGACY_CHECK_IDS  # compatibility alias for older tests/imports
+_LEGACY_ALIASES = {
+    "wechat_mp": "deliverable:dlv_article_wechat_mp",
+    "toutiao": "deliverable:dlv_article_toutiao",
+}
+_SEED_ORDER = ("dlv_article_wechat_mp", "dlv_article_toutiao")
 _HISTORY_LIMIT = 100
 
 
@@ -31,6 +37,7 @@ class ApprovalSnapshot:
     variant_versions: dict[str, int]
     visual_asset_ids: tuple[str, ...]
     research_fingerprint: str
+    deliverable_versions: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -88,7 +95,7 @@ def load_approval(project_id: str, *, projects_root: str | Path = project_store.
     checks = tuple(_check(item) for item in checks_raw)
     if snapshot is None and checks:
         raise ApprovalError("approval checks require a package snapshot")
-    if checks and tuple(item.id for item in checks) != _CHECK_IDS:
+    if checks and not _checks_match(tuple(item.id for item in checks), snapshot):
         raise ApprovalError("approval checks must be the fixed content-package checklist")
     history = tuple(_event(item) for item in history_raw)
     if len(history) > _HISTORY_LIMIT:
@@ -113,18 +120,18 @@ def recheck(project_id: str, *, actor: str, now: str, projects_root: str | Path 
     if blockers:
         result = Approval(project_id, None, (), (*old.history, event)[-_HISTORY_LIMIT:])
     else:
-        result = Approval(project_id, current, tuple(ApprovalCheck(item, "pending", None, None, None) for item in _CHECK_IDS), (*old.history, event)[-_HISTORY_LIMIT:])
+        result = Approval(project_id, current, tuple(ApprovalCheck(item, "pending", None, None, None) for item in _check_ids_for(current)), (*old.history, event)[-_HISTORY_LIMIT:])
     _write(projects_root, result)
     return status(project_id, projects_root=projects_root)
 
 
 def decide(project_id: str, check_id: str, *, approved: bool, note: str | None, actor: str, now: str, projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT) -> ApprovalStatus:
-    if check_id not in _CHECK_IDS: raise ApprovalError("unknown approval check")
     if not isinstance(approved, bool): raise ApprovalError("approved must be boolean")
     _actor(actor); timestamp = _timestamp(now)
     state = status(project_id, projects_root=projects_root)
     if state.approval.snapshot is None or state.stale: raise ApprovalError("approval requires recheck after upstream changes")
     if not state.ready: raise ApprovalError("content package is not ready for approval: " + "; ".join(state.blockers))
+    check_id = _resolve_check_id(check_id, state.approval.checks)
     note_value = _optional_note(note)
     existing = next(item for item in state.approval.checks if item.id == check_id)
     updated = replace(existing, status="approved" if approved else "pending", note=note_value, approved_by=actor if approved else None, approved_at=timestamp if approved else None)
@@ -173,32 +180,44 @@ def _current_snapshot(project_id: str, root: str | Path) -> tuple[ApprovalSnapsh
     for item in by_platform.values():
         if not set(item.asset_ids) <= selected_set: blockers.append(f"{item.platform} 引用了不可解析的视觉资产")
     if blockers or master is None or len(by_platform) < 2: return None, blockers
+    variant_versions = {"wechat_mp": by_platform["wechat_mp"].version, "toutiao": by_platform["toutiao"].version}
     return ApprovalSnapshot(
         master.version,
-        {"wechat_mp": by_platform["wechat_mp"].version, "toutiao": by_platform["toutiao"].version},
+        variant_versions,
         selected,
         _research_fingerprint(board),
+        {f"dlv_article_{platform}": version for platform, version in variant_versions.items()},
     ), blockers
 
 
 def _snapshot(value: Any) -> ApprovalSnapshot:
     if not isinstance(value, dict): raise ApprovalError("approval snapshot has missing or unknown fields")
     fields = frozenset(value)
-    current_fields = set(ApprovalSnapshot.__dataclass_fields__)
-    legacy_fields = current_fields - {"research_fingerprint"}
-    if fields not in {frozenset(current_fields), frozenset(legacy_fields)}:
+    allowed = {
+        frozenset({"master_version", "variant_versions", "visual_asset_ids"}),
+        frozenset({"master_version", "variant_versions", "visual_asset_ids", "research_fingerprint"}),
+        frozenset({"master_version", "variant_versions", "visual_asset_ids", "deliverable_versions"}),
+        frozenset({"master_version", "variant_versions", "visual_asset_ids", "research_fingerprint", "deliverable_versions"}),
+    }
+    if fields not in allowed:
         raise ApprovalError("approval snapshot has missing or unknown fields")
     versions = value["variant_versions"]
     if not isinstance(versions, dict) or set(versions) != {"wechat_mp", "toutiao"}: raise ApprovalError("approval snapshot needs two platform versions")
+    deliverable_versions = value.get("deliverable_versions")
+    if deliverable_versions is None:
+        deliverable_versions = {f"dlv_article_{platform}": versions[platform] for platform in versions}
+    elif not isinstance(deliverable_versions, dict) or not deliverable_versions:
+        raise ApprovalError("approval snapshot needs deliverable versions")
     return ApprovalSnapshot(
         _positive("master_version", value["master_version"]),
         {key: _positive(key, versions[key]) for key in versions},
         _assets(value["visual_asset_ids"]),
         _fingerprint(value["research_fingerprint"]) if "research_fingerprint" in value else "0" * 64,
+        {key: _positive(key, version) for key, version in deliverable_versions.items()},
     )
 def _check(value: Any) -> ApprovalCheck:
     if not isinstance(value, dict) or set(value) != set(ApprovalCheck.__dataclass_fields__): raise ApprovalError("approval check has missing or unknown fields")
-    if value["id"] not in _CHECK_IDS or value["status"] not in {"pending", "approved"}: raise ApprovalError("invalid approval check")
+    if not _valid_check_id(value["id"]) or value["status"] not in {"pending", "approved"}: raise ApprovalError("invalid approval check")
     approved = value["status"] == "approved"
     note = _optional_note(value["note"]); actor = value["approved_by"]; at = value["approved_at"]
     if approved:
@@ -211,8 +230,63 @@ def _event(value: Any) -> ApprovalEvent:
     check_id = value["check_id"]
     if value["action"] == "rechecked":
         if check_id is not None or value["note"] is not None: raise ApprovalError("invalid recheck event")
-    elif check_id not in _CHECK_IDS: raise ApprovalError("invalid approval event check")
+    elif not _valid_check_id(check_id): raise ApprovalError("invalid approval event check")
     return ApprovalEvent(value["action"], check_id, _optional_note(value["note"]), _actor(value["actor"]), _timestamp(value["at"]))
+def _check_ids_for(snapshot: ApprovalSnapshot) -> tuple[str, ...]:
+    versions = snapshot.deliverable_versions or {
+        f"dlv_article_{platform}": version for platform, version in snapshot.variant_versions.items()
+    }
+    ordered: list[str] = []
+    for seed in _SEED_ORDER:
+        if seed in versions:
+            ordered.append(f"deliverable:{seed}")
+    for key in sorted(versions):
+        label = f"deliverable:{key}"
+        if label not in ordered:
+            ordered.append(label)
+    return ("master", "visuals", *ordered)
+
+
+def _checks_match(ids: tuple[str, ...], snapshot: ApprovalSnapshot | None) -> bool:
+    if ids == _LEGACY_CHECK_IDS:
+        return True
+    return snapshot is not None and ids == _check_ids_for(snapshot)
+
+
+def _valid_check_id(check_id: Any) -> bool:
+    if check_id in _LEGACY_CHECK_IDS:
+        return True
+    if isinstance(check_id, str) and check_id.startswith("deliverable:"):
+        return valid_sidecar_id(check_id.split(":", 1)[1], "dlv_")
+    return False
+
+
+def _resolve_check_id(check_id: str, checks: tuple[ApprovalCheck, ...]) -> str:
+    known = {item.id for item in checks}
+    if check_id in known:
+        return check_id
+    alias = _LEGACY_ALIASES.get(check_id)
+    if alias in known:
+        return alias
+    reverse = {value: key for key, value in _LEGACY_ALIASES.items()}
+    old = reverse.get(check_id)
+    if old in known:
+        return old
+    raise ApprovalError("unknown approval check")
+
+
+def approval_fingerprint(snapshot: ApprovalSnapshot) -> str:
+    payload = {
+        "master_version": snapshot.master_version,
+        "variant_versions": dict(sorted(snapshot.variant_versions.items())),
+        "deliverable_versions": dict(sorted(snapshot.deliverable_versions.items())),
+        "visual_asset_ids": list(snapshot.visual_asset_ids),
+        "research_fingerprint": snapshot.research_fingerprint,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _ensure(project_id: str, root: str | Path) -> None:
     try: project_store.load_project(_project_id(project_id), projects_root=root)
     except project_store.ProjectManifestError as exc: raise ApprovalError(str(exc)) from exc

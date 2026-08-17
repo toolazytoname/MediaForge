@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import zipfile
 
 from fastapi.testclient import TestClient
@@ -68,7 +69,16 @@ def test_completed_approval_can_create_local_export_without_publication(tmp_path
     monkeypatch.setattr(projects_api, "_PROJECTS_ROOT", root)
     client = TestClient(create_app())
     project_id = _ready(root)
-    before = (tmp_path / "state.db").read_bytes()
+    def official_rows():
+        conn = sqlite3.connect(tmp_path / "state.db")
+        try:
+            return {
+                name: conn.execute(f"SELECT * FROM {name}").fetchall()
+                for name in ("topics", "contents", "publications", "metrics")
+            }
+        finally:
+            conn.close()
+    before = official_rows()
 
     response = client.post(f"/api/v1/projects/{project_id}/export")
 
@@ -86,4 +96,4 @@ def test_completed_approval_can_create_local_export_without_publication(tmp_path
     archive.write_bytes(b"not a zip")
     corrupt = client.post(f"/api/v1/projects/{project_id}/export")
     assert corrupt.status_code == 400 and "corrupt" in corrupt.text
-    assert (tmp_path / "state.db").read_bytes() == before
+    assert official_rows() == before

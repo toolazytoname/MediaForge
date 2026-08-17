@@ -15,6 +15,9 @@
 - 存放：`secrets/x_<account>.json`、`secrets/wechat_mp_<account>.json`
 - X 直发需要可验证的 user-context（`user_id` + `tweet.write` / `users.read`）。仅有 app-only bearer 时 `direct` 能力关闭，preview 仍可用。
 - 微信公众号走官方草稿箱，能力是 draft/export，不是 direct publish。
+- Project 交付里 `Publication.status=published` 对微信只表示「草稿箱已收下」（有 `media_id`、`url` 为空），**不等于已群发/已发表**。
+- Delivery mode 是 `preview` / `export` / `draft` / `direct`。Project UI 隐藏 `direct`；头条文章只开放本地 `export`。
+- `delivery.bridge=off` 关闭 Project 交付 API，旧 ZIP 导出仍可用。新表是 append-only，不改 `topics/contents/publications` 字段。
 
 ### 3. 浏览器 cookie / storage_state
 

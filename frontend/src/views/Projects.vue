@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
-import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult } from '../stores'
+import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult, type DeliveryAttemptResult } from '../stores'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 
@@ -49,6 +49,8 @@ const importingSlot = ref<string | null>(null)
 const variantGenerating = ref<string | null>(null)
 const exporting = ref(false)
 const exportResult = ref<ProjectExportResult | null>(null)
+const drafting = ref(false)
+const draftResult = ref<DeliveryAttemptResult | null>(null)
 
 const unverifiedFacts = computed(() => board.value?.claims.filter(item => item.kind === 'fact' && (item.status === 'unverified' || !item.source_ids.length)) ?? [])
 const openQuestions = computed(() => board.value?.claims.filter(item => item.kind === 'open_question' && item.status === 'open') ?? [])
@@ -206,10 +208,30 @@ async function checkVariantUpstream(item: PlatformVariant): Promise<void> { if (
 async function acknowledgeVariantMaster(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { const updated = await variantsStore.acknowledgeMaster(projectId.value, item.platform); variantForms.value[item.platform] = { title: updated.title, summary: updated.summary, body: updated.body }; await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } }
 async function restoreVariant(item: PlatformVariant, version: number): Promise<void> { if (!projectId.value) return; try { const updated = await variantsStore.restore(projectId.value, item.platform, version); variantForms.value[item.platform] = { title: updated.title, summary: updated.summary, body: updated.body }; await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } }
 function previewVariant(item: PlatformVariant): void { if (!projectId.value) return; window.open(`/api/v1/projects/${projectId.value}/variants/${item.platform}/preview`, '_blank', 'noopener') }
-const approvalLabel: Record<ApprovalCheck['id'], string> = { master: '主稿内容与事实边界', visuals: '已选封面与插图', wechat_mp: '微信公众号版本', toutiao: '头条版本' }
+function approvalLabel(checkId: string): string {
+  if (checkId === 'master') return '主稿内容与事实边界'
+  if (checkId === 'visuals') return '已选封面与插图'
+  if (checkId === 'wechat_mp' || checkId.endsWith('wechat_mp')) return '微信公众号版本'
+  if (checkId === 'toutiao' || checkId.endsWith('toutiao')) return '头条版本'
+  if (checkId.startsWith('deliverable:')) return `交付物 ${checkId.slice('deliverable:'.length)}`
+  return checkId
+}
 async function recheckApproval(): Promise<void> { if (!projectId.value) return; const actor = approvalActor.value.trim(); if (!actor) { detailError.value = '请填写真实审批人或角色。'; return } try { await approvalsStore.recheck(projectId.value, actor) } catch (e) { detailError.value = unwrapError(e) } }
 async function decideApproval(check: ApprovalCheck, approved: boolean): Promise<void> { if (!projectId.value) return; const actor = approvalActor.value.trim(); if (!actor) { detailError.value = '请填写真实审批人或角色。'; return } try { await approvalsStore.decide(projectId.value, check.id, approved, actor, approvalNotes.value[check.id]?.trim() || undefined); approvalNotes.value[check.id] = '' } catch (e) { detailError.value = unwrapError(e) } }
 async function exportPackage(): Promise<void> { if (!projectId.value) return; exporting.value = true; try { exportResult.value = await approvalsStore.exportPackage(projectId.value) } catch (e) { detailError.value = unwrapError(e) } finally { exporting.value = false } }
+async function createWechatDraft(): Promise<void> {
+  if (!projectId.value) return
+  const actor = approvalActor.value.trim()
+  if (!actor) { detailError.value = '请填写真实审批人或角色。'; return }
+  drafting.value = true
+  try {
+    draftResult.value = await approvalsStore.createWechatDraft(projectId.value, actor)
+  } catch (e) {
+    detailError.value = unwrapError(e)
+  } finally {
+    drafting.value = false
+  }
+}
 
 function updateStatusForKind(): void {
   claimForm.value.status = claimForm.value.kind === 'open_question' ? 'open' : 'unverified'
@@ -314,8 +336,9 @@ watch(projectId, loadPage)
           <header class="section-heading"><div><p class="eyebrow">内容包审批</p><h2>逐项确认，再进入安全交付。</h2><p>批准只记录你的人工判断，不会发布、创建平台草稿或调用任何发布器。</p></div><a-tag v-if="approvalStatus?.complete" color="green">已完成审批</a-tag></header>
           <a-alert v-if="approvalsError" type="error" :message="approvalsError" show-icon class="notice" />
           <div class="approval-actor"><label for="approval-actor">真实审批人或角色</label><a-input id="approval-actor" v-model:value="approvalActor" placeholder="例如：张三 / Codex 自测（受用户委托）" /></div>
-          <a-spin :spinning="approvalsLoading"><a-card :bordered="false" class="approval-card"><a-alert v-if="approvalStatus?.blockers.length" type="warning" show-icon :message="`尚不可审批：${approvalStatus?.blockers.join('；')}`" class="notice"/><a-alert v-else-if="approvalStatus?.stale" type="warning" show-icon message="上游内容已改变，请重新检查。历史批准不会被静默沿用；所有批准与撤回动作已暂停。" class="notice"/><div class="approval-actions"><a-button type="primary" @click="recheckApproval">重新检查内容包</a-button></div><div v-if="approvalStatus?.approval.checks.length" class="approval-list"><article v-for="check in approvalStatus.approval.checks" :key="check.id"><div><strong>{{ approvalLabel[check.id] }}</strong><p>{{ check.status === 'approved' ? `已由 ${check.approved_by} 批准` : '待人工检查' }}</p><small v-if="check.note">当前备注：{{ check.note }}</small></div><div class="approval-decision"><a-input v-model:value="approvalNotes[check.id]" :disabled="!approvalStatus.ready || approvalStatus.stale" placeholder="可选审批备注" size="small"/><a-button v-if="check.status !== 'approved'" type="primary" size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, true)">批准</a-button><a-button v-else size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, false)">撤回批准</a-button></div></article></div><a-empty v-else description="先重新检查，生成当前内容包的审批清单。" :image-style="{ height: '40px' }"/><p v-if="approvalStatus?.complete" class="approval-complete">所有项目已批准。下一步仅可进入草稿箱或安全导出，仍不等于真实发布。</p><div v-if="approvalStatus?.approval.history.length" class="approval-history"><strong>审批历史</strong><p v-for="event in approvalStatus.approval.history.slice().reverse().slice(0, 8)" :key="`${event.at}-${event.action}-${event.check_id}`">{{ event.at }} · {{ event.actor }} · {{ event.action }}{{ event.check_id ? ` (${approvalLabel[event.check_id]})` : '' }}{{ event.note ? ` · ${event.note}` : '' }}</p></div></a-card></a-spin>
-          <div v-if="approvalStatus?.complete" class="export-panel"><div><strong>生成可交付内容包</strong><p>只在本地导出微信稿、头条稿、清单和已选图片；不会创建发布记录或调用平台。</p></div><a-button type="primary" :loading="exporting" @click="exportPackage">导出 ZIP</a-button><a v-if="exportResult" :href="exportResult.url" target="_blank" rel="noreferrer">下载 {{ exportResult.file_name }}</a></div>
+          <a-spin :spinning="approvalsLoading"><a-card :bordered="false" class="approval-card"><a-alert v-if="approvalStatus?.blockers.length" type="warning" show-icon :message="`尚不可审批：${approvalStatus?.blockers.join('；')}`" class="notice"/><a-alert v-else-if="approvalStatus?.stale" type="warning" show-icon message="上游内容已改变，请重新检查。历史批准不会被静默沿用；所有批准与撤回动作已暂停。" class="notice"/><div class="approval-actions"><a-button type="primary" @click="recheckApproval">重新检查内容包</a-button></div><div v-if="approvalStatus?.approval.checks.length" class="approval-list"><article v-for="check in approvalStatus.approval.checks" :key="check.id"><div><strong>{{ approvalLabel(check.id) }}</strong><p>{{ check.status === 'approved' ? `已由 ${check.approved_by} 批准` : '待人工检查' }}</p><small v-if="check.note">当前备注：{{ check.note }}</small></div><div class="approval-decision"><a-input v-model:value="approvalNotes[check.id]" :disabled="!approvalStatus.ready || approvalStatus.stale" placeholder="可选审批备注" size="small"/><a-button v-if="check.status !== 'approved'" type="primary" size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, true)">批准</a-button><a-button v-else size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, false)">撤回批准</a-button></div></article></div><a-empty v-else description="先重新检查，生成当前内容包的审批清单。" :image-style="{ height: '40px' }"/><p v-if="approvalStatus?.complete" class="approval-complete">所有项目已批准。下一步仅可进入草稿箱或安全导出，仍不等于真实发布。</p><div v-if="approvalStatus?.approval.history.length" class="approval-history"><strong>审批历史</strong><p v-for="event in approvalStatus.approval.history.slice().reverse().slice(0, 8)" :key="`${event.at}-${event.action}-${event.check_id}`">{{ event.at }} · {{ event.actor }} · {{ event.action }}{{ event.check_id ? ` (${approvalLabel(event.check_id)})` : '' }}{{ event.note ? ` · ${event.note}` : '' }}</p></div></a-card></a-spin>
+          <div v-if="approvalStatus?.complete" class="export-panel"><div><strong>头条安全导出</strong><p>只在本地导出微信稿、头条稿、清单和已选图片；不会直发头条，也不会调用 Playwright。</p></div><a-button type="primary" :loading="exporting" @click="exportPackage">导出 ZIP</a-button><a v-if="exportResult" :href="exportResult.url" target="_blank" rel="noreferrer">下载 {{ exportResult.file_name }}</a></div>
+          <div v-if="approvalStatus?.complete" class="export-panel"><div><strong>创建公众号草稿</strong><p>人工确认后写入微信草稿箱。成功只有 media_id，不会群发，也不等于已发表。</p></div><a-button :loading="drafting" @click="createWechatDraft">创建草稿</a-button><p v-if="draftResult" class="muted">{{ draftResult.label }}{{ draftResult.media_id ? ` · media_id=${draftResult.media_id}` : '' }}{{ draftResult.error ? ` · ${draftResult.error}` : '' }}</p></div>
         </section>
       </article>
     </template>

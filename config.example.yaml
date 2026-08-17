@@ -100,6 +100,10 @@ publish:
   max_daily_per_account: 3
   cross_platform_gap_minutes: 30
 
+# ── 图文安全交付桥接（LAZY-40）。off 时 Project 交付 API 关闭，旧 ZIP 导出仍可用 ──
+delivery:
+  bridge: "on"
+
 platforms:
   x:
     kind: api

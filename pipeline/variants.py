@@ -271,6 +271,8 @@ def _ensure(project_id: str, root: str | Path) -> None:
 def _path(root: str | Path, project_id: str) -> Path: return Path(root) / _project_id(project_id) / _NAME
 def _write(root: str | Path, result: VariantSet) -> None:
     path = _path(root, result.project_id); path.parent.mkdir(parents=True, exist_ok=True); tmp = path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(asdict(result), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"); tmp.replace(path)
+    from pipeline import deliverables
+    deliverables.sync_from_variant_set(result, projects_root=root)
 def _project_id(value: Any) -> str:
     if not valid_sidecar_id(value, "prj_"): raise VariantsError("invalid project id")
     return value

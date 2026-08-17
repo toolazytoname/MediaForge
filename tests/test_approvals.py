@@ -102,6 +102,24 @@ def test_manifest_strictly_rejects_forged_check_snapshot_and_history(tmp_path, m
     with pytest.raises(approvals.ApprovalError): approvals.load_approval(project_id, projects_root=root)
 
 
+def test_legacy_wechat_toutiao_checks_still_load(tmp_path):
+    root = tmp_path / "projects"
+    project_id = _ready(root)
+    approvals.recheck(project_id, actor="lazy", now="2026-08-09T00:04:00+00:00", projects_root=root)
+    path = root / project_id / "approval.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["checks"] = [
+        {"id": item, "status": "pending", "note": None, "approved_by": None, "approved_at": None}
+        for item in ("master", "visuals", "wechat_mp", "toutiao")
+    ]
+    raw["snapshot"].pop("deliverable_versions", None)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = approvals.load_approval(project_id, projects_root=root)
+    assert [item.id for item in loaded.checks] == ["master", "visuals", "wechat_mp", "toutiao"]
+    assert loaded.snapshot is not None
+    assert loaded.snapshot.deliverable_versions["dlv_article_wechat_mp"] == raw["snapshot"]["variant_versions"]["wechat_mp"]
+
+
 def test_recheck_reports_missing_package_parts(tmp_path):
     root = tmp_path / "projects"
     projects.create_project(title="项目", idea="想法", audience="读者", goal="文章", voice="清晰", autonomy="collaborate", now="2026-08-09T00:00:00+00:00", project_id="prj_empty", projects_root=root)
