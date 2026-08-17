@@ -1,3 +1,16 @@
+## 自动化到审批与复盘回流（LAZY-88）
+
+定时任务 `prepare-due`（cron 07:00 / launchd `com.mediaforge.prepare-due`）只按 autonomy 准备研究笔记、主稿候选、视觉槽位和平台版本，终态为 `awaiting_approval`：
+
+- `assist` / `collaborate` 跳过自动准备
+- `draft` / `pack` 可准备候选，但不得 lock / approve，也不得 `draft` / `direct` / `export`
+- `publish-due` 仍跳过 `project:` 行；本命令自己也不调微信/头条/官方适配器
+- 超 `llm_budget_usd` 或存在未知/未标价成本时写入 `paused_budget` / `paused_unpriced` 并记审计，任务可再跑
+- 未知成本禁止记成 0
+- `delivery_metrics` 可为已有 DeliveryAttempt 写夹具 `MetricSnapshot`（浏览/互动可空，`source` 与 `collected_at` 必填）；复盘页 `GET /analytics/review-loop` 可读
+- 学习建议只生成 pending 卡片；接受只落盘卡片决策，不改视觉圣经、Project 品牌字段或 CapabilityRegistry
+- `direct` 继续隐藏
+
 ## 长尾能力目录（LAZY-83）
 
 Bilibili、微信视频号、微博、快手、知乎进入 CapabilityRegistry，但只作诚实目录：

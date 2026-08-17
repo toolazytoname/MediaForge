@@ -38,9 +38,26 @@ def prepare_pack(
     now: str,
     projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
 ) -> PackPrepareResult:
+    """Pack-only wrapper. Draft/pack scheduled prepare uses prepare_candidates."""
+    _project, policy = load_policy(project_id, projects_root=projects_root)
+    if not policy.pack_prepare:
+        raise AutonomyError(
+            f"{policy.label}模式不能批量准备内容包",
+            code="autonomy_pack_only",
+            http_status=400,
+        )
+    return prepare_candidates(project_id, now=now, projects_root=projects_root)
+
+
+def prepare_candidates(
+    project_id: str,
+    *,
+    now: str,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+) -> PackPrepareResult:
     """Fill Master + unlocked article candidates. Stop before approval/delivery."""
     project, policy = load_policy(project_id, projects_root=projects_root)
-    if not policy.pack_prepare:
+    if not (policy.pack_prepare or policy.persist_ai_adapt):
         raise AutonomyError(
             f"{policy.label}模式不能批量准备内容包",
             code="autonomy_pack_only",

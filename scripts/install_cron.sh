@@ -15,10 +15,11 @@ PY="$PROJECT_ROOT/.venv/bin/python"
 
 # cron 字段：分 时 日 月 周
 # 06:00 ingest+score; 06:30 create+gate; 09:00 review --notify;
-# 10:00 schedule; */30 publish --dry-run; 23:00 collect
+# 07:00 prepare-due; 10:00 schedule; */30 publish --dry-run; 23:00 collect
 CRON_LINES=(
     "0 6 * * * cd $PROJECT_ROOT && $PY -m pipeline.run --config config.yaml ingest >> $LOG_DIR/cron.ingest.log 2>&1"
     "30 6 * * * cd $PROJECT_ROOT && $PY -m pipeline.run --config config.yaml create >> $LOG_DIR/cron.create.log 2>&1"
+    "0 7 * * * cd $PROJECT_ROOT && $PY -m pipeline.run --config config.yaml prepare-due >> $LOG_DIR/cron.prepare-due.log 2>&1"
     "0 9 * * * cd $PROJECT_ROOT && $PY -m pipeline.run --config config.yaml review --notify >> $LOG_DIR/cron.review.log 2>&1"
     "0 10 * * * cd $PROJECT_ROOT && $PY -m pipeline.run --config config.yaml schedule >> $LOG_DIR/cron.schedule.log 2>&1"
     "*/30 * * * * cd $PROJECT_ROOT && $PY -m pipeline.run --config config.yaml publish --dry-run >> $LOG_DIR/cron.publish.log 2>&1"
@@ -55,6 +56,7 @@ case "$action" in
         echo "Cron schedule (preview, not installed):"
         echo "  06:00  ingest"
         echo "  06:30  create"
+        echo "  07:00  prepare-due"
         echo "  09:00  review --notify"
         echo "  10:00  schedule"
         echo "  */30   publish --dry-run"

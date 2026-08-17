@@ -13,10 +13,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from pipeline import db, db_reads
+from pipeline.delivery.metrics import (
+    MetricSnapshotError,
+    insert_metric_snapshot,
+    list_metric_snapshots,
+)
+from pipeline.insights import list_all_insights
 from pipeline.webui import deps
+from pipeline.webui.api import projects as projects_api
 from pipeline.webui.serialize import metric_dict
 
 router = APIRouter(tags=["analytics"])
@@ -128,3 +135,47 @@ def analytics_leaderboard(
         rows = db_reads.platform_metric_totals(conn)
     rows.sort(key=lambda r: r.get(metric, 0) or 0, reverse=True)
     return {"items": rows[:limit], "metric": metric}
+
+
+@router.get("/analytics/review-loop")
+def analytics_review_loop() -> dict[str, Any]:
+    """复盘：DeliveryAttempt 夹具指标 + 待确认学习建议。"""
+    with deps._db() as conn:
+        snapshots = list_metric_snapshots(conn)
+    suggestions = list_all_insights(projects_root=projects_api._PROJECTS_ROOT)
+    return {
+        "metrics": [item.to_dict() for item in snapshots],
+        "suggestions": suggestions,
+    }
+
+
+@router.post("/analytics/delivery-metrics", status_code=201)
+def record_delivery_metric(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Write a fixture/manual MetricSnapshot for an existing DeliveryAttempt."""
+    attempt_id = body.get("delivery_attempt_id")
+    source = body.get("source")
+    collected_at = body.get("collected_at")
+    if not isinstance(attempt_id, str) or not attempt_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "invalid_metric", "message": "delivery_attempt_id is required"}},
+        )
+    with deps._db() as conn:
+        try:
+            snap = insert_metric_snapshot(
+                conn,
+                delivery_attempt_id=attempt_id.strip(),
+                source=source,
+                collected_at=collected_at,
+                views=body.get("views"),
+                likes=body.get("likes"),
+                comments=body.get("comments"),
+                shares=body.get("shares"),
+                raw=body.get("raw"),
+            )
+        except MetricSnapshotError as error:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": {"code": "invalid_metric", "message": str(error)}},
+            ) from error
+    return snap.to_dict()
