@@ -12,6 +12,7 @@ from pipeline.publishers.instagram import (
     InstagramPublisher,
     is_public_https_url,
     load_instagram_credential_set,
+    permalink,
 )
 
 
@@ -92,6 +93,14 @@ def test_container_without_id_is_failure(tmp_path: Path) -> None:
         adapter.publish(_bundle(tmp_path), _account(), dry_run=False)
 
 
+def test_permalink_ignores_media_id() -> None:
+    assert permalink("media-ok-1") is None
+    assert permalink({"id": "media-ok-1"}) is None
+    assert permalink({"permalink": "https://www.instagram.com/p/REALSHORT/"}) == (
+        "https://www.instagram.com/p/REALSHORT/"
+    )
+
+
 def test_publish_success_and_compensate(tmp_path: Path) -> None:
     creds = InstagramCredentials(
         access_token="ig-test-token",
@@ -105,6 +114,8 @@ def test_publish_success_and_compensate(tmp_path: Path) -> None:
         if kwargs.get("method") == "DELETE":
             deleted.append(url.rsplit("/", 1)[-1])
             return {}
+        if kwargs.get("method") == "GET":
+            return {"id": "media-ok-1"}
         if url.endswith("/media_publish"):
             assert kwargs["body"]["creation_id"] == "ctr-1"
             return {"id": "media-ok-1"}
@@ -115,9 +126,32 @@ def test_publish_success_and_compensate(tmp_path: Path) -> None:
     adapter = InstagramPublisher(credentials=creds, http_post=post)
     result = adapter.publish(_bundle(tmp_path), _account(), dry_run=False)
     assert result.platform_post_id == "media-ok-1"
-    assert result.url == "https://www.instagram.com/p/media-ok-1/"
+    assert result.url is None
+    assert result.url != "https://www.instagram.com/p/media-ok-1/"
     adapter.compensate(result.platform_post_id)
     assert deleted == ["media-ok-1"]
+
+
+def test_publish_uses_graph_permalink_field(tmp_path: Path) -> None:
+    creds = InstagramCredentials(
+        access_token="ig-test-token",
+        user_id="178414000",
+        scopes=("instagram_content_publish",),
+        app_reviewed=True,
+    )
+
+    def post(url, **kwargs):
+        if kwargs.get("method") == "GET":
+            assert url.endswith("/media-ok-2")
+            return {"id": "media-ok-2", "permalink": "https://www.instagram.com/p/REALSHORT/"}
+        if url.endswith("/media_publish"):
+            return {"id": "media-ok-2"}
+        return {"id": "ctr-2"}
+
+    adapter = InstagramPublisher(credentials=creds, http_post=post)
+    result = adapter.publish(_bundle(tmp_path), _account(), dry_run=False)
+    assert result.platform_post_id == "media-ok-2"
+    assert result.url == "https://www.instagram.com/p/REALSHORT/"
 
 
 def test_load_credentials_requires_token(tmp_path: Path) -> None:

@@ -1,3 +1,13 @@
+## 长尾能力目录（LAZY-83）
+
+Bilibili、微信视频号、微博、快手、知乎进入 CapabilityRegistry，但只作诚实目录：
+
+- `official_api=false`，`lane=export`，`delivery.direct/draft=false`
+- UI / 账号中心只渲染「仅导出 / 暂不支持官方发布」，不得标成可直发
+- 没有官方创作者发布 API，不注册可成功的 adapter；缺回执不得记平台成功
+- 小红书继续 assisted：未知 CLI 回执失败；头条图文继续 export
+- Instagram 成功 URL 只用 Graph `permalink` 字段；没有该字段就不写可点击链接，不得用 `media_id` 冒充 shortcode
+
 ## 官方平台 Wave 2（LAZY-81）
 
 TikTok Content Posting API、Instagram Professional `container` + `media_publish`、X 用户 OAuth：
@@ -6,7 +16,7 @@ TikTok Content Posting API、Instagram Professional `container` + `media_publish
 - TikTok 未审核 client 只允许 Inbox Upload（用户在 App 内继续编辑），不得宣称公开 Direct Post
 - Instagram 无公开可抓取 HTTPS 媒体 URL、无 Professional 授权或无应用审核时 fail closed
 - X 发帖必须是 OAuth 2.0 PKCE 或 OAuth 1.0a user-context；app-only bearer 不能发帖
-- 成功必须有平台 id（Instagram 还有 permalink）；未知回执记失败
+- 成功必须有平台 id；Instagram URL 只用 Graph `permalink`，没有则不写可点击链接；未知回执记失败
 - `oauth_token_metadata` 只存 key_ref / last4 / scopes，不存 access_token
 - 账号中心不再把抖音等官方 OAuth 平台画成扫码/cookie 一键登录
 - 无真实 App 资质时只用 mock/契约测试；真人 3 天 smoke 未测

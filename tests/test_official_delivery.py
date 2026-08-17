@@ -306,7 +306,9 @@ def test_instagram_success_needs_media_id(tmp_path):
     conn = db.connect(tmp_path / "state.db")
     db.init_db(conn)
 
-    def post(url, **_kwargs):
+    def post(url, **kwargs):
+        if kwargs.get("method") == "GET":
+            return {"id": "ig-media-1"}
         if url.endswith("/media_publish"):
             return {"id": "ig-media-1"}
         return {"id": "ig-ctr-1"}
@@ -329,7 +331,7 @@ def test_instagram_success_needs_media_id(tmp_path):
     )
     assert result.attempt.outcome == "success"
     assert result.attempt.platform_post_id == "ig-media-1"
-    assert result.attempt.platform_url == "https://www.instagram.com/p/ig-media-1/"
+    assert result.attempt.platform_url is None
 
 
 def test_x_app_only_is_not_official_success(tmp_path):

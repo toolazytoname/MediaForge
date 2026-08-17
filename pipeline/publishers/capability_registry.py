@@ -6,7 +6,7 @@ Project delivery only exposes the product-effective modes from this registry.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
 from pipeline.publishers.capabilities import (
@@ -29,10 +29,18 @@ KNOWN_KINDS = (KIND_ARTICLE, KIND_GALLERY, KIND_VIDEO)
 DEFAULT_GALLERY_MIN_IMAGES = 1
 DEFAULT_GALLERY_MAX_IMAGES = 9
 
+LANE_OFFICIAL = "official"
+LANE_ASSISTED = "assisted"
+LANE_EXPORT = "export"
+
 REGISTRY_PLATFORMS = (
     "wechat_mp", "toutiao", "xiaohongshu", "douyin",
     "x", "youtube", "tiktok", "instagram",
+    "bilibili", "shipinhao", "weibo", "kuaishou", "zhihu",
 )
+
+# Audit P3 / long-tail: catalog only. No official creator publish API.
+P3_PLATFORMS = ("bilibili", "shipinhao", "weibo", "kuaishou", "zhihu")
 
 
 @dataclass(frozen=True)
@@ -102,6 +110,8 @@ class Capability:
     limits: CapabilityLimits
     receipts: ReceiptSpec
     ui: UiSpec
+    official_api: bool
+    lane: str
     adapter: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -123,6 +133,8 @@ _REGISTRY: dict[str, Capability] = {
         limits=CapabilityLimits(title_max=64, digest_max=120, body_min=600, max_cover_bytes=10 * 1024 * 1024),
         receipts=ReceiptSpec(("platform_post_id",), True),
         ui=UiSpec("html_article", "将创建公众号草稿，不会群发或公开可见。", ("title", "digest", "body")),
+        official_api=True,
+        lane=LANE_OFFICIAL,
         adapter="wechat_mp",
     ),
     "toutiao": Capability(
@@ -135,6 +147,8 @@ _REGISTRY: dict[str, Capability] = {
         limits=CapabilityLimits(title_max=30, body_min=600),
         receipts=ReceiptSpec(("platform_post_id",), True),
         ui=UiSpec("html_article", "仅本地安全导出，供人工导入头条。不会直发。", ("title", "body")),
+        official_api=False,
+        lane=LANE_EXPORT,
         adapter="toutiao",
     ),
     "xiaohongshu": Capability(
@@ -157,6 +171,8 @@ _REGISTRY: dict[str, Capability] = {
             "仅本地安全导出，供人工导入小红书。无 post_id/URL 不得记为平台成功。",
             ("caption", "images"),
         ),
+        official_api=False,
+        lane=LANE_ASSISTED,
         adapter="xiaohongshu",
     ),
     "douyin": Capability(
@@ -180,6 +196,8 @@ _REGISTRY: dict[str, Capability] = {
             "Playwright 仅作显式 assisted 降级。无 item_id 不得记成功。",
             ("title", "video", "images"),
         ),
+        official_api=True,
+        lane=LANE_OFFICIAL,
         adapter="douyin",
     ),
     "x": Capability(
@@ -202,6 +220,8 @@ _REGISTRY: dict[str, Capability] = {
             "缺少 user-context 时直发不可用。无 tweet id 不得记成功。",
             ("body", "images"),
         ),
+        official_api=True,
+        lane=LANE_OFFICIAL,
         adapter="x",
     ),
     "youtube": Capability(
@@ -224,6 +244,8 @@ _REGISTRY: dict[str, Capability] = {
             "不会公开直发。无视频 id 不得记成功。",
             ("title", "video", "visibility"),
         ),
+        official_api=True,
+        lane=LANE_OFFICIAL,
         adapter="youtube",
     ),
     "tiktok": Capability(
@@ -246,6 +268,8 @@ _REGISTRY: dict[str, Capability] = {
             "由用户在 App 内继续编辑，不会公开直发。无 publish_id 不得记成功。",
             ("title", "video", "privacy_level"),
         ),
+        official_api=True,
+        lane=LANE_OFFICIAL,
         adapter="tiktok",
     ),
     "instagram": Capability(
@@ -272,7 +296,107 @@ _REGISTRY: dict[str, Capability] = {
             "缺少任一条件时不可直发，无 media id 不得记成功。",
             ("caption", "media_url"),
         ),
+        official_api=True,
+        lane=LANE_OFFICIAL,
         adapter="instagram",
+    ),
+    "bilibili": Capability(
+        platform="bilibili",
+        label="B站",
+        formats=(KIND_VIDEO,),
+        delivery=_flags(draft=False, direct=False),
+        auth=AuthSpec("none", (), False, ""),
+        review=ReviewSpec(False, True, "private"),
+        limits=CapabilityLimits(),
+        receipts=ReceiptSpec(("platform_post_id",), True),
+        ui=UiSpec(
+            "video_player",
+            "B站暂无已核验的官方创作者发布 API。仅可本地安全导出后人工上传。"
+            "暂不支持官方发布，不得记为平台直发成功。",
+            ("title", "video"),
+        ),
+        official_api=False,
+        lane=LANE_EXPORT,
+        adapter="",
+    ),
+    "shipinhao": Capability(
+        platform="shipinhao",
+        label="微信视频号",
+        formats=(KIND_VIDEO,),
+        delivery=_flags(draft=False, direct=False),
+        auth=AuthSpec("none", (), False, ""),
+        review=ReviewSpec(False, True, "private"),
+        limits=CapabilityLimits(),
+        receipts=ReceiptSpec(("platform_post_id",), True),
+        ui=UiSpec(
+            "video_player",
+            "微信视频号暂不支持官方发布。仅可本地安全导出后人工发布。"
+            "不得宣称可 API 直发，无平台回执不得记成功。",
+            ("title", "video"),
+        ),
+        official_api=False,
+        lane=LANE_EXPORT,
+        adapter="",
+    ),
+    "weibo": Capability(
+        platform="weibo",
+        label="微博",
+        formats=(KIND_ARTICLE, KIND_GALLERY),
+        delivery=_flags(draft=False, direct=False),
+        auth=AuthSpec("none", (), False, ""),
+        review=ReviewSpec(False, True, "private"),
+        limits=CapabilityLimits(
+            min_images=DEFAULT_GALLERY_MIN_IMAGES,
+            max_images=DEFAULT_GALLERY_MAX_IMAGES,
+        ),
+        receipts=ReceiptSpec(("platform_post_id",), True),
+        ui=UiSpec(
+            "html_article",
+            "微博暂不支持官方发布。仅可本地安全导出后人工发布。"
+            "不得记为平台直发成功。",
+            ("title", "body", "images"),
+        ),
+        official_api=False,
+        lane=LANE_EXPORT,
+        adapter="",
+    ),
+    "kuaishou": Capability(
+        platform="kuaishou",
+        label="快手",
+        formats=(KIND_VIDEO,),
+        delivery=_flags(draft=False, direct=False),
+        auth=AuthSpec("none", (), False, ""),
+        review=ReviewSpec(False, True, "private"),
+        limits=CapabilityLimits(),
+        receipts=ReceiptSpec(("platform_post_id",), True),
+        ui=UiSpec(
+            "video_player",
+            "快手暂不支持官方发布。仅可本地安全导出后人工发布。"
+            "不得记为平台直发成功。",
+            ("title", "video"),
+        ),
+        official_api=False,
+        lane=LANE_EXPORT,
+        adapter="",
+    ),
+    "zhihu": Capability(
+        platform="zhihu",
+        label="知乎",
+        formats=(KIND_ARTICLE,),
+        delivery=_flags(draft=False, direct=False),
+        auth=AuthSpec("none", (), False, ""),
+        review=ReviewSpec(False, True, "private"),
+        limits=CapabilityLimits(),
+        receipts=ReceiptSpec(("platform_post_id",), True),
+        ui=UiSpec(
+            "html_article",
+            "知乎暂不支持官方发布。仅可本地安全导出后人工发布。"
+            "不得记为平台直发成功。",
+            ("title", "body"),
+        ),
+        official_api=False,
+        lane=LANE_EXPORT,
+        adapter="",
     ),
 }
 
@@ -290,6 +414,27 @@ def all_capabilities() -> tuple[Capability, ...]:
 
 def platforms_for(*, kind: str) -> tuple[str, ...]:
     return tuple(item.platform for item in all_capabilities() if kind in item.formats)
+
+
+def target_platforms_for(*, kind: str) -> tuple[str, ...]:
+    """Platforms that may be selected as Project deliverable targets.
+
+    Catalog-only P3 entries have no adapter and stay out of default targets.
+    """
+    return tuple(
+        item.platform
+        for item in all_capabilities()
+        if kind in item.formats and item.adapter
+    )
+
+
+def official_publish_platforms() -> frozenset[str]:
+    """Official OAuth/API platforms that may use confirm+direct delivery."""
+    return frozenset(
+        item.platform
+        for item in all_capabilities()
+        if item.official_api and item.delivery.direct
+    )
 
 
 def gallery_image_limits(platform: str) -> tuple[int, int]:
@@ -346,6 +491,7 @@ def capabilities_payload(adapter_by_platform: dict[str, object] | None = None) -
         payload = cap.to_dict()
         effective = effective_delivery(cap.platform, adapters.get(cap.platform))
         payload["delivery_effective"] = asdict(effective)
+        payload["can_claim_direct"] = bool(cap.official_api and effective.direct)
         payload["outcomes"] = list(KNOWN_OUTCOMES)
         items.append(payload)
     return items
@@ -366,6 +512,10 @@ __all__ = [
     "KIND_GALLERY",
     "KIND_VIDEO",
     "KNOWN_KINDS",
+    "LANE_ASSISTED",
+    "LANE_EXPORT",
+    "LANE_OFFICIAL",
+    "P3_PLATFORMS",
     "REGISTRY_PLATFORMS",
     "ReceiptSpec",
     "ReviewSpec",
@@ -381,5 +531,7 @@ __all__ = [
     "get_capability",
     "intersect_delivery",
     "mode_allowed",
+    "official_publish_platforms",
     "platforms_for",
+    "target_platforms_for",
 ]

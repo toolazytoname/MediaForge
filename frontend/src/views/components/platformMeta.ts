@@ -3,8 +3,7 @@
 // 不 vendor 也不重发平台官方美术资源；抖音/今日头条/视频号无对应品牌图标条目，
 // 保留 icon: undefined，UI 回退为文字色块。
 // 「已支持」= 后端 pipeline/config.py::PlatformsConfig 真实注册的平台。
-// 「规划中」= 蚁小二对标计划（docs/research/yixiaoer-teardown-and-plan.md）里列出、
-// 本项目尚未实现发布适配器的平台位——仅作陈列，不可点击授权。
+// 「长尾」= CapabilityRegistry P3：诚实声明仅导出 / 暂不支持官方发布，没有直发。
 import {
   siXiaohongshu,
   siWechat,
@@ -37,7 +36,7 @@ export const SUPPORTED_PLATFORMS: readonly PlatformMeta[] = [
   { key: 'instagram', label: 'Instagram', color: `#${siInstagram.hex}`, group: 'intl', iconPath: siInstagram.path },
 ]
 
-export const PLANNED_PLATFORMS: readonly PlatformMeta[] = [
+export const LONGTAIL_PLATFORMS: readonly PlatformMeta[] = [
   { key: 'weibo', label: '微博', color: `#${siSinaweibo.hex}`, group: 'domestic', iconPath: siSinaweibo.path },
   { key: 'kuaishou', label: '快手', color: `#${siKuaishou.hex}`, group: 'domestic', iconPath: siKuaishou.path },
   { key: 'shipinhao', label: '视频号', color: '#576b95', group: 'domestic' },
@@ -45,8 +44,11 @@ export const PLANNED_PLATFORMS: readonly PlatformMeta[] = [
   { key: 'zhihu', label: '知乎', color: `#${siZhihu.hex}`, group: 'domestic', iconPath: siZhihu.path },
 ]
 
+/** @deprecated Use LONGTAIL_PLATFORMS. Kept so older catalog imports keep working. */
+export const PLANNED_PLATFORMS = LONGTAIL_PLATFORMS
+
 const BY_KEY: ReadonlyMap<string, PlatformMeta> = new Map(
-  [...SUPPORTED_PLATFORMS, ...PLANNED_PLATFORMS].map((p) => [p.key, p]),
+  [...SUPPORTED_PLATFORMS, ...LONGTAIL_PLATFORMS].map((p) => [p.key, p]),
 )
 
 export function platformMeta(key: string): PlatformMeta {

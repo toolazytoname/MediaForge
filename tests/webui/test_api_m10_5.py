@@ -209,7 +209,11 @@ class TestAccounts:
         assert r.status_code == 200
         items = r.json()["items"]
         platforms = {it["platform"] for it in items}
-        assert {"toutiao", "xiaohongshu", "x", "douyin", "wechat_mp", "youtube", "tiktok", "instagram"} <= platforms
+        assert {
+            "toutiao", "xiaohongshu", "x", "douyin", "wechat_mp",
+            "youtube", "tiktok", "instagram",
+            "bilibili", "shipinhao", "weibo", "kuaishou", "zhihu",
+        } <= platforms
 
     def test_login_guidance_has_auth_type(self, client):
         r = client.get("/api/v1/accounts/login-guidance")
@@ -222,6 +226,9 @@ class TestAccounts:
         assert by_platform["youtube"]["auth_type"] == "oauth_user"
         assert by_platform["tiktok"]["auth_type"] == "oauth_user"
         assert by_platform["instagram"]["auth_type"] == "oauth_user"
+        assert by_platform["bilibili"]["auth_type"] == "export_only"
+        assert by_platform["shipinhao"]["auth_type"] == "export_only"
+        assert by_platform["weibo"]["auth_type"] == "export_only"
 
 
 # ── Runs ───────────────────────────────────────────────────

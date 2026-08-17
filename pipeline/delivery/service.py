@@ -26,12 +26,16 @@ from pipeline.models import Content, ContentStatus, Publication, PublicationStat
 from pipeline.autonomy import AutonomyError, load_policy, require_delivery_mode
 from pipeline.oauth.store import upsert_oauth_metadata
 from pipeline.publishers.base import AccountConfig, PublishError, PublishResult, PublisherAdapter
-from pipeline.publishers.capability_registry import get_capability, mode_allowed
+from pipeline.publishers.capability_registry import (
+    get_capability,
+    mode_allowed,
+    official_publish_platforms,
+)
 from pipeline.publishers.safe_publish import SafePublishResult, safe_publish
 from pipeline.utils.ids import new_id
 from pipeline.utils.redact import token_last4
 
-OFFICIAL_PLATFORMS = frozenset({"douyin", "youtube", "tiktok", "instagram", "x"})
+OFFICIAL_PLATFORMS = official_publish_platforms()
 
 _PROJECT_PILLAR = "project"
 

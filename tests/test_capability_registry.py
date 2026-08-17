@@ -1,7 +1,14 @@
+import pytest
+
+from pipeline.publishers import get_adapter
 from pipeline.publishers.capability_registry import (
+    P3_PLATFORMS,
+    capabilities_payload,
     effective_delivery,
     get_capability,
+    official_publish_platforms,
     platforms_for,
+    target_platforms_for,
 )
 from pipeline.publishers.capabilities import KNOWN_OUTCOMES
 from pipeline.publishers.douyin_api import DouyinApiPublisher, DouyinCredentials
@@ -51,6 +58,11 @@ def test_registry_covers_five_adapters_and_wechat_hides_direct():
     assert set(platforms_for(kind="gallery")) >= {"xiaohongshu", "douyin", "instagram"}
     assert "youtube" in platforms_for(kind="video")
     assert "tiktok" in platforms_for(kind="video")
+    assert wechat.official_api is True
+    assert toutiao.official_api is False
+    assert toutiao.lane == "export"
+    assert xhs.official_api is False
+    assert xhs.lane == "assisted"
 
 
 def test_x_without_user_context_direct_is_false():
@@ -65,3 +77,30 @@ def test_x_without_user_context_direct_is_false():
     assert YoutubePublisher(access_token="t").capabilities().direct is False
     assert TikTokPublisher(access_token="t").capabilities().direct is False
     assert InstagramPublisher(access_token="t").capabilities().direct is False
+
+
+def test_p3_catalog_is_export_only_and_has_no_adapter():
+    official = official_publish_platforms()
+    assert official == frozenset({"douyin", "youtube", "tiktok", "instagram", "x"})
+    for name in P3_PLATFORMS:
+        cap = get_capability(name)
+        assert cap.official_api is False
+        assert cap.lane == "export"
+        assert cap.delivery.direct is False
+        assert cap.delivery.draft is False
+        assert cap.delivery.export is True
+        assert cap.adapter == ""
+        assert cap.receipts.unknown_is_failure is True
+        assert effective_delivery(name).direct is False
+        assert name not in official
+        with pytest.raises(ValueError, match="unknown"):
+            get_adapter(name, account=None, config=None)
+    assert "bilibili" in platforms_for(kind="video")
+    assert "shipinhao" in platforms_for(kind="video")
+    assert "weibo" not in target_platforms_for(kind="gallery")
+    assert "xiaohongshu" in target_platforms_for(kind="gallery")
+    payload = {item["platform"]: item for item in capabilities_payload()}
+    for name in P3_PLATFORMS:
+        assert payload[name]["can_claim_direct"] is False
+        assert payload[name]["official_api"] is False
+        assert "可直发" not in payload[name]["ui"]["confirm_copy"]

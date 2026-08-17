@@ -51,8 +51,17 @@ def test_capabilities_hide_wechat_direct_and_unapproved_draft_is_409(tmp_path, m
     assert instagram["auth"]["kind"] == "oauth_user"
     assert instagram["review"]["requires_app_review"] is True
     assert instagram["delivery_effective"]["direct"] is False
+    assert instagram["official_api"] is True
     assert x["auth"]["kind"] == "oauth_user"
     assert x["delivery_effective"]["direct"] is False
+    bilibili = next(item for item in caps.json()["items"] if item["platform"] == "bilibili")
+    shipinhao = next(item for item in caps.json()["items"] if item["platform"] == "shipinhao")
+    assert bilibili["official_api"] is False
+    assert bilibili["delivery"]["direct"] is False
+    assert bilibili["can_claim_direct"] is False
+    assert shipinhao["official_api"] is False
+    assert shipinhao["lane"] == "export"
+    assert "暂不支持官方发布" in shipinhao["ui"]["confirm_copy"]
     hidden = client.post(
         "/api/v1/projects/prj_delivery_api/deliverables/dlv_article_wechat_mp/direct",
         json={"actor": "lazy"},

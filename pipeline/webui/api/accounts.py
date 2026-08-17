@@ -132,6 +132,42 @@ def login_guidance() -> dict[str, Any]:
                     "需要公开可抓取 HTTPS 媒体 URL 与应用审核；缺任一条件 fail-closed。"
                 ),
             },
+            {
+                "platform": "bilibili",
+                "auth_type": "export_only",
+                "command": "",
+                "notes": (
+                    "B站暂无已核验的官方创作者发布 API。账号中心不提供 OAuth 或扫码直发。"
+                    "请用项目安全导出后人工上传。暂不支持官方发布。"
+                ),
+            },
+            {
+                "platform": "shipinhao",
+                "auth_type": "export_only",
+                "command": "",
+                "notes": (
+                    "微信视频号暂不支持官方发布。不提供 API 直发或扫码一键登录。"
+                    "请用项目安全导出后人工发布。"
+                ),
+            },
+            {
+                "platform": "weibo",
+                "auth_type": "export_only",
+                "command": "",
+                "notes": "微博暂不支持官方发布。仅可安全导出后人工发布。",
+            },
+            {
+                "platform": "kuaishou",
+                "auth_type": "export_only",
+                "command": "",
+                "notes": "快手暂不支持官方发布。仅可安全导出后人工发布。",
+            },
+            {
+                "platform": "zhihu",
+                "auth_type": "export_only",
+                "command": "",
+                "notes": "知乎暂不支持官方发布。仅可安全导出后人工发布。",
+            },
         ]
     }
 
