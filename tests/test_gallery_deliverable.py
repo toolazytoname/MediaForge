@@ -65,7 +65,10 @@ def _selected_assets(root: Path, project_id: str, count: int, prefix: str) -> li
     return asset_ids
 
 
-def _make_gallery(root: Path, project_id: str, *, slides: int, prefix: str, caption: str) -> deliverables.Deliverable:
+def _make_gallery(
+    root: Path, project_id: str, *, slides: int, prefix: str, caption: str,
+    targets: list[str] | None = None,
+) -> deliverables.Deliverable:
     projects.create_project(
         title=f"组图{prefix}", idea="组图", audience="读者", goal="导出", voice="清晰",
         autonomy="collaborate", now=_NOW, project_id=project_id, projects_root=root,
@@ -81,7 +84,7 @@ def _make_gallery(root: Path, project_id: str, *, slides: int, prefix: str, capt
             {"asset_id": asset_id, "order": index, "alt": f"第{index + 1}张", "crop": {"x": 0, "y": 0, "w": 1, "h": 1}}
             for index, asset_id in enumerate(asset_ids)
         ],
-        targets=["xiaohongshu"],
+        targets=targets or ["xiaohongshu"],
         now=_NOW,
         projects_root=root,
     )

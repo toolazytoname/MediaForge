@@ -29,7 +29,7 @@ KNOWN_KINDS = (KIND_ARTICLE, KIND_GALLERY, KIND_VIDEO)
 DEFAULT_GALLERY_MIN_IMAGES = 1
 DEFAULT_GALLERY_MAX_IMAGES = 9
 
-REGISTRY_PLATFORMS = ("wechat_mp", "toutiao", "xiaohongshu", "douyin", "x")
+REGISTRY_PLATFORMS = ("wechat_mp", "toutiao", "xiaohongshu", "douyin", "x", "youtube")
 
 
 @dataclass(frozen=True)
@@ -159,13 +159,24 @@ _REGISTRY: dict[str, Capability] = {
     "douyin": Capability(
         platform="douyin",
         label="抖音",
-        formats=(KIND_VIDEO,),
-        delivery=_flags(draft=False, direct=False),
-        auth=AuthSpec("cookie", (), False, "secrets/cookies/douyin_<account>.json"),
-        review=ReviewSpec(False, True, "public"),
-        limits=CapabilityLimits(max_duration_s=180),
+        formats=(KIND_VIDEO, KIND_GALLERY),
+        # Product upper bound. Adapter tightens to direct=false without user-context.
+        delivery=_flags(draft=False, direct=True),
+        auth=AuthSpec("oauth_user", ("video.create",), True, "secrets/douyin_<account>.json"),
+        review=ReviewSpec(True, True, "private"),
+        limits=CapabilityLimits(
+            title_max=30,
+            max_duration_s=180,
+            min_images=DEFAULT_GALLERY_MIN_IMAGES,
+            max_images=DEFAULT_GALLERY_MAX_IMAGES,
+        ),
         receipts=ReceiptSpec(("platform_post_id",), True),
-        ui=UiSpec("video_player", "官方 API 接入前只允许导出或人工辅助，不会自动直发。", ("script", "video")),
+        ui=UiSpec(
+            "video_player",
+            "将通过抖音官方 API 发布（video.create）。缺少用户授权时不可直发。"
+            "Playwright 仅作显式 assisted 降级。无 item_id 不得记成功。",
+            ("title", "video", "images"),
+        ),
         adapter="douyin",
     ),
     "x": Capability(
@@ -179,6 +190,28 @@ _REGISTRY: dict[str, Capability] = {
         receipts=ReceiptSpec(("platform_post_id",), True),
         ui=UiSpec("html_article", "将发到 X。缺少 user-context 时直发不可用。", ("body",)),
         adapter="x",
+    ),
+    "youtube": Capability(
+        platform="youtube",
+        label="YouTube",
+        formats=(KIND_VIDEO,),
+        delivery=_flags(draft=False, direct=True),
+        auth=AuthSpec(
+            "oauth_user",
+            ("https://www.googleapis.com/auth/youtube.upload",),
+            True,
+            "secrets/youtube_<account>.json",
+        ),
+        review=ReviewSpec(True, True, "private"),
+        limits=CapabilityLimits(max_duration_s=15 * 60),
+        receipts=ReceiptSpec(("platform_post_id", "url"), True),
+        ui=UiSpec(
+            "video_player",
+            "将调用 YouTube videos.insert。未完成应用审核时只允许 private/unlisted，"
+            "不会公开直发。无视频 id 不得记成功。",
+            ("title", "video", "visibility"),
+        ),
+        adapter="youtube",
     ),
 }
 
@@ -230,7 +263,7 @@ def intersect_delivery(product: DeliveryFlags, adapter: AdapterCapabilities) -> 
 def effective_delivery(platform: str, adapter: object | None = None) -> DeliveryFlags:
     product = get_capability(platform).delivery
     if adapter is None:
-        if platform == "x":
+        if platform in {"x", "douyin", "youtube"}:
             return DeliveryFlags(
                 preview=product.preview,
                 export=product.export,

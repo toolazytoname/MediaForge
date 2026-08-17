@@ -104,12 +104,35 @@ def test_build_xiaohongshu_no_env_uses_none(tmp_path: Path) -> None:
     # 详见 xiaohongshu.py::_resolve_skills_path_from_env + DEFAULT_SKILLS_PATH
 
 
-def test_build_douyin_default_ai_ratio_high(tmp_path: Path) -> None:
-    """config 无 douyin 平台（cfg.platforms.douyin=None）→ 默认 'high'。
+def test_build_douyin_default_is_official_api(tmp_path: Path) -> None:
+    """Default douyin adapter is official OAuth, not Playwright."""
+    from pipeline.publishers.douyin_api import DouyinApiPublisher
 
-    实际生产路径 build_adapters(cfg) 永远传非 None cfg，但 cfg 本身
-    可能在 douyin 平台未启用（getattr 返回 None）→ 走 fallback 'high'。
-    """
+    creds = tmp_path / "dy.json"
+    creds.write_text(json.dumps({
+        "access_token": "act-test-token",
+        "open_id": "open-1",
+        "scopes": ["video.create"],
+    }))
+    account = AccountConfig(id="main", credentials_path=creds)
+    adapter = get_adapter("douyin", account=account, config=None)
+    assert isinstance(adapter, DouyinApiPublisher)
+    assert adapter.capabilities().direct is True
+
+
+def test_build_douyin_cookie_file_is_still_official_fail_closed(tmp_path: Path) -> None:
+    """A Playwright cookie dump is not user-context; default path stays official."""
+    from pipeline.publishers.douyin_api import DouyinApiPublisher
+
+    cookies = tmp_path / "dy.json"
+    cookies.write_text("{}")
+    account = AccountConfig(id="main", credentials_path=cookies)
+    adapter = get_adapter("douyin", account=account, config=None)
+    assert isinstance(adapter, DouyinApiPublisher)
+    assert adapter.capabilities().direct is False
+
+
+def test_build_douyin_assisted_uses_playwright(tmp_path: Path) -> None:
     from unittest.mock import MagicMock
 
     from pipeline.publishers.douyin import DouyinPublisher
@@ -117,81 +140,33 @@ def test_build_douyin_default_ai_ratio_high(tmp_path: Path) -> None:
     cookies = tmp_path / "dy.json"
     cookies.write_text("{}")
     account = AccountConfig(id="main", credentials_path=cookies)
-
-    # mock cfg：cfg.platforms.douyin = None（未启用 douyin 平台）
-    fake_cfg = MagicMock()
-    fake_cfg.platforms = MagicMock()
-    fake_cfg.platforms.douyin = None
-
-    adapter = get_adapter("douyin", account=account, config=fake_cfg)
-    assert isinstance(adapter, DouyinPublisher)
-    assert adapter._ai_ratio == "high"
-
-
-def test_build_douyin_uses_config_ai_ratio(tmp_path: Path) -> None:
-    """config.platforms.douyin.ai_ratio 显式配置 → 覆盖默认。
-
-    注意：当前 cfg schema（M5-2 实现时未把 ai_ratio 提到 PlatformsConfig.douyin）
-    没有 ai_ratio 字段。_build_douyin 用 hasattr 防御性读取 + fallback 'high'。
-    本测试用 mock cfg 模拟"未来 schema 扩展后"的路径——锁定行为契约。
-    """
-    from unittest.mock import MagicMock
-
-    from pipeline.publishers.douyin import DouyinPublisher
-
-    cookies = tmp_path / "dy.json"
-    cookies.write_text("{}")
-    account = AccountConfig(id="main", credentials_path=cookies)
-
-    # mock cfg：cfg.platforms.douyin.ai_ratio = "medium"
     fake_plat = MagicMock()
+    fake_plat.assisted = True
     fake_plat.ai_ratio = "medium"
     fake_cfg = MagicMock()
     fake_cfg.platforms = MagicMock()
     fake_cfg.platforms.douyin = fake_plat
-
     adapter = get_adapter("douyin", account=account, config=fake_cfg)
     assert isinstance(adapter, DouyinPublisher)
     assert adapter._ai_ratio == "medium"
+    assert adapter.capabilities().direct is False
 
 
-def test_build_douyin_fallback_when_ai_ratio_none(tmp_path: Path) -> None:
-    """config 存在但 ai_ratio=None → 走 fallback 'high'。"""
-    from unittest.mock import MagicMock
+def test_build_youtube_resolves_oauth(tmp_path: Path) -> None:
+    from pipeline.publishers.youtube import YoutubePublisher
 
-    from pipeline.publishers.douyin import DouyinPublisher
-
-    cookies = tmp_path / "dy.json"
-    cookies.write_text("{}")
-    account = AccountConfig(id="main", credentials_path=cookies)
-
-    fake_plat = MagicMock()
-    fake_plat.ai_ratio = None
-    fake_cfg = MagicMock()
-    fake_cfg.platforms = MagicMock()
-    fake_cfg.platforms.douyin = fake_plat
-
-    adapter = get_adapter("douyin", account=account, config=fake_cfg)
-    assert isinstance(adapter, DouyinPublisher)
-    assert adapter._ai_ratio == "high"  # fallback
-
-
-def test_build_douyin_tolerates_config_none(tmp_path: Path) -> None:
-    """config=None 时不应崩溃——与其他 builder（x/toutiao/xhs）对齐。
-
-    M4-3 bug：原 _build_douyin 直接读 config.platforms.douyin，config=None 时
-    AttributeError。其他 builder 都不读 config，所以只有 douyin 受影响。
-    修复后 config=None → 走默认 ai_ratio='high'。
-    """
-    from pipeline.publishers.douyin import DouyinPublisher
-
-    cookies = tmp_path / "dy.json"
-    cookies.write_text("{}")
-    account = AccountConfig(id="main", credentials_path=cookies)
-
-    adapter = get_adapter("douyin", account=account, config=None)
-    assert isinstance(adapter, DouyinPublisher)
-    assert adapter._ai_ratio == "high"
+    creds = tmp_path / "yt.json"
+    creds.write_text(json.dumps({
+        "access_token": "yt-test-token",
+        "user_id": "channel-1",
+        "scopes": ["https://www.googleapis.com/auth/youtube.upload"],
+        "app_reviewed": False,
+    }))
+    account = AccountConfig(id="main", credentials_path=creds)
+    adapter = get_adapter("youtube", account=account, config=None)
+    assert isinstance(adapter, YoutubePublisher)
+    assert adapter.capabilities().direct is True
+    assert "private/unlisted" in adapter.capabilities().detail
 
 
 # ── build_adapters 编排覆盖 ────────────────────────────────────────

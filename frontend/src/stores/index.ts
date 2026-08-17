@@ -1703,6 +1703,9 @@ export interface CapabilityItem {
   formats: string[]
   ui: { preview_kind: string; confirm_copy: string; fields: string[] }
   delivery: { preview: boolean; export: boolean; draft: boolean; direct: boolean }
+  delivery_effective?: { preview: boolean; export: boolean; draft: boolean; direct: boolean }
+  auth?: { kind: string; required_scopes: string[]; user_context_required: boolean; secret_ref_pattern: string }
+  review?: { requires_app_review: boolean; human_in_loop_required: boolean; default_visibility: string }
   limits?: { min_images?: number | null; max_images?: number | null }
 }
 

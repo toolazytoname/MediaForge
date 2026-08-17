@@ -73,6 +73,8 @@ def capabilities_for_platform(
     platform: str,
     *,
     x_has_user_context: bool | None = None,
+    douyin_has_user_context: bool | None = None,
+    youtube_has_user_context: bool | None = None,
 ) -> AdapterCapabilities:
     """Static defaults used by registry / contract tests."""
     if platform == "wechat_mp":
@@ -95,6 +97,24 @@ def capabilities_for_platform(
             draft=True,
             detail="Xiaohongshu CLI: published/ready_to_publish succeed; unknown must fail",
         )
+    if platform == "douyin":
+        direct = bool(douyin_has_user_context)
+        detail = (
+            "Douyin official API requires user-context OAuth "
+            "(open_id + video.create). Playwright is assisted-only."
+            if not direct
+            else "Douyin official API user-context present; video.create available"
+        )
+        return default_capabilities(direct=direct, detail=detail)
+    if platform == "youtube":
+        direct = bool(youtube_has_user_context)
+        detail = (
+            "YouTube videos.insert requires user OAuth (youtube.upload). "
+            "Without app review only private/unlisted are allowed."
+            if not direct
+            else "YouTube user-context present; public still requires app review"
+        )
+        return default_capabilities(direct=direct, detail=detail)
     return default_capabilities(detail=f"platform {platform!r} default capabilities")
 
 

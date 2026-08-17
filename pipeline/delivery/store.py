@@ -9,9 +9,9 @@ from typing import Any
 
 from pipeline import db
 from pipeline.utils.ids import new_id
+from pipeline.utils.redact import redact_value
 
 _RECEIPT_MAX = 4000
-_SECRET_KEYS = ("token", "secret", "password", "cookie", "authorization", "app_secret", "access_token")
 
 
 @dataclass(frozen=True)
@@ -88,22 +88,11 @@ def redact_receipt(raw: str | None) -> str | None:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return text
-    return json.dumps(_redact(parsed), ensure_ascii=False)
+    return json.dumps(redact_value(parsed), ensure_ascii=False)
 
 
 def _redact(value: Any) -> Any:
-    if isinstance(value, dict):
-        out = {}
-        for key, item in value.items():
-            lowered = str(key).lower()
-            if any(secret in lowered for secret in _SECRET_KEYS):
-                out[key] = "[redacted]"
-            else:
-                out[key] = _redact(item)
-        return out
-    if isinstance(value, list):
-        return [_redact(item) for item in value]
-    return value
+    return redact_value(value)
 
 
 def get_attempt_by_key(conn: sqlite3.Connection, idempotency_key: str) -> DeliveryAttempt | None:

@@ -4,12 +4,14 @@ from pipeline.publishers.capability_registry import (
     platforms_for,
 )
 from pipeline.publishers.capabilities import KNOWN_OUTCOMES
+from pipeline.publishers.douyin_api import DouyinApiPublisher, DouyinCredentials
 from pipeline.publishers.wechat_mp import WechatMpPublisher
 from pipeline.publishers.x_api import XApiPublisher
+from pipeline.publishers.youtube import YoutubePublisher
 
 
 def test_registry_covers_five_adapters_and_wechat_hides_direct():
-    for name in ("wechat_mp", "toutiao", "xiaohongshu", "douyin", "x"):
+    for name in ("wechat_mp", "toutiao", "xiaohongshu", "douyin", "x", "youtube"):
         cap = get_capability(name)
         assert cap.receipts.unknown_is_failure is True
         assert "unknown" in KNOWN_OUTCOMES
@@ -26,11 +28,25 @@ def test_registry_covers_five_adapters_and_wechat_hides_direct():
     assert xhs.delivery.export is True
     assert xhs.limits.min_images == 1
     assert xhs.limits.max_images == 9
+    douyin = get_capability("douyin")
+    assert douyin.auth.kind == "oauth_user"
+    assert douyin.review.requires_app_review is True
+    assert "video" in douyin.formats
+    assert "gallery" in douyin.formats
+    youtube = get_capability("youtube")
+    assert youtube.auth.kind == "oauth_user"
+    assert youtube.review.requires_app_review is True
+    assert youtube.review.default_visibility == "private"
     assert set(platforms_for(kind="article")) >= {"wechat_mp", "toutiao", "x"}
-    assert platforms_for(kind="gallery") == ("xiaohongshu",)
+    assert set(platforms_for(kind="gallery")) >= {"xiaohongshu", "douyin"}
+    assert "youtube" in platforms_for(kind="video")
 
 
 def test_x_without_user_context_direct_is_false():
     adapter = XApiPublisher(bearer_token="dummy")
     assert effective_delivery("x", adapter).direct is False
     assert WechatMpPublisher(app_id="id", app_secret="secret").capabilities().direct is False
+    assert effective_delivery("douyin").direct is False
+    assert effective_delivery("youtube").direct is False
+    assert DouyinApiPublisher(credentials=DouyinCredentials(access_token="t")).capabilities().direct is False
+    assert YoutubePublisher(access_token="t").capabilities().direct is False

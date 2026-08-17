@@ -1,3 +1,15 @@
+## 官方平台 Wave 1（LAZY-71）
+
+抖音默认走官方 OAuth `video.create` / 图文 `create_image_text`，YouTube 走 `videos.insert`：
+
+- 缺 user-context / 必要 scope 时 `direct=false` 且 fail closed
+- Playwright 抖音只在 `platforms.douyin.assisted=true` 时启用，不再是默认直发
+- YouTube 未完成应用审核时只允许 private/unlisted，不得宣称可公开直发
+- 成功必须有平台 id（YouTube 还要 URL）；未知回执记失败
+- `oauth_token_metadata` 只存 key_ref / last4 / scopes，不存 access_token
+- 嵌套 `style.auth.api_key` 等密钥写入 `request_json` 前递归脱敏
+- 无真实 App 资质时只用 mock/契约测试；真人 3 次交付未测
+
 ## 持久媒体任务（LAZY-59）
 
 视频/长任务落 `durable_jobs`，不再依赖进程内 `_JOBS`：

@@ -190,6 +190,7 @@ class PlatformAPI(BaseModel):
     kind: Literal["api"]
     windows: list[str]
     accounts: list[AccountAPI]
+    assisted: bool = False
 
 
 class PlatformPlaywright(BaseModel):
@@ -197,6 +198,7 @@ class PlatformPlaywright(BaseModel):
     kind: Literal["playwright"]
     windows: list[str]
     accounts: list[AccountPlaywright]
+    assisted: bool = False
 
 
 Platform = Annotated[
@@ -213,6 +215,7 @@ class PlatformsConfig(BaseModel):
     xiaohongshu: Platform | None = None
     douyin: Platform | None = None
     wechat_mp: Platform | None = None
+    youtube: Platform | None = None
 
 
 # ── WebUI ─────────────────────────────────────────────────
