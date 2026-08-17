@@ -14,15 +14,17 @@ const store = useAnalyticsStore()
 const { weekly, cost, platforms } = storeToRefs(store)
 
 // 4 tab + 1 时间窗
-const activeTab = ref<'dashboard' | 'accounts' | 'contents' | 'leaderboard'>('dashboard')
+const activeTab = ref<'dashboard' | 'accounts' | 'contents' | 'leaderboard' | 'review'>('dashboard')
 const windowDays = ref<number | null>(null) // null = 全部
 
 // 顶部全局钩子
 const accountsData = ref<{ items: AccountRow[]; days: number | null } | null>(null)
 const contentsData = ref<{ items: ContentRow[]; days: number | null } | null>(null)
 const leaderboardData = ref<{ items: LeaderboardRow[]; metric: string } | null>(null)
+const reviewLoop = ref<{ metrics: ReviewMetric[]; suggestions: ReviewSuggestion[] } | null>(null)
 const tabLoading = ref(false)
 const tabError = ref<string | null>(null)
+const insightBusy = ref(false)
 
 interface AccountRow {
   platform: string
@@ -49,6 +51,25 @@ interface LeaderboardRow {
   latest_likes: number
   latest_comments: number
   latest_shares: number
+}
+interface ReviewMetric {
+  id: string
+  project_id: string
+  delivery_attempt_id: string
+  source: string
+  collected_at: string
+  views: number | null
+  likes: number | null
+  comments: number | null
+  shares: number | null
+}
+interface ReviewSuggestion {
+  id: string
+  project_id: string
+  kind: string
+  title: string
+  body: string
+  status: string
 }
 
 const WINDOW_OPTIONS: ReadonlyArray<{ label: string; value: number | null }> = [
@@ -89,6 +110,10 @@ async function loadTab() {
       )
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       leaderboardData.value = await r.json() as { items: LeaderboardRow[]; metric: string }
+    } else if (activeTab.value === 'review') {
+      const r = await fetch('/api/v1/analytics/review-loop')
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      reviewLoop.value = await r.json() as { metrics: ReviewMetric[]; suggestions: ReviewSuggestion[] }
     }
   } catch (e: unknown) {
     tabError.value = e instanceof Error ? e.message : String(e)
@@ -105,6 +130,24 @@ onMounted(async () => {
   await loadBase()
   // 默认 tab=仪表盘,不需要额外 load
 })
+
+async function decideSuggestion(item: ReviewSuggestion, accepted: boolean) {
+  insightBusy.value = true
+  tabError.value = null
+  try {
+    const r = await fetch(`/api/v1/projects/${item.project_id}/insights/${item.id}/decide`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accepted, actor: 'web' }),
+    })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    await loadTab()
+  } catch (e: unknown) {
+    tabError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    insightBusy.value = false
+  }
+}
 
 watch(activeTab, () => {
   if (activeTab.value !== 'dashboard') loadTab()
@@ -292,6 +335,56 @@ const dashboardHasData = computed(() => Boolean(
               </template>
             </template>
           </a-table>
+        </a-spin>
+      </a-tab-pane>
+
+      <a-tab-pane key="review" title="项目回流">
+        <a-spin :spinning="tabLoading">
+          <a-alert v-if="tabError" type="error" :message="tabError" show-icon />
+          <a-card title="夹具指标" size="small" style="margin-bottom: 16px">
+            <a-table
+              :data-source="reviewLoop?.metrics || []"
+              :columns="[
+                { title: '项目', dataIndex: 'project_id', width: 140 },
+                { title: '来源', dataIndex: 'source', width: 90 },
+                { title: '时间', dataIndex: 'collected_at' },
+                { title: '浏览', dataIndex: 'views', width: 80 },
+                { title: '互动', dataIndex: 'likes', width: 80 },
+              ]"
+              :pagination="false"
+              row-key="id"
+              size="small"
+            />
+          </a-card>
+          <a-card title="学习建议（未确认不落品牌规则）" size="small">
+            <a-list :data-source="reviewLoop?.suggestions || []" item-layout="vertical">
+              <template #renderItem="{ item }">
+                <a-list-item>
+                  <a-list-item-meta :title="item.title" :description="`${item.project_id} · ${item.kind} · ${item.status}`" />
+                  <p>{{ item.body }}</p>
+                  <template #actions>
+                    <a-button
+                      size="small"
+                      type="primary"
+                      :disabled="item.status !== 'pending'"
+                      :loading="insightBusy"
+                      @click="decideSuggestion(item, true)"
+                    >
+                      接受
+                    </a-button>
+                    <a-button
+                      size="small"
+                      :disabled="item.status !== 'pending'"
+                      :loading="insightBusy"
+                      @click="decideSuggestion(item, false)"
+                    >
+                      拒绝
+                    </a-button>
+                  </template>
+                </a-list-item>
+              </template>
+            </a-list>
+          </a-card>
         </a-spin>
       </a-tab-pane>
     </a-tabs>

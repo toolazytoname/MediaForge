@@ -40,4 +40,6 @@ bash scripts/verify.sh
 
 自主程度契约（RFC §5.7，不需要真实平台密钥）：`tests/test_autonomy_policy.py`、`tests/webui/test_autonomy_api.py`。
 
+自动化到审批与复盘回流（LAZY-88，不需要真实平台密钥）：`tests/test_automation.py`、`tests/test_budget_policy.py`、`tests/test_delivery_metrics.py`、`tests/test_insights.py`、`tests/webui/test_s6_api.py`。覆盖定时停在 `awaiting_approval`、超预算/未知成本可恢复暂停、夹具指标回流、建议未确认不改品牌规则。
+
 GitHub Actions（`.github/workflows/verify.yml`）调用同一条 `scripts/verify.sh`，避免本地与远端两套逻辑。

@@ -21,6 +21,7 @@ PLISTS=(
     "com.mediaforge.create-gate.plist"
     "com.mediaforge.review-notify.plist"
     "com.mediaforge.schedule.plist"
+    "com.mediaforge.prepare-due.plist"
     "com.mediaforge.publish-due.plist"
     "com.mediaforge.collect.plist"
     "com.mediaforge.backup-db.plist"

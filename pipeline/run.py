@@ -23,6 +23,7 @@ _LOCKS_DIR = Path("locks")
 
 # 默认可被测试 monkeypatch；与 webui/app.py::_DB_PATH 同模式
 _DB_PATH = "state.db"
+_PROJECTS_ROOT = "output/projects"
 
 
 # 三表各自的合法状态全集（按枚举顺序打印——空库也能列全 0）。
@@ -779,6 +780,32 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
+@_stage_lock("prepare-due")
+def cmd_prepare_due(args: argparse.Namespace) -> int:
+    """把到期项目推进到 awaiting_approval，不 draft / direct / export。"""
+    from datetime import datetime, timezone
+
+    from pipeline.automation import run_prepare_due
+
+    now = datetime.now(timezone.utc).isoformat()
+    conn = db.connect(_DB_PATH)
+    try:
+        db.init_db(conn)
+        result = run_prepare_due(
+            conn,
+            now=now,
+            actor="cron",
+            projects_root=_PROJECTS_ROOT,
+        )
+    finally:
+        conn.close()
+    print(
+        f"prepare-due: {result.prepared} prepared, "
+        f"{result.paused} paused, {result.skipped} skipped"
+    )
+    return 0
+
+
 @_stage_lock("collect")
 def cmd_collect(args: argparse.Namespace) -> int:
     """回流表现数据（M6-1）。
@@ -1054,6 +1081,10 @@ def build_parser() -> argparse.ArgumentParser:
     publish_p.add_argument(
         "--dry-run", action="store_true", help="只走流程，不实际发布"
     )
+    sub.add_parser(
+        "prepare-due",
+        help="定时准备项目到 awaiting_approval（不 draft/direct/export）",
+    )
     sub.add_parser("collect", help="回流表现数据")
     sub.add_parser(
         "doctor", help="上线前自检（不修不建，只报告）"
@@ -1110,6 +1141,7 @@ COMMANDS = {
     "schedule": cmd_schedule,
     "generate-images": cmd_generate_images,
     "publish": cmd_publish,
+    "prepare-due": cmd_prepare_due,
     "collect": cmd_collect,
     "status": cmd_status,
     "doctor": cmd_doctor,

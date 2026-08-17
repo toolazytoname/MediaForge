@@ -252,6 +252,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _migrate_add_cover_path(conn)  # M-x：老库平滑升级
     _migrate_delivery_kernel(conn)
     _migrate_durable_jobs_guard(conn)
+    _migrate_delivery_metrics(conn)
     conn.commit()
 
 
@@ -298,6 +299,37 @@ def _migrate_durable_jobs_guard(conn: sqlite3.Connection) -> None:
         conn.execute(
             "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
             (3, "3_durable_jobs_guard", now_utc()),
+        )
+
+
+_DELIVERY_METRICS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS delivery_metrics (
+    id                   TEXT PRIMARY KEY,
+    delivery_attempt_id  TEXT NOT NULL,
+    project_id           TEXT NOT NULL,
+    source               TEXT NOT NULL,
+    collected_at         TEXT NOT NULL,
+    views                INTEGER,
+    likes                INTEGER,
+    comments             INTEGER,
+    shares               INTEGER,
+    raw                  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dm_project ON delivery_metrics(project_id, collected_at);
+CREATE INDEX IF NOT EXISTS idx_dm_attempt ON delivery_metrics(delivery_attempt_id);
+"""
+
+
+def _migrate_delivery_metrics(conn: sqlite3.Connection) -> None:
+    """LAZY-88: MetricSnapshot for DeliveryAttempt. Never ALTER frozen tables."""
+    conn.executescript(_DELIVERY_METRICS_SCHEMA)
+    existing = conn.execute(
+        "SELECT 1 FROM schema_migrations WHERE version = 4"
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+            (4, "4_delivery_metrics", now_utc()),
         )
 
 

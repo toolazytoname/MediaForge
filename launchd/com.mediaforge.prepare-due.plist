@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LAZY-88 launchd plist — prepare-due 07:00 每日
+  只推进到 awaiting_approval，不 draft / direct / export
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mediaforge.prepare-due</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROJECT_ROOT__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>pipeline.run</string>
+        <string>--config</string>
+        <string>__PROJECT_ROOT__/config.yaml</string>
+        <string>prepare-due</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_ROOT__</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__PROJECT_ROOT__/logs/launchd.prepare-due.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_ROOT__/logs/launchd.prepare-due.err.log</string>
+</dict>
+</plist>
