@@ -1,14 +1,11 @@
-"""M12-3 video router.
+"""Video router.
 
 POST /api/v1/contents/{content_id}/video-script   口播稿派生（LLM）
-                                                     → 200 + {script}
 POST /api/v1/video-jobs                             提交视频生成任务
-                                                     → 201 + job dict
 GET  /api/v1/video-jobs/{job_id}                    查询任务状态
-                                                     → 200 + job dict
+POST /api/v1/video-jobs/{job_id}/cancel             取消未完成任务
 
-视频任务状态不落库（TECH_SPEC 冻结 schema 不允许新增表/字段）——由
-pipeline.webui.video_bridge 用进程内内存字典追踪，详见该模块 docstring。
+任务落 durable_jobs；重启后用 request_json + engine 名重建。
 """
 from __future__ import annotations
 
@@ -16,8 +13,10 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+from pipeline.deliverables import DeliverablesError
 from pipeline.utils.errors import BudgetExceeded
 from pipeline.webui import deps, video_bridge
+from pipeline.webui.api import projects as projects_api
 
 router = APIRouter(tags=["video"])
 
@@ -75,7 +74,8 @@ def submit_video_job_endpoint(
 ) -> dict[str, Any]:
     """提交视频生成任务。
 
-    body: {content_id, engine, script, duration_s, aspect, style}
+    body: {content_id, engine, script, duration_s, aspect, style,
+           idempotency_key?, project_id?, deliverable_id?}
     → 201 + job dict
     """
     content_id = body.get("content_id")
@@ -84,6 +84,9 @@ def submit_video_job_endpoint(
     duration_s = body.get("duration_s")
     aspect = body.get("aspect")
     style = body.get("style") or {}
+    idempotency_key = body.get("idempotency_key")
+    project_id = body.get("project_id")
+    deliverable_id = body.get("deliverable_id")
     if not isinstance(content_id, str) or not content_id:
         raise HTTPException(status_code=400, detail={"error": {
             "code": "missing_content_id",
@@ -114,13 +117,34 @@ def submit_video_job_endpoint(
             "code": "invalid_style",
             "message": "'style' must be an object",
         }})
+    if idempotency_key is not None and (
+        not isinstance(idempotency_key, str) or not idempotency_key
+    ):
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_idempotency_key",
+            "message": "'idempotency_key' must be a non-empty string",
+        }})
+    if project_id is not None and (not isinstance(project_id, str) or not project_id):
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_project_id",
+            "message": "'project_id' must be a non-empty string",
+        }})
+    if deliverable_id is not None and (
+        not isinstance(deliverable_id, str) or not deliverable_id
+    ):
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_deliverable_id",
+            "message": "'deliverable_id' must be a non-empty string",
+        }})
 
     cfg = _config_or_500()
     with deps._db() as conn:
         try:
             job = video_bridge.submit_video_job(
                 conn, cfg, content_id, engine, script, duration_s,
-                aspect, style,
+                aspect, style, idempotency_key=idempotency_key,
+                project_id=project_id, deliverable_id=deliverable_id,
+                projects_root=projects_api._PROJECTS_ROOT,
             )
         except video_bridge.ContentNotFoundError as e:
             raise HTTPException(status_code=404, detail={"error": {
@@ -141,6 +165,10 @@ def submit_video_job_endpoint(
         except video_bridge.CreateError as e:
             raise HTTPException(status_code=400, detail={"error": {
                 "code": "create_failed", "message": str(e),
+            }})
+        except DeliverablesError as e:
+            raise HTTPException(status_code=400, detail={"error": {
+                "code": "invalid_deliverable", "message": str(e),
             }})
         except BudgetExceeded as e:
             raise HTTPException(status_code=503, detail={"error": {
@@ -165,9 +193,31 @@ def get_video_job_endpoint(job_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail={"error": {
                 "code": "job_not_found", "message": str(e),
             }})
+        except video_bridge.EngineUnavailableError as e:
+            raise HTTPException(status_code=503, detail={"error": {
+                "code": "engine_unavailable", "message": str(e),
+            }})
         except Exception as e:
             raise HTTPException(status_code=500, detail={"error": {
                 "code": "video_poll_failed",
+                "message": f"{type(e).__name__}: {e}",
+            }})
+    return job
+
+
+@router.post("/video-jobs/{job_id}/cancel")
+def cancel_video_job_endpoint(job_id: str) -> dict[str, Any]:
+    """Cancel a non-terminal durable video job. No further billing or asset write."""
+    with deps._db() as conn:
+        try:
+            job = video_bridge.cancel_video_job(conn, job_id)
+        except video_bridge.JobNotFoundError as e:
+            raise HTTPException(status_code=404, detail={"error": {
+                "code": "job_not_found", "message": str(e),
+            }})
+        except Exception as e:
+            raise HTTPException(status_code=500, detail={"error": {
+                "code": "video_cancel_failed",
                 "message": f"{type(e).__name__}: {e}",
             }})
     return job

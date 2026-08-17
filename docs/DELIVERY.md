@@ -1,3 +1,15 @@
+## 持久媒体任务（LAZY-59）
+
+视频/长任务落 `durable_jobs`，不再依赖进程内 `_JOBS`：
+
+- 请求体 `request_json` 只存 JSON（engine 名 + `engine_job_id` + 口播参数）；禁止存引擎实例
+- 只允许改 `state` / `progress` / `error` / `finished_at` / `result_path` / `cost_usd`
+- `idempotency_key` 唯一；重复 submit/poll 不二次写资产、不计两次费
+- 未知成本写 `NULL`，禁止把未知写成 `0`（`UnpricedModelError`）
+- `cancelled` 与 `failed`（`timeout: …`）可区分；取消/超时后引擎再回报成功也不落成片
+- `video` Deliverable 可把 `render_job_id` 挂到 `job_`；不做分镜 UI 或新平台直发
+- 无 GPU 时用 `fake` 引擎证明重启恢复；真人成片未测
+
 ## 组图安全导出（LAZY-52）
 
 `Deliverable(kind=gallery)` 只引用本项目 selected `vas_`，不复制像素文件。审批检查封面、连续 slides、引用资产仍 selected。交付只开 preview/export：

@@ -251,6 +251,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
     _migrate_add_cover_path(conn)  # M-x：老库平滑升级
     _migrate_delivery_kernel(conn)
+    _migrate_durable_jobs_guard(conn)
     conn.commit()
 
 
@@ -264,6 +265,39 @@ def _migrate_delivery_kernel(conn: sqlite3.Connection) -> None:
         conn.execute(
             "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
             (2, "2_delivery_kernel", now_utc()),
+        )
+
+
+_DURABLE_JOBS_GUARD = """
+CREATE TRIGGER IF NOT EXISTS durable_jobs_request_immutable
+BEFORE UPDATE ON durable_jobs
+FOR EACH ROW
+WHEN NEW.id IS NOT OLD.id
+  OR NEW.kind IS NOT OLD.kind
+  OR NEW.project_id IS NOT OLD.project_id
+  OR NEW.deliverable_id IS NOT OLD.deliverable_id
+  OR NEW.content_id IS NOT OLD.content_id
+  OR NEW.engine IS NOT OLD.engine
+  OR NEW.attempt IS NOT OLD.attempt
+  OR NEW.idempotency_key IS NOT OLD.idempotency_key
+  OR NEW.request_json IS NOT OLD.request_json
+  OR NEW.created_at IS NOT OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'durable_jobs request body is append-only');
+END;
+"""
+
+
+def _migrate_durable_jobs_guard(conn: sqlite3.Connection) -> None:
+    """LAZY-59: refuse updates to durable_jobs request identity columns."""
+    conn.executescript(_DURABLE_JOBS_GUARD)
+    existing = conn.execute(
+        "SELECT 1 FROM schema_migrations WHERE version = 3"
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+            (3, "3_durable_jobs_guard", now_utc()),
         )
 
 

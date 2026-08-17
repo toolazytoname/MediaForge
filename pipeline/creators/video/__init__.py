@@ -26,6 +26,10 @@ from pipeline.creators.video.digitalhuman import (
     build_digitalhuman_engine,
     is_digitalhuman_alive,
 )
+from pipeline.creators.video.fake import (
+    FakeVideoEngine,
+    build_fake_engine,
+)
 
 __all__ = [
     "VideoEngine",
@@ -34,9 +38,11 @@ __all__ = [
     "MPTEngine",
     "PixelleEngine",
     "DigitalHumanEngine",
+    "FakeVideoEngine",
     "build_mpt_engine",
     "build_pixelle_engine",
     "build_digitalhuman_engine",
+    "build_fake_engine",
     "is_mpt_alive",
     "is_pixelle_alive",
     "is_digitalhuman_alive",
@@ -52,6 +58,7 @@ _ENGINE_BUILDERS = {
     "mpt": build_mpt_engine,
     "pixelle": build_pixelle_engine,
     "digitalhuman": build_digitalhuman_engine,
+    "fake": build_fake_engine,
 }
 
 

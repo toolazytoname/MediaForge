@@ -58,14 +58,6 @@ def reset_provider():
     set_provider(ScriptedProvider([]))
 
 
-@pytest.fixture(autouse=True)
-def clear_jobs():
-    """每个测试独立的 _JOBS 命名空间——避免用例间残留状态互相污染。"""
-    video_bridge._JOBS.clear()
-    yield
-    video_bridge._JOBS.clear()
-
-
 class FakeConfig:
     """submit_video_job/derive_video_script 目前不读取 cfg 内容，
     传一个哨兵占位即可（engine builder 被 monkeypatch 掉，不会真的解析）。
@@ -279,14 +271,21 @@ class TestSubmitVideoJob:
             job = video_bridge.submit_video_job(
                 conn, FakeConfig(), "c_sub", "mpt", "脚本", 60, "9:16", {},
             )
+            assert job["content_id"] == "c_sub"
+            assert job["engine"] == "mpt"
+            assert job["state"] == "queued"
+            assert job["output_url"] is None
+            assert not any(k.startswith("_") for k in job)
+            persisted = conn.execute(
+                "SELECT id, request_json FROM durable_jobs WHERE id=?",
+                (job["job_id"],),
+            ).fetchone()
+            assert persisted is not None
+            payload = json.loads(persisted["request_json"])
+            assert payload["engine_job_id"] == "ej_1"
+            assert not any(k.startswith("_") for k in payload)
         finally:
             conn.close()
-        assert job["content_id"] == "c_sub"
-        assert job["engine"] == "mpt"
-        assert job["state"] == "submitted"
-        assert job["output_url"] is None
-        assert not any(k.startswith("_") for k in job)
-        assert job["job_id"] in video_bridge._JOBS
 
 
 # ── poll_video_job ────────────────────────────────────────────
