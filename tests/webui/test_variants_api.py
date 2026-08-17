@@ -91,13 +91,24 @@ def test_ai_adaptation_is_explicit_and_only_creates_a_new_variant(
         json={"adapt_with_ai": True},
     )
 
-    assert created.status_code == 201
+    assert created.status_code == 200
+    assert created.json()["persisted"] is False
     assert created.json()["title"] == "微信原生标题"
+    assert client.get("/api/v1/projects/prj_variant_api/variants").json()["variants"] == []
     assert "[来源标题](URL)" in seen["prompt"]
     assert "不得虚构 URL" in seen["prompt"]
     assert master_documents.load_master(
         "prj_variant_api", projects_root=tmp_path / "projects"
     ).title == "主标题"
+    accepted = client.post(
+        "/api/v1/projects/prj_variant_api/variants/wechat_mp",
+        json={
+            "title": created.json()["title"],
+            "summary": created.json()["summary"],
+            "body": created.json()["body"],
+        },
+    )
+    assert accepted.status_code == 201
     repeated = client.post(
         "/api/v1/projects/prj_variant_api/variants/wechat_mp",
         json={"adapt_with_ai": True},

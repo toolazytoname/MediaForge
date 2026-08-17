@@ -25,6 +25,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/accounts', name: 'accounts', component: () => import('../views/Accounts.vue') },
   { path: '/runs', name: 'runs', component: () => import('../views/Runs.vue') },
   { path: '/settings', name: 'settings', component: () => import('../views/Settings.vue') },
+  { path: '/roadmap/library', name: 'library', component: () => import('../views/Assets.vue') },
   { path: '/roadmap/:feature', name: 'roadmap', component: () => import('../views/EmptyStub.vue') },
 ]
 

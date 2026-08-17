@@ -34,4 +34,6 @@ bash scripts/verify.sh
 
 图文安全交付契约（不需要真实平台密钥）：`tests/test_capability_registry.py`、`tests/test_deliverables.py`、`tests/test_delivery_kernel.py`、`tests/test_adapter_capabilities.py`、`tests/test_dryrun_invariance.py`。
 
+自主程度契约（RFC §5.7，不需要真实平台密钥）：`tests/test_autonomy_policy.py`、`tests/webui/test_autonomy_api.py`。
+
 GitHub Actions（`.github/workflows/verify.yml`）调用同一条 `scripts/verify.sh`，避免本地与远端两套逻辑。

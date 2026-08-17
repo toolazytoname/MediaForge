@@ -9,6 +9,8 @@
 - 同一 `idempotency_key` 不创建第二份 Publication / 正式草稿
 - 无 Binding 的旧 `publish` CLI/API 行为不变；`publish-due` 跳过 `project:` 源
 - Project UI 隐藏 direct，不复用旧 Publish Center「真实发布到頭條」按钮
+- `autonomy` 按阶段生效：`assist` 零 LLM；`collaborate` 的 AI draft/adapt 不落盘；`pack` 终态最多 `ready_for_approval`，且不得 draft/direct
+- 确认文案走 CapabilityRegistry 的 `ui.confirm_copy`，不写死「头条」
 
 回滚：把 `config.yaml` 的 `delivery.bridge` 设为 `off`，重启 API。交付接口返回 403，旧 ZIP 导出仍可用。新表可 `DROP`；已写入的冻结表行不要删。
 

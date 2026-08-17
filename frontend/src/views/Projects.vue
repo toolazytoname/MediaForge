@@ -3,7 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
-import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult, type DeliveryAttemptResult } from '../stores'
+import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useCapabilitiesStore, useWorkspaceStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult, type DeliveryAttemptResult, type VariantAdaptationPreview } from '../stores'
+import { llmForbiddenHint, policyLabel } from '../autonomy'
 import { unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 
@@ -15,6 +16,8 @@ const masterStore = useMasterStore()
 const visualsStore = useVisualsStore()
 const variantsStore = useVariantsStore()
 const approvalsStore = useApprovalsStore()
+const capabilitiesStore = useCapabilitiesStore()
+const workspaceStore = useWorkspaceStore()
 const { items, total, loading, error } = storeToRefs(store)
 const { board, loading: researchLoading, error: researchError } = storeToRefs(researchStore)
 const { master, suggestions, loading: masterLoading, error: masterError } = storeToRefs(masterStore)
@@ -51,6 +54,8 @@ const exporting = ref(false)
 const exportResult = ref<ProjectExportResult | null>(null)
 const drafting = ref(false)
 const draftResult = ref<DeliveryAttemptResult | null>(null)
+const lastFailedDraftId = ref<string | null>(null)
+const adaptPreviews = ref<Partial<Record<PlatformVariant['platform'], VariantAdaptationPreview>>>({})
 
 const unverifiedFacts = computed(() => board.value?.claims.filter(item => item.kind === 'fact' && (item.status === 'unverified' || !item.source_ids.length)) ?? [])
 const openQuestions = computed(() => board.value?.claims.filter(item => item.kind === 'open_question' && item.status === 'open') ?? [])
@@ -77,6 +82,12 @@ const workflowSteps = computed(() => [
 const nextStep = computed(() => workflowSteps.value.find(item => !item.done) ?? {
   key: 'approval' as const, label: '5 审批导出', done: true,
 })
+const llmAllowed = computed(() => project.value?.autonomy !== 'assist')
+const primaryCta = computed(() => workspaceStore.nextAction?.cta ?? { key: nextStep.value.key, label: nextStep.value.done ? '去导出或草稿' : `下一步：${nextStep.value.label}` })
+const wechatCopy = computed(() => capabilitiesStore.forPlatform('wechat_mp')?.ui.confirm_copy ?? '将创建公众号草稿，不会群发或公开可见。')
+const toutiaoCopy = computed(() => capabilitiesStore.forPlatform('toutiao')?.ui.confirm_copy ?? '仅本地安全导出，供人工导入。不会直发。')
+const wechatLabel = computed(() => capabilitiesStore.forPlatform('wechat_mp')?.label ?? '微信公众号')
+const toutiaoLabel = computed(() => capabilitiesStore.forPlatform('toutiao')?.label ?? '今日头条')
 
 async function loadPage(): Promise<void> {
   detailError.value = null
@@ -92,6 +103,8 @@ async function loadPage(): Promise<void> {
     await visualsStore.load(projectId.value)
     await variantsStore.load(projectId.value)
     await approvalsStore.load(projectId.value)
+    await capabilitiesStore.load()
+    await workspaceStore.load(projectId.value)
     if (master.value) masterForm.value = { title: master.value.title, body: master.value.body }
     visualBible.value = Object.entries(visualPlan.value?.bible ?? {}).map(([key, value]) => `${key}: ${value}`).join('\n')
     visualSlots.value = visualPlan.value?.slots.map(slot => ({ ...slot })) ?? []
@@ -103,7 +116,9 @@ async function loadPage(): Promise<void> {
 }
 
 async function refreshApprovalStatus(): Promise<void> {
-  if (projectId.value) await approvalsStore.load(projectId.value)
+  if (!projectId.value) return
+  await approvalsStore.load(projectId.value)
+  await workspaceStore.load(projectId.value)
 }
 
 async function saveMaster(): Promise<void> {
@@ -111,8 +126,15 @@ async function saveMaster(): Promise<void> {
   masterSaving.value = true
   try { await masterStore.save(projectId.value, masterForm.value); await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } finally { masterSaving.value = false }
 }
+function goPrimaryCta(): void {
+  const key = primaryCta.value.key
+  if (key === 'research') activeWorkbench.value = 'research'
+  else if (key === 'master') activeWorkbench.value = 'master'
+  else activeWorkbench.value = 'approval'
+}
 async function proposeDraft(): Promise<void> {
   if (!projectId.value) return
+  if (!llmAllowed.value) { detailError.value = llmForbiddenHint(project.value?.autonomy); return }
   draftGenerating.value = true; detailError.value = null
   try { draftProposal.value = await masterStore.proposeDraft(projectId.value) }
   catch (e) { detailError.value = unwrapError(e) }
@@ -126,6 +148,7 @@ function useDraftProposal(): void {
 function captureSelection(): void { selectedText.value = document.getSelection()?.toString().trim() ?? '' }
 async function requestSuggestion(action: MasterSuggestion['action']): Promise<void> {
   if (!projectId.value || !master.value) return
+  if (!llmAllowed.value) { detailError.value = llmForbiddenHint(project.value?.autonomy); return }
   suggestionSaving.value = true
   try { await masterStore.request(projectId.value, { action, selection: selectedText.value || null }) } catch (e) { detailError.value = unwrapError(e) } finally { suggestionSaving.value = false }
 }
@@ -176,6 +199,7 @@ async function saveVisualPlan(): Promise<void> {
 }
 async function generateVisual(slot: VisualSlot, referenceAssetId?: string): Promise<void> {
   if (!projectId.value || !visualPrompts.value[slot.id]?.trim()) return
+  if (!llmAllowed.value) { detailError.value = llmForbiddenHint(project.value?.autonomy); return }
   visualGenerating.value = slot.id
   try {
     if (referenceAssetId) await visualsStore.edit(projectId.value, slot.id, visualPrompts.value[slot.id], referenceAssetId)
@@ -199,9 +223,36 @@ async function importVisual(event: Event, slot: VisualSlot): Promise<void> {
   catch (e) { detailError.value = unwrapError(e) }
   finally { importingSlot.value = null; input.value = '' }
 }
-function platformName(platform: PlatformVariant['platform']): string { return platform === 'wechat_mp' ? '微信公众号' : '今日头条' }
+function platformName(platform: PlatformVariant['platform']): string {
+  return capabilitiesStore.forPlatform(platform)?.label ?? (platform === 'wechat_mp' ? '微信公众号' : '今日头条')
+}
 function variantForm(platform: PlatformVariant['platform']): { title: string; summary: string; body: string } { return variantForms.value[platform] ?? { title: '', summary: '', body: '' } }
-async function createVariant(platform: PlatformVariant['platform'], adaptWithAi = false): Promise<void> { if (!projectId.value) return; variantGenerating.value = platform; try { const item = await variantsStore.create(projectId.value, platform, adaptWithAi); variantForms.value[item.platform] = { title: item.title, summary: item.summary, body: item.body }; await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } finally { variantGenerating.value = null } }
+async function createVariant(platform: PlatformVariant['platform'], adaptWithAi = false): Promise<void> {
+  if (!projectId.value) return
+  if (adaptWithAi && !llmAllowed.value) { detailError.value = llmForbiddenHint(project.value?.autonomy); return }
+  variantGenerating.value = platform
+  try {
+    const item = await variantsStore.create(projectId.value, platform, adaptWithAi)
+    if ('persisted' in item && item.persisted === false) {
+      adaptPreviews.value[platform] = item
+      return
+    }
+    variantForms.value[item.platform] = { title: item.title, summary: item.summary, body: item.body }
+    await refreshApprovalStatus()
+  } catch (e) { detailError.value = unwrapError(e) } finally { variantGenerating.value = null }
+}
+async function acceptAdaptPreview(platform: PlatformVariant['platform']): Promise<void> {
+  if (!projectId.value) return
+  const preview = adaptPreviews.value[platform]
+  if (!preview) return
+  variantGenerating.value = platform
+  try {
+    const item = await variantsStore.acceptAdaptation(projectId.value, platform, preview)
+    variantForms.value[item.platform] = { title: item.title, summary: item.summary, body: item.body }
+    delete adaptPreviews.value[platform]
+    await refreshApprovalStatus()
+  } catch (e) { detailError.value = unwrapError(e) } finally { variantGenerating.value = null }
+}
 async function saveVariant(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { const form = variantForm(item.platform); await variantsStore.save(projectId.value, item.platform, { ...form, asset_ids: item.asset_ids }); await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } }
 async function toggleLock(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { await variantsStore.lock(projectId.value, item.platform, !item.locked); await refreshApprovalStatus() } catch (e) { detailError.value = unwrapError(e) } }
 async function checkVariantUpstream(item: PlatformVariant): Promise<void> { if (!projectId.value) return; try { await variantsStore.checkUpstream(projectId.value, item.platform) } catch (e) { detailError.value = unwrapError(e) } }
@@ -225,7 +276,9 @@ async function createWechatDraft(): Promise<void> {
   if (!actor) { detailError.value = '请填写真实审批人或角色。'; return }
   drafting.value = true
   try {
-    draftResult.value = await approvalsStore.createWechatDraft(projectId.value, actor)
+    draftResult.value = await approvalsStore.createWechatDraft(projectId.value, actor, lastFailedDraftId.value)
+    if (draftResult.value.outcome === 'success') lastFailedDraftId.value = null
+    else lastFailedDraftId.value = draftResult.value.id
   } catch (e) {
     detailError.value = unwrapError(e)
   } finally {
@@ -277,12 +330,17 @@ watch(projectId, loadPage)
           <p class="idea">{{ project.idea }}</p>
         </header>
         <div class="project-grid">
-          <a-card title="创作意图" :bordered="false"><dl><dt>写给谁</dt><dd>{{ project.audience }}</dd><dt>这次要完成什么</dt><dd>{{ project.goal }}</dd><dt>声音</dt><dd>{{ project.voice }}</dd></dl></a-card>
+          <a-card title="创作意图" :bordered="false"><dl><dt>写给谁</dt><dd>{{ project.audience }}</dd><dt>这次要完成什么</dt><dd>{{ project.goal }}</dd><dt>声音</dt><dd>{{ project.voice }}</dd><dt>自主程度</dt><dd>{{ policyLabel(project.autonomy) }} · {{ workspaceStore.nextAction?.policy.help || llmForbiddenHint(project.autonomy) }}</dd></dl></a-card>
           <a-card title="目前的材料" :bordered="false"><p>已关联 {{ project.content_ids.length }} 篇内容，{{ project.asset_paths.length }} 项资产。</p><p class="muted">来源、判断和待确认项均由你明确录入，不会自动抓取或改写。</p></a-card>
         </div>
         <nav class="workflow-cockpit" aria-label="创作流程">
-          <div><p class="eyebrow">当前路径</p><h2>{{ nextStep.done ? '内容包已就绪' : `下一步：${nextStep.label}` }}</h2><p>一次只处理一个环节；已完成的步骤仍可回看，任何上游修改都会触发重新检查。</p></div>
-          <div class="workflow-steps"><button v-for="step in workflowSteps" :key="step.key" :class="{ active: activeWorkbench === step.key, done: step.done }" @click="activeWorkbench = step.key"><span>{{ step.done ? '✓' : '○' }}</span>{{ step.label }}</button></div>
+          <div>
+            <p class="eyebrow">当前路径</p>
+            <h2>下一步</h2>
+            <p>已有项目进入后只显示一个主操作。已完成的步骤仍可回看。</p>
+            <a-button type="primary" data-testid="project-primary-cta" @click="goPrimaryCta">{{ primaryCta.label }}</a-button>
+          </div>
+          <div class="workflow-steps"><button v-for="step in workflowSteps" :key="step.key" type="button" :class="{ active: activeWorkbench === step.key, done: step.done }" @click="activeWorkbench = step.key"><span>{{ step.done ? '✓' : '○' }}</span>{{ step.label }}</button></div>
         </nav>
         <section v-show="activeWorkbench === 'research'" class="research-board">
           <header class="section-heading"><div><p class="eyebrow">研究板</p><h2>先把依据、判断和未知写清楚。</h2><p>来源不会自动核查。标记为“已核查”前，请自行确认原始材料。</p></div></header>
@@ -311,11 +369,11 @@ watch(projectId, loadPage)
           <a-alert v-if="masterError" type="error" :message="masterError" show-icon class="notice" />
           <div class="draft-actions">
             <div><strong>从研究板生成第一稿</strong><p class="muted">AI 会区分已核查事实、个人判断和限制；结果先进入审阅区，不会自动覆盖主稿。</p></div>
-            <a-button type="primary" :loading="draftGenerating" :disabled="!researchReady" @click="proposeDraft">AI 提出主稿初稿</a-button>
+            <a-button type="primary" :loading="draftGenerating" :disabled="!researchReady || !llmAllowed" @click="proposeDraft">AI 提出主稿初稿</a-button>
           </div>
           <a-card v-if="draftProposal" title="待审阅的 AI 初稿" :bordered="false" class="draft-proposal"><h3>{{ draftProposal.title }}</h3><p class="proposal-copy">{{ draftProposal.body }}</p><div class="proposal-actions"><a-button type="primary" @click="useDraftProposal">放入编辑器继续修改</a-button><a-button @click="draftProposal = null">丢弃</a-button></div></a-card>
           <p class="master-count">当前编辑器 {{ masterForm.body.trim().length }} 字；进入审批前至少需要 800 字。</p>
-          <a-spin :spinning="masterLoading"><div class="master-grid"><a-card title="主稿编辑器" :bordered="false"><a-form layout="vertical"><a-form-item label="标题" required><a-input v-model:value="masterForm.title" placeholder="给主稿一个清晰标题" /></a-form-item><a-form-item label="正文" required><a-textarea v-model:value="masterForm.body" :rows="16" placeholder="从空白开始，或把已有的想法写下来。" @mouseup="captureSelection" /></a-form-item><p v-if="selectedText" class="selection-note">已选中 {{ selectedText.length }} 个字，建议只会替换这一段。</p><a-button type="primary" :loading="masterSaving" @click="saveMaster">保存为新版本</a-button></a-form></a-card><a-card title="AI 建议" :bordered="false"><p class="muted">{{ selectedText ? '建议将基于当前选区；未选文字时会针对全文。' : '先选中一段文字，或直接对全文提出建议。' }}</p><div class="suggestion-actions"><a-button :disabled="!master" :loading="suggestionSaving" @click="requestSuggestion('clarify')">改清楚</a-button><a-button :disabled="!master" :loading="suggestionSaving" @click="requestSuggestion('shorten')">压缩</a-button><a-button :disabled="!master" :loading="suggestionSaving" @click="requestSuggestion('change_voice')">换口吻</a-button><a-button :disabled="!master" :loading="suggestionSaving" @click="requestSuggestion('add_counterpoint')">补反方观点</a-button></div><div v-if="suggestions.length" class="proposal-list"><article v-for="suggestion in suggestions.slice().reverse()" :key="suggestion.id"><div class="proposal-meta"><a-tag>{{ suggestion.action }}</a-tag><span>{{ suggestion.status === 'pending' ? '待决定' : suggestion.status === 'accepted' ? '已接受' : '已拒绝' }}</span></div><p class="proposal-copy">{{ suggestion.proposed_body }}</p><div v-if="suggestion.status === 'pending'" class="proposal-actions"><a-button type="primary" size="small" @click="acceptSuggestion(suggestion)">接受为新版本</a-button><a-button size="small" @click="rejectSuggestion(suggestion)">拒绝</a-button></div></article></div><a-empty v-else description="还没有 AI 建议" :image-style="{ height: '40px' }" /></a-card></div><a-card v-if="master" title="版本与恢复" :bordered="false" class="version-card"><p class="muted">恢复并不会覆盖历史，而是用所选版本创建新的当前版本。</p><div class="version-list"><article v-for="version in [...master.history, { version: master.version, title: master.title, body: master.body, saved_at: master.updated_at, reason: 'current' }]" :key="version.version"><div><strong>版本 {{ version.version }}</strong><span>{{ version.reason === 'current' ? '当前版本' : version.reason }}</span><p>{{ version.body.slice(0, 100) }}{{ version.body.length > 100 ? '…' : '' }}</p></div><a-button v-if="version.version !== master.version" size="small" @click="restoreVersion(version.version)">恢复为新版本</a-button></article></div></a-card></a-spin>
+          <a-spin :spinning="masterLoading"><div class="master-grid"><a-card title="主稿编辑器" :bordered="false"><a-form layout="vertical"><a-form-item label="标题" required><a-input v-model:value="masterForm.title" placeholder="给主稿一个清晰标题" /></a-form-item><a-form-item label="正文" required><a-textarea v-model:value="masterForm.body" :rows="16" placeholder="从空白开始，或把已有的想法写下来。" @mouseup="captureSelection" /></a-form-item><p v-if="selectedText" class="selection-note">已选中 {{ selectedText.length }} 个字，建议只会替换这一段。</p><a-button type="primary" :loading="masterSaving" @click="saveMaster">保存为新版本</a-button></a-form></a-card><a-card title="AI 建议" :bordered="false"><p class="muted">{{ selectedText ? '建议将基于当前选区；未选文字时会针对全文。' : '先选中一段文字，或直接对全文提出建议。' }}</p><div class="suggestion-actions"><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('clarify')">改清楚</a-button><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('shorten')">压缩</a-button><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('change_voice')">换口吻</a-button><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('add_counterpoint')">补反方观点</a-button></div><div v-if="suggestions.length" class="proposal-list"><article v-for="suggestion in suggestions.slice().reverse()" :key="suggestion.id"><div class="proposal-meta"><a-tag>{{ suggestion.action }}</a-tag><span>{{ suggestion.status === 'pending' ? '待决定' : suggestion.status === 'accepted' ? '已接受' : '已拒绝' }}</span></div><p class="proposal-copy">{{ suggestion.proposed_body }}</p><div v-if="suggestion.status === 'pending'" class="proposal-actions"><a-button type="primary" size="small" @click="acceptSuggestion(suggestion)">接受为新版本</a-button><a-button size="small" @click="rejectSuggestion(suggestion)">拒绝</a-button></div></article></div><a-empty v-else description="还没有 AI 建议" :image-style="{ height: '40px' }" /></a-card></div><a-card v-if="master" title="版本与恢复" :bordered="false" class="version-card"><p class="muted">恢复并不会覆盖历史，而是用所选版本创建新的当前版本。</p><div class="version-list"><article v-for="version in [...master.history, { version: master.version, title: master.title, body: master.body, saved_at: master.updated_at, reason: 'current' }]" :key="version.version"><div><strong>版本 {{ version.version }}</strong><span>{{ version.reason === 'current' ? '当前版本' : version.reason }}</span><p>{{ version.body.slice(0, 100) }}{{ version.body.length > 100 ? '…' : '' }}</p></div><a-button v-if="version.version !== master.version" size="small" @click="restoreVersion(version.version)">恢复为新版本</a-button></article></div></a-card></a-spin>
         </section>
         <section v-show="activeWorkbench === 'visuals'" class="visual-workbench">
           <header class="section-heading"><div><p class="eyebrow">视觉计划</p><h2>先定义意图，再生成候选。</h2><p>候选不会写入主稿或平台版本。成本显示为请求前预估，实际账单以 OpenAI 用量账单为准。</p></div></header>
@@ -324,21 +382,22 @@ watch(projectId, loadPage)
           <div class="visual-bootstrap"><a-button v-if="!visualSlots.length" type="primary" @click="setupStandardVisuals">建立 1 张封面 + 2 张插图</a-button><p v-else class="muted">已规划 {{ visualSlots.length }} 个槽位；保存计划后，可以生成或导入候选。</p></div>
           <div v-if="visualSlots.length" class="local-imports"><strong>本地 PNG 兜底</strong><label v-for="slot in visualSlots" :key="`import-${slot.id}`" class="import-button"><span>{{ importingSlot === slot.id ? '正在导入…' : `为「${slot.purpose}」导入 PNG` }}</span><input type="file" accept="image/png" :disabled="importingSlot !== null" @change="importVisual($event, slot)" /></label></div>
           <div v-if="visualPlan?.assets.some(asset => visualAssetUrl(asset))" class="asset-gallery"><figure v-for="asset in visualPlan.assets.filter(item => visualAssetUrl(item))" :key="`preview-${asset.id}`"><img :src="visualAssetUrl(asset) || ''" :alt="asset.prompt" /><figcaption>{{ visualSlots.find(slot => slot.id === asset.slot_id)?.purpose }} · {{ asset.status === 'selected' ? '已选择' : '候选' }}</figcaption></figure></div>
-          <a-spin :spinning="visualsLoading"><a-card :bordered="false" class="visual-card"><a-form layout="vertical"><a-form-item label="视觉圣经"><a-textarea v-model:value="visualBible" :rows="3" placeholder="例如：风格: 克制的编辑插画\n色彩: 暖白纸张与墨蓝" /></a-form-item><div class="visual-slot-list"><article v-for="(slot, index) in visualSlots" :key="slot.id" class="visual-slot"><div class="slot-heading"><strong>{{ slot.purpose || `槽位 ${index + 1}` }}</strong><a-button type="link" danger size="small" @click="visualSlots.splice(index, 1)">移除</a-button></div><div class="form-pair"><a-form-item label="用途"><a-input v-model:value="slot.purpose" placeholder="封面 / 正文插图" /></a-form-item><a-form-item label="比例"><a-select v-model:value="slot.aspect_ratio"><a-select-option value="16:9">16:9 横图</a-select-option><a-select-option value="1:1">1:1 方图</a-select-option><a-select-option value="9:16">9:16 竖图</a-select-option><a-select-option value="4:3">4:3</a-select-option><a-select-option value="3:4">3:4</a-select-option></a-select></a-form-item></div><a-form-item label="对应段落（可选）"><a-input v-model:value="slot.paragraph_anchor" placeholder="例如：开头的核心问题" /></a-form-item><a-form-item label="画面方向"><a-textarea v-model:value="slot.direction" :rows="2" placeholder="这张图要帮助读者理解什么？" /></a-form-item><a-form-item label="生成或编辑提示词"><a-textarea v-model:value="visualPrompts[slot.id]" :rows="2" placeholder="显式点击后才会调用 GPT Image 2" /></a-form-item><div class="visual-actions"><a-button :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot)">生成候选</a-button></div><div v-if="visualPlan?.assets.filter(asset => asset.slot_id === slot.id).length" class="asset-list"><article v-for="asset in visualPlan.assets.filter(item => item.slot_id === slot.id).slice().reverse()" :key="asset.id" :class="['visual-asset', asset.status]"><div><a-tag :color="asset.status === 'selected' ? 'green' : asset.status === 'failed' ? 'red' : 'blue'">{{ asset.status === 'selected' ? '已选择' : asset.status === 'failed' ? '失败' : '候选' }}</a-tag><span>v{{ asset.version }} · {{ asset.model }} · 预估 ${{ asset.cost_usd.toFixed(2) }}</span></div><p>{{ asset.prompt }}</p><p v-if="asset.failure" class="failure">{{ asset.failure }}</p><div v-if="asset.status !== 'failed'" class="asset-actions"><a-button v-if="asset.status !== 'selected'" size="small" @click="selectVisual(asset.id)">选择</a-button><a-button size="small" :loading="visualGenerating === slot.id" :disabled="!visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot, asset.id)">基于此编辑</a-button></div></article></div></article></div><div class="visual-plan-actions"><a-button @click="addVisualSlot">添加插图槽位</a-button><a-button type="primary" :loading="visualSaving" @click="saveVisualPlan">保存视觉计划</a-button></div></a-form></a-card></a-spin>
+          <a-spin :spinning="visualsLoading"><a-card :bordered="false" class="visual-card"><a-form layout="vertical"><a-form-item label="视觉圣经"><a-textarea v-model:value="visualBible" :rows="3" placeholder="例如：风格: 克制的编辑插画\n色彩: 暖白纸张与墨蓝" /></a-form-item><div class="visual-slot-list"><article v-for="(slot, index) in visualSlots" :key="slot.id" class="visual-slot"><div class="slot-heading"><strong>{{ slot.purpose || `槽位 ${index + 1}` }}</strong><a-button type="link" danger size="small" @click="visualSlots.splice(index, 1)">移除</a-button></div><div class="form-pair"><a-form-item label="用途"><a-input v-model:value="slot.purpose" placeholder="封面 / 正文插图" /></a-form-item><a-form-item label="比例"><a-select v-model:value="slot.aspect_ratio"><a-select-option value="16:9">16:9 横图</a-select-option><a-select-option value="1:1">1:1 方图</a-select-option><a-select-option value="9:16">9:16 竖图</a-select-option><a-select-option value="4:3">4:3</a-select-option><a-select-option value="3:4">3:4</a-select-option></a-select></a-form-item></div><a-form-item label="对应段落（可选）"><a-input v-model:value="slot.paragraph_anchor" placeholder="例如：开头的核心问题" /></a-form-item><a-form-item label="画面方向"><a-textarea v-model:value="slot.direction" :rows="2" placeholder="这张图要帮助读者理解什么？" /></a-form-item><a-form-item label="生成或编辑提示词"><a-textarea v-model:value="visualPrompts[slot.id]" :rows="2" placeholder="显式点击后才会调用 GPT Image 2" /></a-form-item><div class="visual-actions"><a-button :loading="visualGenerating === slot.id" :disabled="!llmAllowed || !visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot)">生成候选</a-button></div><div v-if="visualPlan?.assets.filter(asset => asset.slot_id === slot.id).length" class="asset-list"><article v-for="asset in visualPlan.assets.filter(item => item.slot_id === slot.id).slice().reverse()" :key="asset.id" :class="['visual-asset', asset.status]"><div><a-tag :color="asset.status === 'selected' ? 'green' : asset.status === 'failed' ? 'red' : 'blue'">{{ asset.status === 'selected' ? '已选择' : asset.status === 'failed' ? '失败' : '候选' }}</a-tag><span>v{{ asset.version }} · {{ asset.model }} · 预估 ${{ asset.cost_usd.toFixed(2) }}</span></div><p>{{ asset.prompt }}</p><p v-if="asset.failure" class="failure">{{ asset.failure }}</p><div v-if="asset.status !== 'failed'" class="asset-actions"><a-button v-if="asset.status !== 'selected'" size="small" @click="selectVisual(asset.id)">选择</a-button><a-button size="small" :loading="visualGenerating === slot.id" :disabled="!llmAllowed || !visualProvider?.available || !visualPrompts[slot.id]?.trim()" @click="generateVisual(slot, asset.id)">基于此编辑</a-button></div></article></div></article></div><div class="visual-plan-actions"><a-button @click="addVisualSlot">添加插图槽位</a-button><a-button type="primary" :loading="visualSaving" @click="saveVisualPlan">保存视觉计划</a-button></div></a-form></a-card></a-spin>
         </section>
         <section v-show="activeWorkbench === 'variants'" class="variants-workbench">
           <header class="section-heading"><div><p class="eyebrow">平台版本</p><h2>共享主张，各自完成排版。</h2><p>创建后，微信和头条各自独立编辑。主稿更新只会提示你，不会自动覆盖人工修改。</p></div></header>
           <a-alert v-if="variantsError" type="error" :message="variantsError" show-icon class="notice" />
-          <div class="variant-adapt"><div v-for="platform in ['wechat_mp', 'toutiao']" :key="`adapt-${platform}`"><strong>{{ platform === 'wechat_mp' ? '微信公众号' : '今日头条' }}</strong><a-button type="primary" :loading="variantGenerating === platform" :disabled="variants.some(item => item.platform === platform) || !master" @click="createVariant(platform as PlatformVariant['platform'], true)">AI 适配平台初稿</a-button></div><p class="muted">AI 结果仍是独立草稿，必须人工编辑并锁定；如不可用，可使用下方“复制主稿”兜底。</p></div>
-          <a-spin :spinning="variantsLoading"><div class="variant-create"><a-button v-for="platform in ['wechat_mp', 'toutiao']" :key="platform" :disabled="variants.some(item => item.platform === platform) || !master" @click="createVariant(platform as PlatformVariant['platform'])">创建{{ platform === 'wechat_mp' ? '微信公众号' : '今日头条' }}初稿</a-button></div><p v-if="!master" class="muted">先保存主稿，才能创建平台版本。</p><div class="variant-list"><a-card v-for="item in variants" :key="item.platform" :title="platformName(item.platform)" :bordered="false"><template #extra><a-tag v-if="item.locked" color="gold">已锁定</a-tag><a-tag v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" color="orange">主稿有更新</a-tag></template><a-alert v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" type="warning" show-icon message="主稿有更新。先解锁并人工合并必要修改，再点击“确认已合并当前主稿”；系统不会覆盖平台稿。" class="notice"/><a-form layout="vertical"><a-form-item label="标题"><a-input v-model:value="variantForm(item.platform).title" :disabled="item.locked" /></a-form-item><a-form-item label="摘要"><a-textarea v-model:value="variantForm(item.platform).summary" :rows="2" :disabled="item.locked" /></a-form-item><a-form-item label="正文"><a-textarea v-model:value="variantForm(item.platform).body" :rows="8" :disabled="item.locked" /></a-form-item><div class="variant-actions"><a-button type="primary" :disabled="item.locked" @click="saveVariant(item)">保存独立版本</a-button><a-button @click="toggleLock(item)">{{ item.locked ? '解锁编辑' : '锁定版本' }}</a-button><a-button @click="checkVariantUpstream(item)">检查主稿更新</a-button><a-button v-if="master && item.source_master_version !== master.version" :disabled="item.locked" @click="acknowledgeVariantMaster(item)">确认已合并当前主稿 v{{ master.version }}</a-button><a-button @click="previewVariant(item)">打开只读预览</a-button></div><p class="muted">源主稿 v{{ item.source_master_version }} · 平台版本 v{{ item.version }} · {{ item.manually_modified ? '已人工修改' : '尚未人工修改' }}</p><div v-if="item.history.length" class="variant-history"><span>历史版本：</span><a-button v-for="version in item.history" :key="version.version" size="small" :disabled="item.locked" @click="restoreVariant(item, version.version)">恢复 v{{ version.version }}</a-button></div></a-form></a-card></div></a-spin>
+          <div class="variant-adapt"><div v-for="platform in ['wechat_mp', 'toutiao']" :key="`adapt-${platform}`"><strong>{{ platformName(platform as PlatformVariant['platform']) }}</strong><a-button type="primary" :loading="variantGenerating === platform" :disabled="!llmAllowed || variants.some(item => item.platform === platform) || !master" @click="createVariant(platform as PlatformVariant['platform'], true)">AI 适配平台初稿</a-button></div><p class="muted">协作模式下 AI 适配只出预览，接受后才落盘。如不可用，可使用下方“复制主稿”兜底。</p></div>
+          <a-card v-for="(preview, platform) in adaptPreviews" :key="`preview-${platform}`" :title="`${platformName(platform as PlatformVariant['platform'])} 适配预览（未落盘）`" :bordered="false" class="draft-proposal"><h3>{{ preview?.title }}</h3><p class="proposal-copy">{{ preview?.body }}</p><div class="proposal-actions"><a-button type="primary" @click="acceptAdaptPreview(platform as PlatformVariant['platform'])">采用为平台初稿</a-button><a-button @click="delete adaptPreviews[platform as PlatformVariant['platform']]">丢弃</a-button></div></a-card>
+          <a-spin :spinning="variantsLoading"><div class="variant-create"><a-button v-for="platform in ['wechat_mp', 'toutiao']" :key="platform" :disabled="variants.some(item => item.platform === platform) || !master" @click="createVariant(platform as PlatformVariant['platform'])">创建{{ platformName(platform as PlatformVariant['platform']) }}初稿</a-button></div><p v-if="!master" class="muted">先保存主稿，才能创建平台版本。</p><div class="variant-list"><a-card v-for="item in variants" :key="item.platform" :title="platformName(item.platform)" :bordered="false"><template #extra><a-tag v-if="item.locked" color="gold">已锁定</a-tag><a-tag v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" color="orange">主稿有更新</a-tag></template><a-alert v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" type="warning" show-icon message="主稿有更新。先解锁并人工合并必要修改，再点击“确认已合并当前主稿”；系统不会覆盖平台稿。" class="notice"/><a-form layout="vertical"><a-form-item label="标题"><a-input v-model:value="variantForm(item.platform).title" :disabled="item.locked" /></a-form-item><a-form-item label="摘要"><a-textarea v-model:value="variantForm(item.platform).summary" :rows="2" :disabled="item.locked" /></a-form-item><a-form-item label="正文"><a-textarea v-model:value="variantForm(item.platform).body" :rows="8" :disabled="item.locked" /></a-form-item><div class="variant-actions"><a-button type="primary" :disabled="item.locked" @click="saveVariant(item)">保存独立版本</a-button><a-button @click="toggleLock(item)">{{ item.locked ? '解锁编辑' : '锁定版本' }}</a-button><a-button @click="checkVariantUpstream(item)">检查主稿更新</a-button><a-button v-if="master && item.source_master_version !== master.version" :disabled="item.locked" @click="acknowledgeVariantMaster(item)">确认已合并当前主稿 v{{ master.version }}</a-button><a-button @click="previewVariant(item)">打开只读预览</a-button></div><p class="muted">源主稿 v{{ item.source_master_version }} · 平台版本 v{{ item.version }} · {{ item.manually_modified ? '已人工修改' : '尚未人工修改' }}</p><div v-if="item.history.length" class="variant-history"><span>历史版本：</span><a-button v-for="version in item.history" :key="version.version" size="small" :disabled="item.locked" @click="restoreVariant(item, version.version)">恢复 v{{ version.version }}</a-button></div></a-form></a-card></div></a-spin>
         </section>
         <section v-show="activeWorkbench === 'approval'" class="approval-workbench">
           <header class="section-heading"><div><p class="eyebrow">内容包审批</p><h2>逐项确认，再进入安全交付。</h2><p>批准只记录你的人工判断，不会发布、创建平台草稿或调用任何发布器。</p></div><a-tag v-if="approvalStatus?.complete" color="green">已完成审批</a-tag></header>
           <a-alert v-if="approvalsError" type="error" :message="approvalsError" show-icon class="notice" />
           <div class="approval-actor"><label for="approval-actor">真实审批人或角色</label><a-input id="approval-actor" v-model:value="approvalActor" placeholder="例如：张三 / Codex 自测（受用户委托）" /></div>
           <a-spin :spinning="approvalsLoading"><a-card :bordered="false" class="approval-card"><a-alert v-if="approvalStatus?.blockers.length" type="warning" show-icon :message="`尚不可审批：${approvalStatus?.blockers.join('；')}`" class="notice"/><a-alert v-else-if="approvalStatus?.stale" type="warning" show-icon message="上游内容已改变，请重新检查。历史批准不会被静默沿用；所有批准与撤回动作已暂停。" class="notice"/><div class="approval-actions"><a-button type="primary" @click="recheckApproval">重新检查内容包</a-button></div><div v-if="approvalStatus?.approval.checks.length" class="approval-list"><article v-for="check in approvalStatus.approval.checks" :key="check.id"><div><strong>{{ approvalLabel(check.id) }}</strong><p>{{ check.status === 'approved' ? `已由 ${check.approved_by} 批准` : '待人工检查' }}</p><small v-if="check.note">当前备注：{{ check.note }}</small></div><div class="approval-decision"><a-input v-model:value="approvalNotes[check.id]" :disabled="!approvalStatus.ready || approvalStatus.stale" placeholder="可选审批备注" size="small"/><a-button v-if="check.status !== 'approved'" type="primary" size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, true)">批准</a-button><a-button v-else size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, false)">撤回批准</a-button></div></article></div><a-empty v-else description="先重新检查，生成当前内容包的审批清单。" :image-style="{ height: '40px' }"/><p v-if="approvalStatus?.complete" class="approval-complete">所有项目已批准。下一步仅可进入草稿箱或安全导出，仍不等于真实发布。</p><div v-if="approvalStatus?.approval.history.length" class="approval-history"><strong>审批历史</strong><p v-for="event in approvalStatus.approval.history.slice().reverse().slice(0, 8)" :key="`${event.at}-${event.action}-${event.check_id}`">{{ event.at }} · {{ event.actor }} · {{ event.action }}{{ event.check_id ? ` (${approvalLabel(event.check_id)})` : '' }}{{ event.note ? ` · ${event.note}` : '' }}</p></div></a-card></a-spin>
-          <div v-if="approvalStatus?.complete" class="export-panel"><div><strong>头条安全导出</strong><p>只在本地导出微信稿、头条稿、清单和已选图片；不会直发头条，也不会调用 Playwright。</p></div><a-button type="primary" :loading="exporting" @click="exportPackage">导出 ZIP</a-button><a v-if="exportResult" :href="exportResult.url" target="_blank" rel="noreferrer">下载 {{ exportResult.file_name }}</a></div>
-          <div v-if="approvalStatus?.complete" class="export-panel"><div><strong>创建公众号草稿</strong><p>人工确认后写入微信草稿箱。成功只有 media_id，不会群发，也不等于已发表。</p></div><a-button :loading="drafting" @click="createWechatDraft">创建草稿</a-button><p v-if="draftResult" class="muted">{{ draftResult.label }}{{ draftResult.media_id ? ` · media_id=${draftResult.media_id}` : '' }}{{ draftResult.error ? ` · ${draftResult.error}` : '' }}</p></div>
+          <div v-if="approvalStatus?.complete" class="export-panel"><div><strong>{{ toutiaoLabel }}安全导出</strong><p>{{ toutiaoCopy }}</p></div><a-button type="primary" :loading="exporting" @click="exportPackage">导出 ZIP</a-button><a v-if="exportResult" :href="exportResult.url" target="_blank" rel="noreferrer">下载 {{ exportResult.file_name }}</a></div>
+          <div v-if="approvalStatus?.complete && project.autonomy !== 'pack'" class="export-panel"><div><strong>创建{{ wechatLabel }}草稿</strong><p>{{ wechatCopy }}</p></div><a-button :loading="drafting" @click="createWechatDraft">创建草稿</a-button><p v-if="draftResult" class="muted">{{ draftResult.label }}{{ draftResult.media_id ? ` · media_id=${draftResult.media_id}` : '' }}{{ draftResult.error ? ` · ${draftResult.error}` : '' }}</p></div>
         </section>
       </article>
     </template>
