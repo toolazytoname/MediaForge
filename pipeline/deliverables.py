@@ -11,7 +11,7 @@ from pipeline import projects as project_store, variants as variant_store, visua
 from pipeline.publishers.capability_registry import (
     KIND_GALLERY,
     gallery_image_limits_for,
-    platforms_for,
+    target_platforms_for,
 )
 from pipeline.utils.ids import new_id
 from pipeline.utils.sidecar_ids import valid_sidecar_id
@@ -606,7 +606,7 @@ def _gallery_crop(value: Any) -> GalleryCrop:
 
 
 def _gallery_targets(targets: list[str] | None) -> tuple[str, ...]:
-    allowed = set(platforms_for(kind=KIND_GALLERY))
+    allowed = set(target_platforms_for(kind=KIND_GALLERY))
     chosen = tuple(targets) if targets else tuple(allowed)
     if not chosen:
         raise DeliverablesError("no gallery-capable platform is registered")

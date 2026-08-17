@@ -122,6 +122,8 @@ def _httpx_json(
         verb = method.upper()
         if verb == "DELETE":
             resp = httpx.delete(url, headers=headers, params=params, timeout=timeout)
+        elif verb == "GET":
+            resp = httpx.get(url, headers=headers, params=params, timeout=timeout)
         else:
             resp = httpx.post(url, headers=headers, params=params, json=body, timeout=timeout)
     except (httpx.ConnectError, httpx.TimeoutException) as exc:
@@ -150,8 +152,17 @@ def _parse_http_response(resp: object, url: str) -> dict:
     return data
 
 
-def permalink(media_id: str) -> str:
-    return f"https://www.instagram.com/p/{media_id}/"
+def permalink(payload: object | None = None) -> str | None:
+    """Return Graph `permalink` only. A media id is not a shortcode."""
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("permalink")
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if value.startswith("https://www.instagram.com/") or value.startswith("https://instagram.com/"):
+        return value
+    return None
 
 
 class InstagramPublisher(PublisherAdapter):
@@ -272,7 +283,8 @@ class InstagramPublisher(PublisherAdapter):
         media_id = published.get("id")
         if not isinstance(media_id, str) or not media_id.strip():
             raise PublishError("instagram media_publish returned no id; unknown receipt is failure")
-        url = permalink(media_id)
+        media_id = media_id.strip()
+        url = self._graph_permalink(media_id, published)
         return PublishResult(
             platform_post_id=media_id,
             url=url,
@@ -303,6 +315,22 @@ class InstagramPublisher(PublisherAdapter):
             "Authorization": f"Bearer {self._creds.access_token}",
             "Content-Type": "application/json",
         }
+
+    def _graph_permalink(self, media_id: str, published: dict) -> str | None:
+        url = permalink(published)
+        if url:
+            return url
+        try:
+            fetched = self._post(
+                f"{self._api}/{media_id}",
+                headers=self._headers(),
+                params={"fields": "id,permalink"},
+                method="GET",
+                timeout=15.0,
+            )
+        except (PublishError, LoginExpired):
+            return None
+        return permalink(fetched)
 
     def _create_container(
         self,

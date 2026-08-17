@@ -179,6 +179,8 @@ def test_toutiao_export_has_no_publication_and_rollback_keeps_zip(tmp_path):
     )
     assert result.attempt.mode == "export"
     assert result.attempt.outcome == "success"
+    assert result.attempt.platform_post_id is None
+    assert result.attempt.platform_url is None
     assert result.attempt.publication_id is None
     assert conn.execute("SELECT COUNT(*) AS n FROM publications").fetchone()["n"] == 0
     archive = root / project_id / result.export.path

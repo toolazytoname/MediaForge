@@ -650,7 +650,7 @@ export interface LoginGuidance {
   platform: string
   command: string
   notes: string
-  auth_type?: 'scan_qr' | 'config_file' | 'oauth_user'
+  auth_type?: 'scan_qr' | 'config_file' | 'oauth_user' | 'export_only'
 }
 
 // U7-7: 一键登录 run 状态（前端轮询持有）
@@ -1704,6 +1704,9 @@ export interface CapabilityItem {
   ui: { preview_kind: string; confirm_copy: string; fields: string[] }
   delivery: { preview: boolean; export: boolean; draft: boolean; direct: boolean }
   delivery_effective?: { preview: boolean; export: boolean; draft: boolean; direct: boolean }
+  official_api?: boolean
+  lane?: 'official' | 'assisted' | 'export'
+  can_claim_direct?: boolean
   auth?: { kind: string; required_scopes: string[]; user_context_required: boolean; secret_ref_pattern: string }
   review?: { requires_app_review: boolean; human_in_loop_required: boolean; default_visibility: string }
   limits?: { min_images?: number | null; max_images?: number | null }

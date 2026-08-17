@@ -6,7 +6,7 @@
 import { computed, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import PlatformBadge from './PlatformBadge.vue'
-import { SUPPORTED_PLATFORMS, PLANNED_PLATFORMS, platformMeta } from './platformMeta'
+import { SUPPORTED_PLATFORMS, LONGTAIL_PLATFORMS, platformMeta } from './platformMeta'
 import { storeToRefs } from 'pinia'
 import {
   useAccountsStore,
@@ -128,6 +128,20 @@ function selectPlatform(key: string): void {
   oneClickError.value = null
 }
 
+function guidanceTagColor(authType: LoginGuidance['auth_type']): string {
+  if (authType === 'scan_qr') return 'purple'
+  if (authType === 'oauth_user') return 'blue'
+  if (authType === 'export_only') return 'default'
+  return 'blue'
+}
+
+function guidanceTagLabel(authType: LoginGuidance['auth_type']): string {
+  if (authType === 'scan_qr') return '扫码登录'
+  if (authType === 'oauth_user') return '官方 OAuth'
+  if (authType === 'export_only') return '仅导出 / 暂不支持官方发布'
+  return '配置凭据'
+}
+
 async function copyCommand(cmd: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(cmd)
@@ -179,8 +193,8 @@ async function onOneClickLogin(): Promise<void> {
       <div class="guidance-header">
         <PlatformBadge :platform="selectedGuidance.platform" size="small" />
         <span class="guidance-platform-name">{{ platformMeta(selectedGuidance.platform).label }}</span>
-        <a-tag :color="selectedGuidance.auth_type === 'scan_qr' ? 'purple' : 'blue'">
-          {{ selectedGuidance.auth_type === 'scan_qr' ? '扫码登录' : (selectedGuidance.auth_type === 'oauth_user' ? '官方 OAuth' : '配置凭据') }}
+        <a-tag :color="guidanceTagColor(selectedGuidance.auth_type)">
+          {{ guidanceTagLabel(selectedGuidance.auth_type) }}
         </a-tag>
       </div>
       <template v-if="selectedGuidance.auth_type === 'scan_qr'">
@@ -221,20 +235,22 @@ async function onOneClickLogin(): Promise<void> {
           <code class="cmd-text">{{ selectedGuidance.command }}</code>
         </div>
       </template>
-      <p class="guidance-footnote">授权完成后回到本页刷新即可看到健康状态（登录成功会自动刷新）。</p>
+      <p v-if="selectedGuidance.auth_type !== 'export_only'" class="guidance-footnote">授权完成后回到本页刷新即可看到健康状态（登录成功会自动刷新）。</p>
+      <p v-else class="guidance-footnote">没有官方创作者发布 API，不能授权直发。请走项目安全导出。</p>
     </div>
 
-    <h4 class="section-title section-title-planned">规划中（暂不支持）</h4>
+    <h4 class="section-title section-title-planned">长尾平台（仅导出 / 暂不支持官方发布）</h4>
     <div class="platform-grid">
       <div
-        v-for="p in PLANNED_PLATFORMS"
+        v-for="p in LONGTAIL_PLATFORMS"
         :key="p.key"
-        class="platform-tile is-planned"
-        @click="message.info('暂未支持，如需要请在 docs/TASKS.md 提需求')"
+        class="platform-tile"
+        :class="{ 'is-selected': selected === p.key }"
+        @click="selectPlatform(p.key)"
       >
         <PlatformBadge :platform="p.key" />
         <span class="tile-name">{{ platformMeta(p.key).label }}</span>
-        <a-tag color="default" size="small">规划中</a-tag>
+        <a-tag color="default" size="small">仅导出</a-tag>
       </div>
     </div>
   </a-modal>
