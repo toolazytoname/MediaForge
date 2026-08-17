@@ -1444,7 +1444,7 @@ export interface VideoJobResult {
 }
 
 const VIDEO_POLL_INTERVAL_MS = 3_000
-const VIDEO_TERMINAL_STATES = new Set(['done', 'failed'])
+const VIDEO_TERMINAL_STATES = new Set(['done', 'failed', 'cancelled'])
 
 export const useVideoCreationStore = defineStore('video-creation', () => {
   const script = ref('')

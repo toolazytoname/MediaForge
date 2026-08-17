@@ -20,6 +20,7 @@ _NAME = "deliverables.json"
 _HISTORY_LIMIT = 20
 _SCHEMA_VERSION = 1
 KIND_ARTICLE = "article"
+KIND_VIDEO = "video"
 SEED_IDS = {
     "wechat_mp": "dlv_article_wechat_mp",
     "toutiao": "dlv_article_toutiao",
@@ -339,6 +340,149 @@ def list_galleries(
     )
 
 
+@dataclass(frozen=True)
+class VideoPayload:
+    script: str
+    duration_s: int
+    aspect: str
+    engine: str | None
+    storyboard: tuple[dict[str, Any], ...]
+    render_job_id: str | None
+    output_path: str | None
+    subtitle_path: str | None
+    audio_track_path: str | None
+
+
+def video_payload(item: Deliverable | dict[str, Any]) -> VideoPayload:
+    payload = item.payload if isinstance(item, Deliverable) else item
+    if isinstance(item, Deliverable) and item.kind != KIND_VIDEO:
+        raise DeliverablesError("deliverable is not a video")
+    if not isinstance(payload, dict):
+        raise DeliverablesError("video payload must be an object")
+    duration = payload.get("duration_s")
+    if not isinstance(duration, int) or isinstance(duration, bool) or duration < 1:
+        raise DeliverablesError("duration_s must be a positive integer")
+    aspect = payload.get("aspect")
+    if aspect not in {"9:16", "16:9"}:
+        raise DeliverablesError("aspect must be 9:16 or 16:9")
+    engine = payload.get("engine")
+    if engine is not None and engine not in {"mpt", "pixelle", "digitalhuman", "fake"}:
+        raise DeliverablesError("engine must be mpt, pixelle, digitalhuman, fake, or null")
+    storyboard = payload.get("storyboard") or []
+    if not isinstance(storyboard, list):
+        raise DeliverablesError("storyboard must be an array")
+    render_job_id = payload.get("render_job_id")
+    if render_job_id is not None and not valid_sidecar_id(render_job_id, "job_"):
+        raise DeliverablesError("render_job_id must be a job_ id")
+    return VideoPayload(
+        _text("script", payload.get("script")),
+        duration,
+        aspect,
+        engine,
+        tuple(storyboard),
+        render_job_id,
+        _rel_path("output_path", payload.get("output_path")),
+        _rel_path("subtitle_path", payload.get("subtitle_path")),
+        _rel_path("audio_track_path", payload.get("audio_track_path")),
+    )
+
+
+def create_video(
+    project_id: str,
+    *,
+    title: str,
+    script: str,
+    duration_s: int,
+    aspect: str,
+    now: str,
+    engine: str | None = None,
+    targets: list[str] | None = None,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+) -> Deliverable:
+    _ensure(project_id, projects_root)
+    timestamp = _timestamp(now)
+    payload = video_payload({
+        "script": script,
+        "duration_s": duration_s,
+        "aspect": aspect,
+        "engine": engine,
+        "storyboard": [],
+        "render_job_id": None,
+        "output_path": None,
+        "subtitle_path": None,
+        "audio_track_path": None,
+    })
+    item = Deliverable(
+        new_id("dlv"), KIND_VIDEO, _text("title", title), 1,
+        "drafting", None, False, True, False,
+        tuple(targets) if targets else ("local",),
+        _video_dict(payload), (),
+        timestamp, timestamp, (),
+    )
+    bundle = load_deliverables(project_id, projects_root=projects_root)
+    _write(projects_root, DeliverableSet(bundle.project_id, _SCHEMA_VERSION, (*bundle.items, item)))
+    return item
+
+
+def attach_video_job(
+    project_id: str,
+    deliverable_id: str,
+    *,
+    job_id: str,
+    now: str,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+) -> Deliverable:
+    current = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
+    if current.kind != KIND_VIDEO:
+        raise DeliverablesError("deliverable is not a video")
+    if not valid_sidecar_id(job_id, "job_"):
+        raise DeliverablesError("render_job_id must be a job_ id")
+    existing = video_payload(current)
+    if existing.render_job_id == job_id:
+        return current
+    payload = _video_dict(existing)
+    payload["render_job_id"] = job_id
+    timestamp = _timestamp(now)
+    snapshot = DeliverableSnapshot(
+        current.version, current.title, current.kind, current.targets,
+        current.payload, current.asset_ids, timestamp, "attach_render_job",
+    )
+    updated = replace(
+        current,
+        version=current.version + 1,
+        payload=payload,
+        updated_at=timestamp,
+        history=(snapshot, *current.history)[:_HISTORY_LIMIT],
+    )
+    _replace_item(project_id, updated, projects_root)
+    return updated
+
+
+def _video_dict(payload: VideoPayload) -> dict[str, Any]:
+    return {
+        "script": payload.script,
+        "duration_s": payload.duration_s,
+        "aspect": payload.aspect,
+        "engine": payload.engine,
+        "storyboard": list(payload.storyboard),
+        "render_job_id": payload.render_job_id,
+        "output_path": payload.output_path,
+        "subtitle_path": payload.subtitle_path,
+        "audio_track_path": payload.audio_track_path,
+    }
+
+
+def _rel_path(name: str, value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise DeliverablesError(f"{name} must be a relative path or null")
+    path = value.replace("\\", "/").strip()
+    if path.startswith("/") or path.startswith("..") or "/../" in f"/{path}/":
+        raise DeliverablesError(f"{name} must be a relative path")
+    return path
+
+
 def _from_variant(variant: variant_store.Variant) -> Deliverable:
     deliverable_id = seed_id_for(variant.platform)
     payload = {"summary": variant.summary, "body": variant.body, "locale": "zh-CN"}
@@ -383,10 +527,12 @@ def _item(value: Any) -> Deliverable:
         raise DeliverablesError("deliverable has missing or unknown fields")
     if not valid_sidecar_id(value["id"], "dlv_"):
         raise DeliverablesError("invalid deliverable id")
-    if value["kind"] not in {KIND_ARTICLE, KIND_GALLERY, "video"}:
+    if value["kind"] not in {KIND_ARTICLE, KIND_GALLERY, KIND_VIDEO}:
         raise DeliverablesError("invalid deliverable kind")
     if value["kind"] == KIND_GALLERY:
         gallery_payload(value["payload"])
+    if value["kind"] == KIND_VIDEO:
+        video_payload(value["payload"])
     if value["status"] not in {"drafting", "ready_for_approval", "approved", "superseded"}:
         raise DeliverablesError("invalid deliverable status")
     targets = value["targets"]
@@ -593,9 +739,13 @@ __all__ = [
     "GallerySlide",
     "KIND_ARTICLE",
     "KIND_GALLERY",
+    "KIND_VIDEO",
     "SEED_IDS",
+    "VideoPayload",
     "article_payload",
+    "attach_video_job",
     "create_gallery",
+    "create_video",
     "gallery_payload",
     "get_deliverable",
     "list_galleries",
@@ -606,4 +756,5 @@ __all__ = [
     "set_gallery_locked",
     "sync_from_variant_set",
     "update_gallery",
+    "video_payload",
 ]

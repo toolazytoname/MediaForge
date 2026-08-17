@@ -36,6 +36,8 @@ bash scripts/verify.sh
 
 组图交付契约（不需要真实平台密钥）：`tests/test_gallery_deliverable.py`。覆盖 3 个夹具审批→导出、未批准 409、非法 `vas_` 拒绝、无回执不记平台成功、小红书 unknown 失败、Project 无 direct。
 
+持久媒体任务契约（不需要真实密钥/GPU）：`tests/test_durable_jobs.py`、`tests/test_video_bridge.py`。覆盖重启后同一 job 可 poll/fetch、同一 idempotency_key 不重复资产/计费、未知成本为 NULL、取消/超时后不再写成功。
+
 自主程度契约（RFC §5.7，不需要真实平台密钥）：`tests/test_autonomy_policy.py`、`tests/webui/test_autonomy_api.py`。
 
 GitHub Actions（`.github/workflows/verify.yml`）调用同一条 `scripts/verify.sh`，避免本地与远端两套逻辑。

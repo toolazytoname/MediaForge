@@ -8,7 +8,7 @@ const store = useVideoCreationStore()
 const { job } = storeToRefs(store)
 
 const isDone = computed(() => job.value?.state === 'done' && !!job.value?.output_url)
-const isFailed = computed(() => job.value?.state === 'failed')
+const isFailed = computed(() => job.value?.state === 'failed' || job.value?.state === 'cancelled')
 </script>
 
 <template>

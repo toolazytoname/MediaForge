@@ -19,9 +19,11 @@ const { job, running, polling, lastError } = storeToRefs(store)
 
 const STATE_LABELS: Record<string, string> = {
   submitted: '已提交，等待引擎处理',
+  queued: '已入队，等待引擎处理',
   running: '引擎处理中',
   done: '已完成',
   failed: '失败',
+  cancelled: '已取消',
 }
 
 // 提交发起时间戳（本地展示已耗时，纯前端计时，不涉及引擎 progress 语义）
@@ -52,7 +54,7 @@ const elapsedLabel = computed(() => {
 watch(
   () => job.value?.state,
   (state) => {
-    if (state === 'done' || state === 'failed') stopClock()
+    if (state === 'done' || state === 'failed' || state === 'cancelled') stopClock()
   },
 )
 
