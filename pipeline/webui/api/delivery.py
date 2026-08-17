@@ -1,12 +1,23 @@
-"""Project article delivery: preview, export, wechat draft. Never exposes direct."""
+"""Project article/gallery delivery: preview, export, wechat draft. Never exposes direct."""
 from __future__ import annotations
 
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
-from pipeline.deliverables import DeliverablesError, get_deliverable, load_deliverables, seed_id_for
+from pipeline.deliverables import (
+    KIND_GALLERY,
+    DeliverablesError,
+    create_gallery,
+    get_deliverable,
+    load_deliverables,
+    seed_id_for,
+    set_gallery_locked,
+    update_gallery,
+)
 from pipeline.delivery.service import (
     DeliveryError,
     _approval_or_409,
@@ -47,8 +58,86 @@ def list_deliverables(project_id: str) -> dict[str, Any]:
     except DeliverablesError as error:
         status = 404 if "not found" in str(error) else 400
         raise HTTPException(status_code=status, detail={"error": {"code": "deliverable_error", "message": str(error)}}) from error
-    from dataclasses import asdict
     return asdict(result)
+
+
+@router.post("/projects/{project_id}/galleries", status_code=201)
+def create_gallery_item(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    required = {"title", "caption", "cover_asset_id", "slides"}
+    if required - set(body):
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_gallery_request",
+            "message": "gallery requires title, caption, cover_asset_id, slides",
+        }})
+    try:
+        item = create_gallery(
+            project_id,
+            title=body["title"],
+            caption=body["caption"],
+            cover_asset_id=body["cover_asset_id"],
+            slides=body["slides"],
+            tags=body.get("tags") or [],
+            targets=body.get("targets"),
+            locked=bool(body.get("locked", False)),
+            now=datetime.now(timezone.utc).isoformat(),
+            projects_root=_root(),
+        )
+    except DeliverablesError as error:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_gallery_request", "message": str(error),
+        }}) from error
+    return asdict(item)
+
+
+@router.put("/projects/{project_id}/deliverables/{deliverable_id}")
+def update_gallery_item(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        current = get_deliverable(project_id, deliverable_id, projects_root=_root())
+        if current.kind != KIND_GALLERY:
+            raise HTTPException(status_code=400, detail={"error": {
+                "code": "invalid_gallery_request", "message": "deliverable is not a gallery",
+            }})
+        item = update_gallery(
+            project_id, deliverable_id,
+            now=datetime.now(timezone.utc).isoformat(),
+            title=body.get("title"),
+            caption=body.get("caption"),
+            tags=body.get("tags"),
+            cover_asset_id=body.get("cover_asset_id"),
+            slides=body.get("slides"),
+            targets=body.get("targets"),
+            projects_root=_root(),
+        )
+    except DeliverablesError as error:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_gallery_request", "message": str(error),
+        }}) from error
+    return asdict(item)
+
+
+@router.post("/projects/{project_id}/deliverables/{deliverable_id}/lock")
+def lock_gallery_item(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    if "locked" not in body or not isinstance(body["locked"], bool):
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_gallery_request", "message": "locked must be boolean",
+        }})
+    try:
+        item = set_gallery_locked(
+            project_id, deliverable_id, locked=body["locked"],
+            now=datetime.now(timezone.utc).isoformat(), projects_root=_root(),
+        )
+    except DeliverablesError as error:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_gallery_request", "message": str(error),
+        }}) from error
+    return asdict(item)
+
+
+@router.post("/projects/{project_id}/deliverables/{deliverable_id}/direct")
+def hide_direct(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(default_factory=dict)) -> None:
+    raise HTTPException(status_code=403, detail={"error": {
+        "code": "direct_hidden", "message": "Project UI does not expose direct publish",
+    }})
 
 
 @router.get("/projects/{project_id}/delivery-attempts")
@@ -107,6 +196,11 @@ def draft(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(defa
         raise HTTPException(status_code=400, detail={"error": {"code": "config_missing", "message": err or "config missing"}})
     try:
         deliverable = get_deliverable(project_id, deliverable_id, projects_root=_root())
+        if deliverable.kind == KIND_GALLERY or "xiaohongshu" in deliverable.targets:
+            raise HTTPException(status_code=403, detail={"error": {
+                "code": "mode_not_allowed",
+                "message": "gallery/xiaohongshu Project path only allows preview/export",
+            }})
         platform = deliverable.targets[0]
         adapter, account = _adapter_for(cfg, platform)
         with deps._db() as conn:

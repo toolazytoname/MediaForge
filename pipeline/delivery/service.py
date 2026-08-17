@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from pipeline import approvals, db, project_exports, projects as project_store
 from pipeline.config import AppConfig, DeliveryConfig, PublishConfig
-from pipeline.deliverables import Deliverable, get_deliverable
+from pipeline.deliverables import KIND_ARTICLE, KIND_GALLERY, Deliverable, get_deliverable, load_deliverables
 from pipeline.delivery.materialize import materialize_wechat_article, project_content_hash
 from pipeline.delivery.store import (
     DeliveryAttempt,
@@ -98,7 +98,7 @@ def preview_deliverable(
     error = None
     receipt = None
     post_id = None
-    if adapter is not None and account is not None:
+    if adapter is not None and account is not None and deliverable.kind == KIND_ARTICLE:
         materialized = materialize_wechat_article(
             project_id, deliverable, content_id=f"c_preview_{uuid4().hex[:8]}",
             projects_root=projects_root,
@@ -162,12 +162,17 @@ def create_export_delivery(
     if deliverable_id:
         deliverable = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
     else:
-        from pipeline.deliverables import load_deliverables
         items = list(load_deliverables(project_id, projects_root=projects_root).items)
-        toutiao = next((item for item in items if "toutiao" in item.targets), None)
-        if toutiao is None:
+        toutiao = next((item for item in items if item.kind == KIND_ARTICLE and "toutiao" in item.targets), None)
+        galleries = [item for item in items if item.kind == KIND_GALLERY]
+        if toutiao is not None:
+            deliverable = toutiao
+        elif len(galleries) == 1:
+            deliverable = galleries[0]
+        elif galleries:
+            raise DeliveryError("deliverable_id is required when multiple galleries exist")
+        else:
             raise DeliveryError("toutiao article deliverable is missing")
-        deliverable = toutiao
     platform = _single_platform(deliverable)
     if not mode_allowed(platform, "export"):
         raise DeliveryError(f"{platform} export is not available", code="mode_not_allowed")
@@ -180,19 +185,32 @@ def create_export_delivery(
     )
     existing = get_attempt_by_key(conn, key)
     try:
-        export = project_exports.create_export(project_id, projects_root=projects_root)
+        if deliverable.kind == KIND_GALLERY:
+            export = project_exports.create_gallery_export(
+                project_id, deliverable.id, projects_root=projects_root,
+            )
+        else:
+            export = project_exports.create_export(project_id, projects_root=projects_root)
     except project_exports.ProjectExportError as error:
-        if "completed approval" in str(error):
+        if "completed approval" in str(error) or "not the approved snapshot" in str(error):
             raise DeliveryError(str(error), http_status=409, code="not_approved") from error
         raise DeliveryError(str(error)) from error
     if existing is not None:
         return DeliveryResult(existing, replayed=True, export=export)
+    receipt = {
+        "file_name": export.file_name,
+        "path": export.path,
+        "kind": deliverable.kind,
+        "platform_post_id": None,
+        "platform_url": None,
+        "notice": "local export only; no platform receipt",
+    }
     attempt = insert_attempt(
         conn, project_id=project_id, deliverable_id=deliverable.id,
         deliverable_version=deliverable.version, approval_fingerprint=fingerprint,
         platform=platform, account_id="local", mode="export", outcome="success",
         idempotency_key=key, request_hash_value=request_hash({"export": export.file_name}),
-        actor=actor, raw_receipt=json_dumps({"file_name": export.file_name, "path": export.path}),
+        actor=actor, raw_receipt=json_dumps(receipt),
     )
     insert_audit(
         conn, actor=actor, action="delivery.export",
@@ -225,8 +243,8 @@ def create_draft(
     assert snapshot is not None
     deliverable = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
     platform = _single_platform(deliverable)
-    if platform != "wechat_mp":
-        raise DeliveryError("draft is only implemented for wechat_mp", code="mode_not_allowed")
+    if deliverable.kind != KIND_ARTICLE or platform != "wechat_mp":
+        raise DeliveryError("draft is only implemented for wechat_mp articles", code="mode_not_allowed")
     if not mode_allowed(platform, "draft", adapter):
         raise DeliveryError("wechat draft is not available", code="mode_not_allowed")
     if snapshot.deliverable_versions.get(deliverable.id) != deliverable.version:
@@ -391,7 +409,7 @@ class _RequireMediaId:
 
 def _single_platform(deliverable: Deliverable) -> str:
     if len(deliverable.targets) != 1:
-        raise DeliveryError("article deliverable must target exactly one platform")
+        raise DeliveryError("deliverable must target exactly one platform")
     return deliverable.targets[0]
 
 

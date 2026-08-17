@@ -1,3 +1,12 @@
+## 组图安全导出（LAZY-52）
+
+`Deliverable(kind=gallery)` 只引用本项目 selected `vas_`，不复制像素文件。审批检查封面、连续 slides、引用资产仍 selected。交付只开 preview/export：
+
+- 小红书走 **assisted/export**；Product 层关闭 draft/direct
+- 导出 ZIP 含 `gallery.json` / 顺序 / 封面 / 文案 / 资产引用，以及 prompt/模型/成本审计
+- 无 `platform_post_id` / URL 不得记平台成功；未知 CLI 回执继续失败
+- Project UI 不暴露 direct
+
 ## 图文真实安全交付（LAZY-40）
 
 在已批准的 Project 上，article Deliverable 接到审批快照后：

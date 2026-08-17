@@ -31,3 +31,12 @@ def test_capabilities_hide_wechat_direct_and_unapproved_draft_is_409(tmp_path, m
     export = client.post("/api/v1/projects/prj_delivery_api/export")
     assert export.status_code == 409
     assert export.json()["detail"]["error"]["code"] == "not_approved"
+    xhs = next(item for item in caps.json()["items"] if item["platform"] == "xiaohongshu")
+    assert xhs["delivery"]["direct"] is False
+    assert xhs["delivery"]["export"] is True
+    hidden = client.post(
+        "/api/v1/projects/prj_delivery_api/deliverables/dlv_article_wechat_mp/direct",
+        json={"actor": "lazy"},
+    )
+    assert hidden.status_code == 403
+    assert hidden.json()["detail"]["error"]["code"] == "direct_hidden"
