@@ -29,7 +29,10 @@ KNOWN_KINDS = (KIND_ARTICLE, KIND_GALLERY, KIND_VIDEO)
 DEFAULT_GALLERY_MIN_IMAGES = 1
 DEFAULT_GALLERY_MAX_IMAGES = 9
 
-REGISTRY_PLATFORMS = ("wechat_mp", "toutiao", "xiaohongshu", "douyin", "x", "youtube")
+REGISTRY_PLATFORMS = (
+    "wechat_mp", "toutiao", "xiaohongshu", "douyin",
+    "x", "youtube", "tiktok", "instagram",
+)
 
 
 @dataclass(frozen=True)
@@ -182,13 +185,23 @@ _REGISTRY: dict[str, Capability] = {
     "x": Capability(
         platform="x",
         label="X",
-        formats=(KIND_ARTICLE,),
+        formats=(KIND_ARTICLE, KIND_GALLERY),
         delivery=_flags(draft=False, direct=True),
-        auth=AuthSpec("oauth_user", ("tweet.write", "users.read"), True, "secrets/x_<account>.json"),
+        auth=AuthSpec(
+            "oauth_user",
+            ("tweet.write", "users.read"),
+            True,
+            "secrets/x_<account>.json",
+        ),
         review=ReviewSpec(False, True, "public"),
         limits=CapabilityLimits(title_max=280),
         receipts=ReceiptSpec(("platform_post_id",), True),
-        ui=UiSpec("html_article", "将发到 X。缺少 user-context 时直发不可用。", ("body",)),
+        ui=UiSpec(
+            "html_article",
+            "将通过 X 用户 OAuth（PKCE / 1.0a）发帖。app-only bearer 不能发帖。"
+            "缺少 user-context 时直发不可用。无 tweet id 不得记成功。",
+            ("body", "images"),
+        ),
         adapter="x",
     ),
     "youtube": Capability(
@@ -212,6 +225,54 @@ _REGISTRY: dict[str, Capability] = {
             ("title", "video", "visibility"),
         ),
         adapter="youtube",
+    ),
+    "tiktok": Capability(
+        platform="tiktok",
+        label="TikTok",
+        formats=(KIND_VIDEO, KIND_GALLERY),
+        delivery=_flags(draft=False, direct=True),
+        auth=AuthSpec("oauth_user", ("video.publish",), True, "secrets/tiktok_<account>.json"),
+        review=ReviewSpec(True, True, "private"),
+        limits=CapabilityLimits(
+            title_max=150,
+            max_duration_s=180,
+            min_images=DEFAULT_GALLERY_MIN_IMAGES,
+            max_images=DEFAULT_GALLERY_MAX_IMAGES,
+        ),
+        receipts=ReceiptSpec(("platform_post_id",), True),
+        ui=UiSpec(
+            "video_player",
+            "将调用 TikTok Content Posting API。未完成应用审核时只允许 Inbox Upload，"
+            "由用户在 App 内继续编辑，不会公开直发。无 publish_id 不得记成功。",
+            ("title", "video", "privacy_level"),
+        ),
+        adapter="tiktok",
+    ),
+    "instagram": Capability(
+        platform="instagram",
+        label="Instagram",
+        formats=(KIND_GALLERY, KIND_VIDEO),
+        delivery=_flags(draft=False, direct=True),
+        auth=AuthSpec(
+            "oauth_user",
+            ("instagram_content_publish",),
+            True,
+            "secrets/instagram_<account>.json",
+        ),
+        review=ReviewSpec(True, True, "public"),
+        limits=CapabilityLimits(
+            min_images=DEFAULT_GALLERY_MIN_IMAGES,
+            max_images=DEFAULT_GALLERY_MAX_IMAGES,
+        ),
+        receipts=ReceiptSpec(("platform_post_id",), True),
+        ui=UiSpec(
+            "slide_strip",
+            "将调用 Instagram Professional container + media_publish。"
+            "需要公开可抓取的 HTTPS 媒体 URL、Professional 授权和应用审核。"
+            "缺少任一条件时不可直发，无 media id 不得记成功。",
+            ("caption", "media_url"),
+        ),
+        adapter="instagram",
     ),
 }
 
@@ -263,7 +324,7 @@ def intersect_delivery(product: DeliveryFlags, adapter: AdapterCapabilities) -> 
 def effective_delivery(platform: str, adapter: object | None = None) -> DeliveryFlags:
     product = get_capability(platform).delivery
     if adapter is None:
-        if platform in {"x", "douyin", "youtube"}:
+        if platform in {"x", "douyin", "youtube", "tiktok", "instagram"}:
             return DeliveryFlags(
                 preview=product.preview,
                 export=product.export,

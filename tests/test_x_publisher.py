@@ -160,9 +160,12 @@ class TestCredentialLoad:
         creds = tmp_path / "x_main.json"
         creds.write_text(json.dumps({"bearer_token": "AAAAtesttoken"}))
 
-        from pipeline.publishers.x_api import load_x_credentials
+        from pipeline.publishers.x_api import load_x_credential_set, load_x_credentials
         token = load_x_credentials(creds)
         assert token == "AAAAtesttoken"
+        loaded = load_x_credential_set(creds)
+        assert loaded.has_user_context is False
+        assert loaded.auth_mode == "app_bearer"
 
     def test_load_missing_file_raises(self, tmp_path: Path) -> None:
         from pipeline.publishers.x_api import load_x_credentials
@@ -328,6 +331,88 @@ class TestPublishThread:
         adapter = XApiPublisher(bearer_token="dummy", http_post=must_not_call)
         assert adapter.capabilities().direct is False
         with pytest.raises(PublishError, match="user-context"):
+            adapter.publish(bundle, self._account(), dry_run=False)
+
+    def test_explicit_app_bearer_never_posts_even_with_user_id(
+        self, tmp_path: Path,
+    ) -> None:
+        from pipeline.publishers.x_api import AUTH_APP_BEARER, XApiPublisher, XCredentials
+
+        conn = _conn(tmp_path)
+        pub, thread_path = _seed_publication(conn, out_root=tmp_path)
+        bundle = PostBundle(
+            content_id=pub.content_id, title="t",
+            body_path=thread_path, media_paths=(), tags=(), extra={},
+        )
+        creds = XCredentials(
+            access_token="app-only-token",
+            user_id="spoofed",
+            scopes=("tweet.write", "users.read"),
+            auth_mode=AUTH_APP_BEARER,
+        )
+        adapter = XApiPublisher(
+            bearer_token="app-only-token",
+            credentials=creds,
+            http_post=lambda *a, **k: (_ for _ in ()).throw(AssertionError("app-only")),
+        )
+        assert adapter.capabilities().direct is False
+        with pytest.raises(PublishError, match="App-only"):
+            adapter.publish(bundle, self._account(), dry_run=False)
+
+    def test_media_upload_requires_id_then_attaches(
+        self, tmp_path: Path,
+    ) -> None:
+        from pipeline.publishers.x_api import XApiPublisher
+
+        conn = _conn(tmp_path)
+        pub, thread_path = _seed_publication(conn, out_root=tmp_path)
+        image = tmp_path / "card.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n")
+        bundle = PostBundle(
+            content_id=pub.content_id, title="t",
+            body_path=thread_path, media_paths=(image,), tags=(), extra={},
+        )
+        calls: list[dict] = []
+
+        def fake_post(url, *, headers, body, timeout):
+            calls.append({"url": url, "body": body})
+            return {"data": {"id": f"tw{len(calls)}"}}
+
+        def fake_upload(_url, **_kwargs):
+            return {"data": {"id": "media-1"}}
+
+        adapter = XApiPublisher(
+            bearer_token="dummy",
+            http_post=fake_post,
+            http_upload=fake_upload,
+            user_id="user-1",
+            scopes=("tweet.write", "users.read", "media.write"),
+        )
+        result = adapter.publish(bundle, self._account(), dry_run=False)
+        assert calls[0]["body"]["media"]["media_ids"] == ["media-1"]
+        assert result.platform_post_id == "tw1"
+
+    def test_media_upload_without_id_is_failure(
+        self, tmp_path: Path,
+    ) -> None:
+        from pipeline.publishers.x_api import XApiPublisher
+
+        conn = _conn(tmp_path)
+        pub, thread_path = _seed_publication(conn, out_root=tmp_path)
+        image = tmp_path / "card.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n")
+        bundle = PostBundle(
+            content_id=pub.content_id, title="t",
+            body_path=thread_path, media_paths=(image,), tags=(), extra={},
+        )
+        adapter = XApiPublisher(
+            bearer_token="dummy",
+            http_post=lambda *a, **k: (_ for _ in ()).throw(AssertionError("tweet")),
+            http_upload=lambda *a, **k: {},
+            user_id="user-1",
+            scopes=("tweet.write", "users.read", "media.write"),
+        )
+        with pytest.raises(PublishError, match="media_id"):
             adapter.publish(bundle, self._account(), dry_run=False)
 
     def test_dry_run_does_not_call_http(

@@ -42,6 +42,17 @@ def test_capabilities_hide_wechat_direct_and_unapproved_draft_is_409(tmp_path, m
     assert youtube["review"]["requires_app_review"] is True
     assert youtube["review"]["default_visibility"] == "private"
     assert youtube["delivery_effective"]["direct"] is False
+    tiktok = next(item for item in caps.json()["items"] if item["platform"] == "tiktok")
+    instagram = next(item for item in caps.json()["items"] if item["platform"] == "instagram")
+    x = next(item for item in caps.json()["items"] if item["platform"] == "x")
+    assert tiktok["auth"]["kind"] == "oauth_user"
+    assert tiktok["review"]["requires_app_review"] is True
+    assert tiktok["delivery_effective"]["direct"] is False
+    assert instagram["auth"]["kind"] == "oauth_user"
+    assert instagram["review"]["requires_app_review"] is True
+    assert instagram["delivery_effective"]["direct"] is False
+    assert x["auth"]["kind"] == "oauth_user"
+    assert x["delivery_effective"]["direct"] is False
     hidden = client.post(
         "/api/v1/projects/prj_delivery_api/deliverables/dlv_article_wechat_mp/direct",
         json={"actor": "lazy"},

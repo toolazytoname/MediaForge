@@ -75,6 +75,8 @@ def capabilities_for_platform(
     x_has_user_context: bool | None = None,
     douyin_has_user_context: bool | None = None,
     youtube_has_user_context: bool | None = None,
+    tiktok_has_user_context: bool | None = None,
+    instagram_has_user_context: bool | None = None,
 ) -> AdapterCapabilities:
     """Static defaults used by registry / contract tests."""
     if platform == "wechat_mp":
@@ -113,6 +115,24 @@ def capabilities_for_platform(
             "Without app review only private/unlisted are allowed."
             if not direct
             else "YouTube user-context present; public still requires app review"
+        )
+        return default_capabilities(direct=direct, detail=detail)
+    if platform == "tiktok":
+        direct = bool(tiktok_has_user_context)
+        detail = (
+            "TikTok Content Posting API requires user OAuth (video.publish). "
+            "Without app review only Inbox Upload is allowed; public Direct Post is not claimed."
+            if not direct
+            else "TikTok user-context present; public Direct Post still requires app review"
+        )
+        return default_capabilities(direct=direct, detail=detail)
+    if platform == "instagram":
+        direct = bool(instagram_has_user_context)
+        detail = (
+            "Instagram media_publish requires Professional user OAuth "
+            "(instagram_content_publish) plus a public HTTPS media URL and app review."
+            if not direct
+            else "Instagram Professional user-context present; public still requires app review"
         )
         return default_capabilities(direct=direct, detail=detail)
     return default_capabilities(detail=f"platform {platform!r} default capabilities")

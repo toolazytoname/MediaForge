@@ -216,6 +216,8 @@ class PlatformsConfig(BaseModel):
     douyin: Platform | None = None
     wechat_mp: Platform | None = None
     youtube: Platform | None = None
+    tiktok: Platform | None = None
+    instagram: Platform | None = None
 
 
 # ── WebUI ─────────────────────────────────────────────────

@@ -31,7 +31,7 @@ from pipeline.publishers.safe_publish import SafePublishResult, safe_publish
 from pipeline.utils.ids import new_id
 from pipeline.utils.redact import token_last4
 
-OFFICIAL_PLATFORMS = frozenset({"douyin", "youtube"})
+OFFICIAL_PLATFORMS = frozenset({"douyin", "youtube", "tiktok", "instagram", "x"})
 
 _PROJECT_PILLAR = "project"
 
@@ -362,7 +362,7 @@ def create_official_delivery(
     visibility: str | None = None,
     retry_of_id: str | None = None,
 ) -> DeliveryResult:
-    """Official Douyin/YouTube publish. Fail-closed without user-context or receipt."""
+    """Official platform publish. Fail-closed without user-context or receipt."""
     _require_bridge(cfg)
     if not confirm_token or not str(confirm_token).strip():
         raise DeliveryError(
@@ -383,7 +383,7 @@ def create_official_delivery(
     deliverable = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
     platform = _single_platform(deliverable)
     if platform not in OFFICIAL_PLATFORMS:
-        raise DeliveryError(f"{platform} is not an official Wave 1 adapter", code="mode_not_allowed")
+        raise DeliveryError(f"{platform} is not an official adapter", code="mode_not_allowed")
     if not mode_allowed(platform, "direct", adapter):
         raise DeliveryError(
             f"{platform} direct is unavailable without user-context OAuth",
@@ -682,6 +682,12 @@ def _user_label(attempt: DeliveryAttempt) -> str:
         return "已提交抖音官方发布"
     if attempt.platform == "youtube" and attempt.outcome == "success":
         return "已上传 YouTube"
+    if attempt.platform == "tiktok" and attempt.outcome == "success":
+        return "已提交 TikTok 官方发布"
+    if attempt.platform == "instagram" and attempt.outcome == "success":
+        return "已提交 Instagram Professional 发布"
+    if attempt.platform == "x" and attempt.outcome == "success":
+        return "已发到 X"
     if attempt.compensation_of_id and attempt.outcome == "success":
         return "已补偿删除平台内容"
     return attempt.outcome

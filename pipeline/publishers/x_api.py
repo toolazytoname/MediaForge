@@ -30,6 +30,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from pipeline.env_keys import atomic_write_secret
+from pipeline.oauth.pkce import OAuthAuthorizeRequest, build_authorize_request
+from pipeline.oauth.store import metadata_from_token
 from pipeline.publishers.base import (
     AccountConfig,
     PostBundle,
@@ -43,10 +46,23 @@ from pipeline.publishers.capabilities import AdapterCapabilities, default_capabi
 # ── 常量 ───────────────────────────────────────────────────
 
 X_API_BASE = "https://api.twitter.com/2/tweets"
+X_USERS_ME = "https://api.twitter.com/2/users/me"
+X_AUTHORIZE_URL = "https://twitter.com/i/oauth2/authorize"
+X_TOKEN_URL = "https://api.twitter.com/2/oauth2/token"
+X_MEDIA_UPLOAD = "https://api.x.com/2/media/upload"
 TWEET_MAX_LEN = 260          # M2-3 已 hard-limit（≤ 260 字符，超 X 280 上限留 20 字符余量）
 THREAD_MIN_TWEETS = 3
 THREAD_MAX_TWEETS = 10
-REQUIRED_DIRECT_SCOPES = frozenset({"tweet.write", "users.read"})
+SCOPE_TWEET_WRITE = "tweet.write"
+SCOPE_USERS_READ = "users.read"
+SCOPE_MEDIA_WRITE = "media.write"
+REQUIRED_DIRECT_SCOPES = frozenset({SCOPE_TWEET_WRITE, SCOPE_USERS_READ})
+DEFAULT_USER_SCOPES = (
+    "tweet.read", SCOPE_TWEET_WRITE, SCOPE_USERS_READ, "offline.access", SCOPE_MEDIA_WRITE,
+)
+AUTH_APP_BEARER = "app_bearer"
+AUTH_OAUTH2_USER = "oauth2_user"
+AUTH_OAUTH1_USER = "oauth1_user"
 
 
 # ── helpers ────────────────────────────────────────────────
@@ -59,14 +75,26 @@ class XCredentials:
     access_token: str
     user_id: str | None = None
     scopes: tuple[str, ...] = ()
-    auth_mode: str = "app_bearer"
+    auth_mode: str = AUTH_APP_BEARER
+    oauth_token_secret: str | None = None
 
     @property
     def has_user_context(self) -> bool:
-        if not self.user_id:
+        if self.auth_mode == AUTH_APP_BEARER or not self.access_token or not self.user_id:
             return False
+        if self.auth_mode == AUTH_OAUTH1_USER:
+            return bool(self.oauth_token_secret)
         have = {scope.lower() for scope in self.scopes}
         return REQUIRED_DIRECT_SCOPES.issubset(have)
+
+    @property
+    def can_upload_media(self) -> bool:
+        if not self.has_user_context:
+            return False
+        if self.auth_mode == AUTH_OAUTH1_USER:
+            return True
+        have = {scope.lower() for scope in self.scopes}
+        return SCOPE_MEDIA_WRITE in have
 
 
 def _parse_scopes(raw: object) -> tuple[str, ...]:
@@ -93,7 +121,7 @@ def load_x_credential_set(path: str | Path) -> XCredentials:
     raw = json.loads(p.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"X credentials at {p} must be a JSON object")
-    token = raw.get("access_token") or raw.get("bearer_token")
+    token = raw.get("access_token") or raw.get("oauth_token") or raw.get("bearer_token")
     if not isinstance(token, str) or not token:
         raise ValueError(
             f"X credentials at {p} missing 'bearer_token' or 'access_token' "
@@ -103,20 +131,172 @@ def load_x_credential_set(path: str | Path) -> XCredentials:
     if user_id is not None:
         user_id = str(user_id).strip() or None
     scopes = _parse_scopes(raw.get("scopes") or raw.get("scope"))
+    secret = raw.get("oauth_token_secret")
+    if secret is not None:
+        secret = str(secret).strip() or None
     auth_mode = str(raw.get("auth_mode") or "").strip()
     if not auth_mode:
-        auth_mode = "oauth2_user" if user_id else "app_bearer"
+        if secret:
+            auth_mode = AUTH_OAUTH1_USER
+        elif user_id and ("access_token" in raw or "oauth_token" in raw):
+            auth_mode = AUTH_OAUTH2_USER
+        else:
+            auth_mode = AUTH_APP_BEARER
+    if auth_mode == AUTH_APP_BEARER:
+        user_id = None
     return XCredentials(
         access_token=token,
         user_id=user_id,
         scopes=scopes,
         auth_mode=auth_mode,
+        oauth_token_secret=secret,
     )
 
 
 def load_x_credentials(path: str | Path) -> str:
     """向后兼容：只返回 access/bearer token 字符串。"""
     return load_x_credential_set(path).access_token
+
+
+def build_x_authorize_request(
+    *,
+    client_id: str,
+    redirect_uri: str,
+    scopes: Iterable[str] = DEFAULT_USER_SCOPES,
+    state: str | None = None,
+) -> OAuthAuthorizeRequest:
+    """OAuth 2.0 PKCE authorize URL. Tokens are never stored here."""
+    return build_authorize_request(
+        X_AUTHORIZE_URL,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        scopes=scopes,
+        state=state,
+    )
+
+
+def exchange_x_authorization_code(
+    *,
+    client_id: str,
+    redirect_uri: str,
+    code: str,
+    verifier: str,
+    credentials_path: str | Path,
+    http_post: Callable[..., dict] | None = None,
+    http_get: Callable[..., dict] | None = None,
+    token_url: str = X_TOKEN_URL,
+    users_me_url: str = X_USERS_ME,
+) -> dict:
+    """Exchange a PKCE code for a user token, persist secrets file, return metadata only."""
+    if not code or not verifier:
+        raise ValueError("authorization code and PKCE verifier are required")
+    poster = http_post or _httpx_form_post
+    getter = http_get or _httpx_get
+    token_resp = poster(
+        token_url,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        body={
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "code": code,
+            "code_verifier": verifier,
+        },
+        timeout=30.0,
+    )
+    access_token = token_resp.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise PublishError("X OAuth token exchange returned no access_token; unknown receipt is failure")
+    if str(token_resp.get("token_type") or "bearer").lower() != "bearer":
+        raise PublishError("X OAuth token exchange did not return a user bearer token")
+    scopes = _parse_scopes(token_resp.get("scope"))
+    me = getter(
+        users_me_url,
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=30.0,
+    )
+    data = me.get("data") if isinstance(me.get("data"), dict) else me
+    user_id = data.get("id") if isinstance(data, dict) else None
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise PublishError(
+            "X OAuth exchange produced no user_id; app-only bearer cannot post"
+        )
+    payload = {
+        "access_token": access_token,
+        "refresh_token": token_resp.get("refresh_token"),
+        "user_id": user_id.strip(),
+        "scopes": list(scopes),
+        "auth_mode": AUTH_OAUTH2_USER,
+        "token_type": "user",
+    }
+    path = Path(credentials_path)
+    atomic_write_secret(path, (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+    return metadata_from_token(
+        platform="x",
+        account_id=path.stem.removeprefix("x_"),
+        auth_kind="oauth_user",
+        key_ref=str(path),
+        access_token=access_token,
+        scopes=scopes,
+        user_id=user_id.strip(),
+        has_user_context=REQUIRED_DIRECT_SCOPES.issubset({s.lower() for s in scopes}),
+    )
+
+
+def _httpx_get(url: str, *, headers: dict, timeout: float = 30.0) -> dict:
+    import httpx
+    try:
+        resp = httpx.get(url, headers=headers, timeout=timeout)
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        raise PublishError(f"X API network error: {exc!r}") from exc
+    return _parse_plain_response(resp, url)
+
+
+def _httpx_delete(url: str, *, headers: dict, timeout: float = 30.0) -> dict:
+    import httpx
+    try:
+        resp = httpx.delete(url, headers=headers, timeout=timeout)
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        raise PublishError(f"X API network error: {exc!r}") from exc
+    if getattr(resp, "status_code", 0) in (200, 204):
+        return {"deleted": True}
+    return _parse_plain_response(resp, url)
+
+
+def _httpx_upload(
+    url: str,
+    *,
+    headers: dict,
+    file_path: Path,
+    timeout: float = 60.0,
+) -> dict:
+    import httpx
+    try:
+        with file_path.open("rb") as handle:
+            files = {"media": (file_path.name, handle, "application/octet-stream")}
+            resp = httpx.post(url, headers=headers, files=files, timeout=timeout)
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        raise PublishError(f"X media upload network error: {exc!r}") from exc
+    return _parse_plain_response(resp, url)
+
+
+def _parse_plain_response(resp: object, url: str) -> dict:
+    from pipeline.publishers.base import LoginExpired
+    status = getattr(resp, "status_code", 0)
+    text = getattr(resp, "text", "") or ""
+    if status in (401, 403):
+        raise LoginExpired(f"X API auth failed ({status}) at {url}")
+    if status >= 400:
+        raise PublishError(f"X API error {status}: {text[:300]}")
+    if not text:
+        return {}
+    try:
+        data = resp.json()  # type: ignore[union-attr]
+    except ValueError as exc:
+        raise PublishError(f"X API returned non-JSON at {url}: {text[:300]!r}") from exc
+    if not isinstance(data, dict):
+        raise PublishError(f"X API bad response shape at {url}")
+    return data
 
 
 def split_thread(thread_md: str) -> list[str]:
@@ -145,6 +325,21 @@ def split_thread(thread_md: str) -> list[str]:
 
 
 # ── HTTP 客户端（可注入） ──────────────────────────────────
+
+
+def _httpx_form_post(
+    url: str,
+    *,
+    headers: dict,
+    body: dict,
+    timeout: float = 30.0,
+) -> dict:
+    import httpx
+    try:
+        resp = httpx.post(url, headers=headers, data=body, timeout=timeout)
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        raise PublishError(f"X API network error: {exc!r}") from exc
+    return _parse_plain_response(resp, url)
 
 
 def _httpx_post(
@@ -269,7 +464,10 @@ class XApiPublisher(PublisherAdapter):
         *,
         bearer_token: str,
         http_post: Callable[..., dict] | None = None,
+        http_upload: Callable[..., dict] | None = None,
+        http_delete: Callable[..., dict] | None = None,
         api_base: str = X_API_BASE,
+        media_url: str = X_MEDIA_UPLOAD,
         user_id: str | None = None,
         scopes: Iterable[str] = (),
         credentials: XCredentials | None = None,
@@ -283,26 +481,27 @@ class XApiPublisher(PublisherAdapter):
                 access_token=bearer_token,
                 user_id=user_id,
                 scopes=tuple(scopes),
-                auth_mode="oauth2_user" if user_id else "app_bearer",
+                auth_mode=AUTH_OAUTH2_USER if user_id else AUTH_APP_BEARER,
             )
         if not self._creds.access_token:
             raise ValueError("XApiPublisher requires bearer_token")
         self._token = self._creds.access_token
         self._post = http_post or _httpx_post
+        self._upload = http_upload or _httpx_upload
+        self._delete = http_delete or _httpx_delete
         self._api = api_base.rstrip("/")
+        self._media = media_url.rstrip("/")
 
     def capabilities(self) -> AdapterCapabilities:
-        return default_capabilities(
-            direct=self._creds.has_user_context,
-            detail=(
-                "X user-context OAuth present; direct publish enabled"
-                if self._creds.has_user_context
-                else (
-                    "X direct publish disabled: app-only bearer cannot post. "
-                    "Need user_id + tweet.write/users.read (OAuth 2 PKCE / user-context)"
-                )
-            ),
-        )
+        if self._creds.has_user_context:
+            detail = "X user-context OAuth present; direct publish enabled"
+        else:
+            detail = (
+                "X direct publish disabled: app-only bearer cannot post. "
+                "Need OAuth 2 PKCE or OAuth 1.0a user-context "
+                "(user_id + tweet.write/users.read)."
+            )
+        return default_capabilities(direct=self._creds.has_user_context, detail=detail)
 
     # ── 本地校验（不触网络） ──
 
@@ -364,11 +563,13 @@ class XApiPublisher(PublisherAdapter):
             )
         tweets = split_thread(thread_path.read_text(encoding="utf-8"))
 
-        if not dry_run and not self._creds.has_user_context:
+        if not dry_run and (
+            self._creds.auth_mode == AUTH_APP_BEARER or not self._creds.has_user_context
+        ):
             raise PublishError(
                 "X direct publish is disabled: missing verifiable user-context "
-                "OAuth (user_id + scopes tweet.write and users.read). "
-                "App-only bearer tokens cannot create tweets. "
+                "OAuth (OAuth 2 PKCE or OAuth 1.0a; user_id + scopes tweet.write "
+                "and users.read). App-only bearer tokens cannot create tweets. "
                 "Capability 'direct' is unavailable until user-context is configured."
             )
 
@@ -391,6 +592,7 @@ class XApiPublisher(PublisherAdapter):
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
+        media_ids = self._upload_media(bundle)
 
         published: list[tuple[str, str]] = []  # [(id, url), ...]
         last_tweet_id: str | None = None
@@ -398,6 +600,8 @@ class XApiPublisher(PublisherAdapter):
             payload: dict = {"text": tweet}
             if last_tweet_id is not None:
                 payload["in_reply_to_tweet_id"] = last_tweet_id
+            if i == 1 and media_ids:
+                payload["media"] = {"media_ids": media_ids}
             try:
                 resp = self._post(self._api, headers=headers, body=payload, timeout=30.0)
             except PublishError as e:
@@ -428,13 +632,70 @@ class XApiPublisher(PublisherAdapter):
                 "account": account.id,
                 "thread": [(pid, purl) for pid, purl in published],
                 "tweet_count": len(tweets),
+                "media_ids": media_ids,
             }, ensure_ascii=False),
         )
+
+    def compensate(self, platform_post_id: str) -> dict:
+        if not platform_post_id:
+            raise PublishError("cannot compensate X post without id")
+        if not self._creds.has_user_context:
+            raise PublishError("X compensate requires user-context OAuth")
+        self._delete(
+            f"{self._api}/{platform_post_id}",
+            headers={"Authorization": f"Bearer {self._token}"},
+            timeout=30.0,
+        )
+        return {"deleted": platform_post_id}
+
+    def _upload_media(self, bundle: PostBundle) -> list[str]:
+        if not bundle.media_paths:
+            return []
+        if not self._creds.can_upload_media:
+            raise PublishError(
+                "X media upload requires user-context and media.write "
+                "(app-only bearer cannot upload)"
+            )
+        media_ids: list[str] = []
+        for path in bundle.media_paths:
+            media = Path(path)
+            resp = self._upload(
+                self._media,
+                headers={"Authorization": f"Bearer {self._token}"},
+                file_path=media,
+                timeout=60.0,
+            )
+            media_id = _parse_media_id(resp)
+            media_ids.append(media_id)
+        return media_ids
+
+
+def _parse_media_id(resp: object) -> str:
+    if not isinstance(resp, dict):
+        raise PublishError("X media upload returned no media_id; unknown receipt is failure")
+    data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+    media_id = data.get("id") or data.get("media_id_string") or data.get("media_id")
+    if media_id is None:
+        raise PublishError("X media upload returned no media_id; unknown receipt is failure")
+    text = str(media_id).strip()
+    if not text:
+        raise PublishError("X media upload returned no media_id; unknown receipt is failure")
+    return text
 
 
 __all__ = [
     "XApiPublisher",
     "XCredentials",
+    "AUTH_APP_BEARER",
+    "AUTH_OAUTH1_USER",
+    "AUTH_OAUTH2_USER",
+    "DEFAULT_USER_SCOPES",
+    "SCOPE_MEDIA_WRITE",
+    "X_AUTHORIZE_URL",
+    "X_MEDIA_UPLOAD",
+    "X_TOKEN_URL",
+    "build_x_authorize_request",
+    "exchange_x_authorization_code",
     "load_x_credentials",
     "load_x_credential_set",
     "split_thread",

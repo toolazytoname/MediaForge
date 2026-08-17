@@ -169,6 +169,39 @@ def test_build_youtube_resolves_oauth(tmp_path: Path) -> None:
     assert "private/unlisted" in adapter.capabilities().detail
 
 
+def test_build_tiktok_resolves_oauth(tmp_path: Path) -> None:
+    from pipeline.publishers.tiktok import TikTokPublisher
+
+    creds = tmp_path / "tt.json"
+    creds.write_text(json.dumps({
+        "access_token": "tt-test-token",
+        "open_id": "open-1",
+        "scopes": ["video.publish"],
+        "app_reviewed": False,
+    }))
+    account = AccountConfig(id="main", credentials_path=creds)
+    adapter = get_adapter("tiktok", account=account, config=None)
+    assert isinstance(adapter, TikTokPublisher)
+    assert adapter.capabilities().direct is True
+    assert "Inbox" in adapter.capabilities().detail
+
+
+def test_build_instagram_without_review_hides_direct(tmp_path: Path) -> None:
+    from pipeline.publishers.instagram import InstagramPublisher
+
+    creds = tmp_path / "ig.json"
+    creds.write_text(json.dumps({
+        "access_token": "ig-test-token",
+        "user_id": "178414000",
+        "scopes": ["instagram_content_publish"],
+        "app_reviewed": False,
+    }))
+    account = AccountConfig(id="main", credentials_path=creds)
+    adapter = get_adapter("instagram", account=account, config=None)
+    assert isinstance(adapter, InstagramPublisher)
+    assert adapter.capabilities().direct is False
+
+
 # ── build_adapters 编排覆盖 ────────────────────────────────────────
 
 

@@ -15,6 +15,9 @@ from pipeline.delivery.service import (
 from pipeline.oauth.store import get_oauth_metadata, list_oauth_metadata
 from pipeline.publishers.base import AccountConfig, PostBundle
 from pipeline.publishers.douyin_api import DouyinApiPublisher, DouyinCredentials
+from pipeline.publishers.instagram import InstagramCredentials, InstagramPublisher
+from pipeline.publishers.tiktok import TikTokCredentials, TikTokPublisher
+from pipeline.publishers.x_api import XApiPublisher
 from pipeline.publishers.youtube import YoutubeCredentials, YoutubePublisher
 
 from tests.test_gallery_deliverable import _approve_gallery, _make_gallery
@@ -221,3 +224,125 @@ def test_youtube_private_success_needs_id_and_url(tmp_path):
     assert result.attempt.outcome == "success"
     assert result.attempt.platform_post_id == "ytVid1"
     assert result.attempt.platform_url == "https://www.youtube.com/watch?v=ytVid1"
+
+
+def test_tiktok_fail_closed_without_user_context(tmp_path):
+    root = tmp_path / "projects"
+    item = _make_gallery(root, "prj_tt_closed", slides=1, prefix="tt", caption="tt", targets=["tiktok"])
+    video = deliverables.create_video(
+        "prj_tt_closed", title="短视频", script="口播", duration_s=12, aspect="9:16",
+        now="2026-08-17T00:04:00+00:00", targets=["tiktok"], projects_root=root,
+    )
+    _approve_gallery(root, "prj_tt_closed", item)
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+    adapter = TikTokPublisher(credentials=TikTokCredentials(access_token="tt-test-token"))
+    with pytest.raises(DeliveryError) as err:
+        create_official_delivery(
+            conn, project_id="prj_tt_closed", deliverable_id=video.id, actor="lazy",
+            adapter=adapter, account=AccountConfig(id="main", credentials_path=tmp_path / "tt.json"),
+            confirm_token="confirm-1", bundle=_video_bundle(tmp_path), projects_root=root,
+        )
+    assert err.value.code == "mode_not_allowed"
+
+
+def test_tiktok_inbox_success_writes_publish_id(tmp_path):
+    root = tmp_path / "projects"
+    item = _make_gallery(root, "prj_tt_ok", slides=1, prefix="tto", caption="tt", targets=["tiktok"])
+    video = deliverables.create_video(
+        "prj_tt_ok", title="短视频", script="口播", duration_s=12, aspect="9:16",
+        now="2026-08-17T00:04:00+00:00", targets=["tiktok"], projects_root=root,
+    )
+    _approve_gallery(root, "prj_tt_ok", item)
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+
+    def post(url, **_kwargs):
+        assert "inbox" in url
+        return {"data": {"publish_id": "v_pub_ok", "upload_url": "https://upload.example/t"}}
+
+    adapter = TikTokPublisher(
+        credentials=TikTokCredentials(
+            access_token="tt-test-token", open_id="open-1",
+            scopes=("video.publish",), app_reviewed=False,
+        ),
+        http_post=post,
+        http_upload=lambda *a, **k: {},
+    )
+    result = create_official_delivery(
+        conn, project_id="prj_tt_ok", deliverable_id=video.id, actor="lazy",
+        adapter=adapter, account=AccountConfig(id="main", credentials_path=tmp_path / "tt.json"),
+        confirm_token="confirm-tt", bundle=_video_bundle(tmp_path), projects_root=root,
+    )
+    assert result.attempt.outcome == "success"
+    assert result.attempt.platform_post_id == "v_pub_ok"
+
+
+def test_instagram_fail_closed_without_user_context(tmp_path):
+    root = tmp_path / "projects"
+    item = _make_gallery(root, "prj_ig_closed", slides=1, prefix="ig", caption="ig", targets=["instagram"])
+    _approve_gallery(root, "prj_ig_closed", item)
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+    adapter = InstagramPublisher(credentials=InstagramCredentials(access_token="ig-test-token"))
+    with pytest.raises(DeliveryError) as err:
+        create_official_delivery(
+            conn, project_id="prj_ig_closed", deliverable_id=item.id, actor="lazy",
+            adapter=adapter, account=AccountConfig(id="main", credentials_path=tmp_path / "ig.json"),
+            confirm_token="confirm-1",
+            bundle=PostBundle(
+                content_id="c_ig", title="ig", body_path=tmp_path / "b.md",
+                media_paths=(), tags=(), extra={"media_url": "https://cdn.example.com/a.jpg"},
+            ),
+            projects_root=root,
+        )
+    assert err.value.code == "mode_not_allowed"
+
+
+def test_instagram_success_needs_media_id(tmp_path):
+    root = tmp_path / "projects"
+    item = _make_gallery(root, "prj_ig_ok", slides=1, prefix="igo", caption="ig", targets=["instagram"])
+    _approve_gallery(root, "prj_ig_ok", item)
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+
+    def post(url, **_kwargs):
+        if url.endswith("/media_publish"):
+            return {"id": "ig-media-1"}
+        return {"id": "ig-ctr-1"}
+
+    adapter = InstagramPublisher(
+        credentials=InstagramCredentials(
+            access_token="ig-test-token", user_id="178414000",
+            scopes=("instagram_content_publish",), app_reviewed=True,
+        ),
+        http_post=post,
+    )
+    bundle = PostBundle(
+        content_id="c_ig", title="ig", body_path=tmp_path / "b.md",
+        media_paths=(), tags=(), extra={"caption": "hi", "media_url": "https://cdn.example.com/a.jpg"},
+    )
+    result = create_official_delivery(
+        conn, project_id="prj_ig_ok", deliverable_id=item.id, actor="lazy",
+        adapter=adapter, account=AccountConfig(id="main", credentials_path=tmp_path / "ig.json"),
+        confirm_token="confirm-ig", bundle=bundle, projects_root=root,
+    )
+    assert result.attempt.outcome == "success"
+    assert result.attempt.platform_post_id == "ig-media-1"
+    assert result.attempt.platform_url == "https://www.instagram.com/p/ig-media-1/"
+
+
+def test_x_app_only_is_not_official_success(tmp_path):
+    root = tmp_path / "projects"
+    item = _make_gallery(root, "prj_x_closed", slides=1, prefix="xx", caption="x", targets=["x"])
+    _approve_gallery(root, "prj_x_closed", item)
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+    adapter = XApiPublisher(bearer_token="app-only")
+    with pytest.raises(DeliveryError) as err:
+        create_official_delivery(
+            conn, project_id="prj_x_closed", deliverable_id=item.id, actor="lazy",
+            adapter=adapter, account=AccountConfig(id="main", credentials_path=tmp_path / "x.json"),
+            confirm_token="confirm-1", bundle=_image_bundle(tmp_path), projects_root=root,
+        )
+    assert err.value.code == "mode_not_allowed"

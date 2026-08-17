@@ -16,9 +16,9 @@ import { platformMeta } from './components/platformMeta'
 const store = useAccountsStore()
 const { items, guidance, loading, loaded } = storeToRefs(store)
 
-// U7-8: 只有走扫码登录(一键登录)的平台才有可删的凭据文件；
-// x / wechat_mp 走 config_file(手填 config.yaml),没有对应端点。
-const WEB_LOGIN_PLATFORMS = new Set(['toutiao', 'xiaohongshu', 'douyin'])
+// 只有走扫码/cookie 一键登录的平台才有可删凭据端点。
+// 官方 OAuth 平台（抖音 / YouTube / TikTok / Instagram / X / 公众号）不是扫码路径。
+const WEB_LOGIN_PLATFORMS = new Set(['toutiao', 'xiaohongshu'])
 const deletingKey = ref<string | null>(null)
 
 function canDeleteCredential(platform: string): boolean {
@@ -59,6 +59,8 @@ const ALL_KNOWN_PLATFORMS: readonly { name: string; group: 'domestic' | 'intl' }
   { name: 'wechat_mp', group: 'domestic' },
   { name: 'x', group: 'intl' },
   { name: 'youtube', group: 'intl' },
+  { name: 'tiktok', group: 'intl' },
+  { name: 'instagram', group: 'intl' },
 ]
 
 // 按平台聚合账号,合并 ALL_KNOWN_PLATFORMS (空平台也要渲染引导)

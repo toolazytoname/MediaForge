@@ -180,7 +180,7 @@ async function onOneClickLogin(): Promise<void> {
         <PlatformBadge :platform="selectedGuidance.platform" size="small" />
         <span class="guidance-platform-name">{{ platformMeta(selectedGuidance.platform).label }}</span>
         <a-tag :color="selectedGuidance.auth_type === 'scan_qr' ? 'purple' : 'blue'">
-          {{ selectedGuidance.auth_type === 'scan_qr' ? '扫码登录' : '配置凭据' }}
+          {{ selectedGuidance.auth_type === 'scan_qr' ? '扫码登录' : (selectedGuidance.auth_type === 'oauth_user' ? '官方 OAuth' : '配置凭据') }}
         </a-tag>
       </div>
       <template v-if="selectedGuidance.auth_type === 'scan_qr'">

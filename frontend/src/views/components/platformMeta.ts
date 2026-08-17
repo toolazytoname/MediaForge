@@ -15,6 +15,7 @@ import {
   siZhihu,
   siTiktok,
   siYoutube,
+  siInstagram,
 } from 'simple-icons'
 
 export interface PlatformMeta {
@@ -32,6 +33,8 @@ export const SUPPORTED_PLATFORMS: readonly PlatformMeta[] = [
   { key: 'wechat_mp', label: '公众号', color: `#${siWechat.hex}`, group: 'domestic', iconPath: siWechat.path },
   { key: 'x', label: 'X', color: `#${siX.hex}`, group: 'intl', iconPath: siX.path },
   { key: 'youtube', label: 'YouTube', color: `#${siYoutube.hex}`, group: 'intl', iconPath: siYoutube.path },
+  { key: 'tiktok', label: 'TikTok', color: `#${siTiktok.hex}`, group: 'intl', iconPath: siTiktok.path },
+  { key: 'instagram', label: 'Instagram', color: `#${siInstagram.hex}`, group: 'intl', iconPath: siInstagram.path },
 ]
 
 export const PLANNED_PLATFORMS: readonly PlatformMeta[] = [
