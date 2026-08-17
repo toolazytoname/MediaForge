@@ -74,6 +74,8 @@ class LLMBudget(BaseModel):
 
 class LLMConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    # auto：仅当恰好一个文本 key 存在时选用该 provider；多个 key 必须显式指定
+    provider: Literal["auto", "mock", "MiniMax", "anthropic", "openai", "agnes"] = "auto"
     tiers: LLMTiers
 
 

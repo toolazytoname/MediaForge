@@ -72,10 +72,23 @@ def _check_x_credentials(path: Path) -> tuple[bool, str]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         return (False, f"invalid JSON: {e}")
-    tok = data.get("bearer_token") if isinstance(data, dict) else None
+    tok = None
+    if isinstance(data, dict):
+        tok = data.get("access_token") or data.get("bearer_token")
     if not isinstance(tok, str) or not tok:
-        return (False, "missing bearer_token")
-    return (True, f"bearer_token len={len(tok)}")
+        return (False, "missing bearer_token/access_token")
+    try:
+        from pipeline.publishers.x_api import load_x_credential_set
+        creds = load_x_credential_set(path)
+    except Exception:
+        return (True, f"token len={len(tok)}; user-context unread")
+    if creds.has_user_context:
+        return (True, f"user-context ready (user_id set, token len={len(tok)})")
+    return (
+        True,
+        f"app-only token len={len(tok)}; direct publish disabled "
+        "(need user_id + tweet.write/users.read)",
+    )
 
 
 def collect_cookie_health(config: Any) -> list[CookieHealthItem]:

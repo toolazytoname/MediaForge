@@ -162,6 +162,14 @@ class WechatMpPublisher(PublisherAdapter):
 
     platform = "wechat_mp"
 
+    def capabilities(self):
+        from pipeline.publishers.capabilities import default_capabilities
+        return default_capabilities(
+            draft=True,
+            direct=False,
+            detail="WeChat MP official API is draft/export only; no direct publish",
+        )
+
     def __init__(
         self,
         *,

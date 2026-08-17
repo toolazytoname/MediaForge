@@ -123,11 +123,18 @@ def _check_llm_key() -> CheckResult:
                 "或 MINIMAX_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY"
             ),
         )
-    # 不打印具体值，只报「已设置哪些 env var」
+    # 不打印具体值，只报「已设置哪些 env var」+ 解析到的 provider
+    extra = ""
+    try:
+        from pipeline.creators.llm import resolve_text_provider
+        name, reason = resolve_text_provider()
+        extra = f"；provider={name} ({reason})"
+    except Exception as e:
+        extra = f"；provider 未解析：{type(e).__name__}: {e}"
     return CheckResult(
         name="llm_key",
         ok=True,
-        hint=f"已设置 {', '.join(set_vars)}（值未显示）",
+        hint=f"已设置 {', '.join(set_vars)}（值未显示）{extra}",
     )
 
 

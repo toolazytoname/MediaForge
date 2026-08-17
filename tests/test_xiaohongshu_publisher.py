@@ -408,6 +408,18 @@ def test_publish_ok_extracts_post_id_and_url(
     assert result.url == "https://www.xiaohongshu.com/explore/abc123def"
 
 
+def test_publish_unknown_status_with_exit_0_fails(
+    out_root: Path, skills_dir: Path, account: AccountConfig,
+) -> None:
+    """退出码 0 但无协议成功状态行 → 不得记成功。"""
+    runner = MagicMock(return_value=(EXIT_OK, "random output no markers", ""))
+    pub = XiaohongshuPublisher(
+        skills_path=skills_dir, runner=runner, render_fn=_fake_render,
+    )
+    with pytest.raises(PublishError, match="unknown"):
+        pub.publish(_bundle(out_root), account, dry_run=False)
+
+
 def test_publish_preview_mode_yields_ready_to_publish(
     out_root: Path, skills_dir: Path, account: AccountConfig,
 ) -> None:

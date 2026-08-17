@@ -1,8 +1,8 @@
 """MiniMax Provider 单元测试（M2-2 真实冒烟）。
 
 覆盖：
-  - from_env 在 MINIMAX_API_KEY 与 ANTHROPIC_API_KEY 都缺时抛 ValueError
-  - from_env 回退到 ANTHROPIC_* env 变量
+  - from_env 在 MINIMAX_API_KEY 缺时抛 ValueError
+  - from_env 不回退到 ANTHROPIC_* env 变量
   - 调 Anthropic 兼容 /v1/messages，构造正确 headers/body
   - HTTP 200 → 解析 content[] 与 usage，输出 CompletionResult
   - HTTP 429 / 5xx / 529 → RetryableError（wrapper 重试）
@@ -32,10 +32,10 @@ from pipeline.creators.llm import (
 # ── from_env ────────────────────────────────────────────────
 
 def test_from_env_missing_key_raises(monkeypatch) -> None:
-    """两个 env var 都没设 → ValueError。"""
+    """MINIMAX_API_KEY 没设 → ValueError（即使有 ANTHROPIC_API_KEY）。"""
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="env var not set"):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    with pytest.raises(ValueError, match="MINIMAX_API_KEY"):
         MiniMaxProvider.from_env()
 
 
@@ -50,17 +50,15 @@ def test_from_env_prefers_minimax_over_anthropic(monkeypatch) -> None:
     assert p._base_url == "https://custom.example/v1"  # noqa: SLF001
 
 
-def test_from_env_falls_back_to_anthropic_vars(monkeypatch) -> None:
-    """MINIMAX_* 未设时回退到 ANTHROPIC_*。"""
+def test_from_env_ignores_anthropic_vars(monkeypatch) -> None:
+    """MINIMAX_* 未设时不得回退到 ANTHROPIC_*。"""
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
     monkeypatch.setenv("ANTHROPIC_MODEL", "MiniMax-M3")
 
-    p = MiniMaxProvider.from_env()
-    assert p._api_key == "anthropic-key"  # noqa: SLF001
-    assert p._base_url == "https://api.minimaxi.com/anthropic"  # noqa: SLF001
-    assert p._model == "MiniMax-M3"  # noqa: SLF001
+    with pytest.raises(ValueError, match="MINIMAX_API_KEY"):
+        MiniMaxProvider.from_env()
 
 
 def test_constructor_requires_api_key() -> None:
@@ -191,20 +189,24 @@ def test_setup_provider_uses_minimax_when_key_set(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("AGNES_API_KEY", raising=False)  # 防 shell 环境命中 agnes
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     set_provider(MockProvider())  # 重置
     p = setup_provider_from_env()
     assert isinstance(p, MiniMaxProvider)
 
 
-def test_setup_provider_falls_back_to_anthropic_key(monkeypatch) -> None:
-    """MINIMAX_API_KEY 未设但 ANTHROPIC_API_KEY 设了 → 仍走 MiniMax。"""
+def test_setup_provider_uses_anthropic_when_only_anthropic_key(monkeypatch) -> None:
+    """仅 ANTHROPIC_API_KEY → AnthropicProvider，不再误路由 MiniMax。"""
+    from pipeline.creators.llm import AnthropicProvider
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.delenv("AGNES_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     set_provider(MockProvider())
     p = setup_provider_from_env()
-    assert isinstance(p, MiniMaxProvider)
+    assert isinstance(p, AnthropicProvider)
+    assert p._spec.name == "anthropic"  # noqa: SLF001
 
 
 def test_setup_provider_falls_back_to_mock_when_no_key(monkeypatch) -> None:
@@ -212,6 +214,7 @@ def test_setup_provider_falls_back_to_mock_when_no_key(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("AGNES_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     set_provider(MockProvider())
     p = setup_provider_from_env()
     assert isinstance(p, MockProvider)

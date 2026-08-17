@@ -13,10 +13,11 @@ Providers（M2-2 真实冒烟接入）：
   - MiniMaxProvider：MiniMax M3（OpenAI 兼容 /chat/completions）
   - OpenAIProvider：通用 OpenAI chat completions 协议
     （覆盖 OpenAI 官方 + 任何 OpenAI 兼容网关：Agnes-AI / OpenRouter / 国产中转等）
-  - AnthropicProvider：占位（M4-2 再接），本期不实现
+  - AnthropicProvider：官方 Anthropic Messages API（与 MiniMax 同协议，独立凭据）
 
 所有模块禁止直接 import anthropic——CI 守门（tests/test_creators_llm.py
-::test_anthropic_import_only_in_llm_module）。
+::test_anthropic_import_only_in_llm_module）。选 provider 必须显式
+（LLM_PROVIDER 或恰好一个 key），禁止把 ANTHROPIC_API_KEY 路由给 MiniMax。
 """
 from __future__ import annotations
 
@@ -28,9 +29,15 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from pipeline.utils.errors import BudgetExceeded, PipelineError
+from pipeline.env_keys import LLM_PROVIDER_ENV
+from pipeline.utils.errors import (
+    AmbiguousProviderError,
+    BudgetExceeded,
+    PipelineError,
+    UnpricedModelError,
+)
 
 
 # ── 价格表（USD / 百万 token）────────────────────────────
@@ -43,6 +50,7 @@ MODEL_PRICES: dict[str, dict[str, float]] = {
     "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
     "MiniMax-M3": {"input": 0.30, "output": 1.20},
     "agnes-2.0-flash": {"input": 0.0, "output": 0.0},  # TODO: 以 agnes-ai.com 官方为准
+    "gpt-4o": {"input": 2.50, "output": 10.00},
     # M-x：image 模型按张计费（不走 token 算式）
     # docs: https://platform.minimaxi.com/docs/guides/image-generation
     # 当前限时 $0/张；标准 $0.003/张（取保守值用于预算护栏）
@@ -217,7 +225,7 @@ class MiniMaxProvider(LLMProvider):
     model=MiniMax-M3，使用 Anthropic Messages API 协议（非 OpenAI 格式）。
 
     配置（env 注入，避免硬编码凭据——HARD_PARTS §9）：
-      - MINIMAX_API_KEY  必填；与 ANTHROPIC_API_KEY 同时设置时优先 MINIMAX
+      - MINIMAX_API_KEY  必填；不回退 ANTHROPIC_API_KEY
       - MINIMAX_BASE_URL 默认 https://api.minimaxi.com/anthropic
       - MINIMAX_MODEL    默认 MiniMax-M3
       - MINIMAX_TIMEOUT_S 默认 60
@@ -251,8 +259,7 @@ class MiniMaxProvider(LLMProvider):
     ) -> None:
         if not api_key:
             raise ValueError(
-                "MiniMaxProvider: api_key is required "
-                "(set MINIMAX_API_KEY or ANTHROPIC_API_KEY env var)"
+                "MiniMaxProvider: api_key is required (set MINIMAX_API_KEY)"
             )
         self._spec = spec if spec is not None else PROVIDER_SPECS["MiniMax"]
         self._api_key = api_key
@@ -271,37 +278,19 @@ class MiniMaxProvider(LLMProvider):
 
     @classmethod
     def from_env(cls) -> "MiniMaxProvider":
-        """从 env 构造；找不到 key 抛 ValueError（不静默回退）。
-
-        优先使用 MiniMax-* 变量；如未设置则回退到 Anthropic-* 变量
-        （保持与用户实测环境兼容）。
-        """
+        """从 env 构造；只读 MINIMAX_*，不回退到 ANTHROPIC_*。"""
         spec = PROVIDER_SPECS["MiniMax"]
-        api_key = (
-            os.environ.get("MINIMAX_API_KEY")
-            or os.environ.get("ANTHROPIC_API_KEY")
-        )
+        api_key = os.environ.get("MINIMAX_API_KEY")
         if not api_key:
             raise ValueError(
-                "MiniMaxProvider.from_env: MINIMAX_API_KEY (or "
-                "ANTHROPIC_API_KEY) env var not set"
+                "MiniMaxProvider.from_env: MINIMAX_API_KEY env var not set"
             )
         return cls(
             api_key=api_key,
-            base_url=os.environ.get(
-                "MINIMAX_BASE_URL",
-                os.environ.get(
-                    "ANTHROPIC_BASE_URL", spec.default_base_url
-                ),
-            ),
-            model=os.environ.get(
-                "MINIMAX_MODEL",
-                os.environ.get("ANTHROPIC_MODEL", spec.default_model),
-            ),
+            base_url=os.environ.get("MINIMAX_BASE_URL", spec.default_base_url),
+            model=os.environ.get("MINIMAX_MODEL", spec.default_model),
             timeout_s=float(
-                os.environ.get(
-                    "MINIMAX_TIMEOUT_S", spec.default_timeout_s
-                )
+                os.environ.get("MINIMAX_TIMEOUT_S", spec.default_timeout_s)
             ),
             api_version=os.environ.get(
                 "MINIMAX_API_VERSION", spec.default_api_version
@@ -319,6 +308,7 @@ class MiniMaxProvider(LLMProvider):
                 "MiniMaxProvider requires httpx; install requirements.txt"
             ) from e
 
+        label = self._spec.name
         url = f"{self._base_url}/v1/messages"
         headers = {
             "x-api-key": self._api_key,
@@ -341,24 +331,24 @@ class MiniMaxProvider(LLMProvider):
         except httpx.RequestError as e:
             # 网络瞬时错误（DNS / TCP / 超时）→ 可重试
             raise RetryableError(
-                f"MiniMax network error: {type(e).__name__}: {e}"
+                f"{label} network error: {type(e).__name__}: {e}"
             ) from e
 
         # 429 / 5xx / 529（Anthropic overload）→ 可重试
         if resp.status_code in (429, 529) or resp.status_code >= 500:
             raise RetryableError(
-                f"MiniMax HTTP {resp.status_code}: {resp.text[:200]}"
+                f"{label} HTTP {resp.status_code}: {resp.text[:200]}"
             )
         if resp.status_code >= 400:
             raise ValueError(
-                f"MiniMax HTTP {resp.status_code}: {resp.text[:500]}"
+                f"{label} HTTP {resp.status_code}: {resp.text[:500]}"
             )
 
         try:
             data = resp.json()
         except json.JSONDecodeError as e:
             raise ValueError(
-                f"MiniMax response not JSON: {e}; body={resp.text[:200]}"
+                f"{label} response not JSON: {e}; body={resp.text[:200]}"
             ) from e
 
         try:
@@ -373,7 +363,7 @@ class MiniMaxProvider(LLMProvider):
             output_tokens = int(usage.get("output_tokens", 0))
         except (KeyError, TypeError, ValueError) as e:
             raise ValueError(
-                f"MiniMax response malformed: {e}; "
+                f"{label} response malformed: {e}; "
                 f"keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}"
             ) from e
 
@@ -381,6 +371,58 @@ class MiniMaxProvider(LLMProvider):
             text=str(text),
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+        )
+
+
+class AnthropicProvider(MiniMaxProvider):
+    """官方 Anthropic Messages API。凭据只读 ANTHROPIC_*，绝不落到 MiniMax。"""
+
+    DEFAULT_BASE_URL = PROVIDER_SPECS["anthropic"].default_base_url
+    DEFAULT_MODEL = PROVIDER_SPECS["anthropic"].default_model
+    DEFAULT_TIMEOUT_S = PROVIDER_SPECS["anthropic"].default_timeout_s
+    DEFAULT_API_VERSION = PROVIDER_SPECS["anthropic"].default_api_version
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        model: str | None = None,
+        timeout_s: float | None = None,
+        api_version: str | None = None,
+        spec: ProviderSpec | None = None,
+    ) -> None:
+        if not api_key:
+            raise ValueError(
+                "AnthropicProvider: api_key is required (set ANTHROPIC_API_KEY)"
+            )
+        super().__init__(
+            api_key,
+            base_url=base_url,
+            model=model,
+            timeout_s=timeout_s,
+            api_version=api_version,
+            spec=spec if spec is not None else PROVIDER_SPECS["anthropic"],
+        )
+
+    @classmethod
+    def from_env(cls) -> "AnthropicProvider":
+        spec = PROVIDER_SPECS["anthropic"]
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "AnthropicProvider.from_env: ANTHROPIC_API_KEY env var not set"
+            )
+        return cls(
+            api_key=api_key,
+            base_url=os.environ.get("ANTHROPIC_BASE_URL", spec.default_base_url),
+            model=os.environ.get("ANTHROPIC_MODEL", spec.default_model),
+            timeout_s=float(
+                os.environ.get("ANTHROPIC_TIMEOUT_S", spec.default_timeout_s)
+            ),
+            api_version=os.environ.get(
+                "ANTHROPIC_API_VERSION", spec.default_api_version
+            ),
         )
 
 
@@ -560,10 +602,8 @@ def build_provider(name: str, *, api_key: str, **overrides: Any) -> LLMProvider:
 
     实装：
       - "MiniMax" → MiniMaxProvider（Anthropic 兼容 /v1/messages）
+      - "anthropic" → AnthropicProvider（官方 Anthropic /v1/messages）
       - "openai" / "agnes" → OpenAIProvider（OpenAI /v1/chat/completions）
-
-    其他 provider（anthropic）→ NotImplementedError：
-    spec 已就位等待 DECISION 拍板后实装对应类。
 
     Args:
         name: PROVIDER_SPECS 中的 key
@@ -583,6 +623,8 @@ def build_provider(name: str, *, api_key: str, **overrides: Any) -> LLMProvider:
     spec = PROVIDER_SPECS[name]
     if name == "MiniMax":
         return MiniMaxProvider(api_key=api_key, **overrides)
+    if name == "anthropic":
+        return AnthropicProvider(api_key=api_key, **overrides)
     if spec.protocol == "openai":
         # openai / agnes / 其他 OpenAI 兼容
         return OpenAIProvider(api_key=api_key, spec=spec, **overrides)
@@ -611,35 +653,101 @@ def set_provider(provider: LLMProvider) -> None:
     _PROVIDER = provider
 
 
-def setup_provider_from_env() -> LLMProvider:
-    """CLI 启动时调用：按 env 优先级选择 provider。
+KEY_TO_PROVIDER: dict[str, str] = {
+    "AGNES_API_KEY": "agnes",
+    "MINIMAX_API_KEY": "MiniMax",
+    "ANTHROPIC_API_KEY": "anthropic",
+    "OPENAI_API_KEY": "openai",
+}
+PROVIDER_ALIASES: dict[str, str] = {
+    "minimax": "MiniMax",
+    "claude": "anthropic",
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "agnes": "agnes",
+    "mock": "mock",
+}
 
-    优先级（先匹配先返回）：
-      1. AGNES_API_KEY  → OpenAIProvider.from_env("agnes")
-      2. MINIMAX_API_KEY 或 ANTHROPIC_API_KEY → MiniMaxProvider.from_env()
-      3. OPENAI_API_KEY → OpenAIProvider.from_env("openai")
-      4. 都没设 → MockProvider（无 key 环境的开发/测试）
 
-    Returns:
-        实际使用的 provider
+def available_text_providers(environ: Mapping[str, str] | None = None) -> list[str]:
+    """当前环境里已配置 key 的文本 provider 名（稳定顺序）。"""
+    env = environ if environ is not None else os.environ
+    return [
+        name for key, name in KEY_TO_PROVIDER.items() if env.get(key)
+    ]
+
+
+def _implicit_config_provider() -> str | None:
+    """config.yaml llm.provider（仅当文件存在且不是 auto）。"""
+    from pathlib import Path
+    candidate = Path("config.yaml")
+    if not candidate.exists():
+        return None
+    try:
+        from pipeline.config import load_config
+        name = load_config(candidate).llm.provider
+    except Exception:
+        return None
+    if name and name != "auto":
+        return str(name)
+    return None
+
+
+def resolve_text_provider(
+    *,
+    explicit: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """解析文本 provider，返回 (name, reason)。禁止按 key 存在顺序静默改选。"""
+    env = environ if environ is not None else os.environ
+    if explicit is not None:
+        raw = explicit.strip()
+    else:
+        raw = (env.get(LLM_PROVIDER_ENV) or _implicit_config_provider() or "").strip()
+    if raw.lower() in ("", "auto"):
+        available = available_text_providers(env)
+        if not available:
+            return ("mock", "no API keys set; using MockProvider")
+        if len(available) == 1:
+            only = available[0]
+            key_name = next(k for k, n in KEY_TO_PROVIDER.items() if n == only)
+            return (only, f"single configured key {key_name}")
+        raise AmbiguousProviderError(available)
+    name = PROVIDER_ALIASES.get(raw, PROVIDER_ALIASES.get(raw.lower(), raw))
+    if name == "mock":
+        return ("mock", f"explicit {LLM_PROVIDER_ENV}=mock")
+    if name not in PROVIDER_SPECS or name == "mock":
+        raise ValueError(
+            f"unknown LLM provider {raw!r}; "
+            f"known: {sorted(set(PROVIDER_SPECS) | {'mock'})}"
+        )
+    return (name, f"explicit {LLM_PROVIDER_ENV}={name}")
+
+
+def _build_named_provider(name: str) -> LLMProvider:
+    if name == "mock":
+        return MockProvider()
+    if name == "MiniMax":
+        return MiniMaxProvider.from_env()
+    if name == "anthropic":
+        return AnthropicProvider.from_env()
+    if name in ("openai", "agnes"):
+        return OpenAIProvider.from_env(name)
+    raise ValueError(f"unsupported LLM provider {name!r}")
+
+
+def setup_provider_from_env(*, name: str | None = None) -> LLMProvider:
+    """按显式选择或唯一 key 构造 provider。
+
+    - LLM_PROVIDER / name 指定时用该 provider（缺对应 key 则抛错）
+    - 未指定且恰好一个文本 key → 用该 provider
+    - 未指定且零个 key → MockProvider
+    - 未指定且多个 key → AmbiguousProviderError（禁止静默改选）
     """
-    if os.environ.get("AGNES_API_KEY"):
-        provider = OpenAIProvider.from_env("agnes")
-        set_provider(provider)
-        return provider
-    if os.environ.get("MINIMAX_API_KEY") or os.environ.get(
-        "ANTHROPIC_API_KEY"
-    ):
-        provider = MiniMaxProvider.from_env()
-        set_provider(provider)
-        return provider
-    if os.environ.get("OPENAI_API_KEY"):
-        provider = OpenAIProvider.from_env("openai")
-        set_provider(provider)
-        return provider
-    # 默认 Mock；不打 warning（M0 时代就靠这个无 key 跑）
-    set_provider(MockProvider())
-    return _PROVIDER
+    resolved, _reason = resolve_text_provider(explicit=name)
+    provider = _build_named_provider(resolved)
+    set_provider(provider)
+    return provider
 
 
 def init_db_conn(conn: sqlite3.Connection) -> None:
@@ -684,11 +792,10 @@ def _resolve_model(model_tier: str) -> str:
 
 
 def _cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    """按 MODEL_PRICES 计算实际成本（USD）。"""
+    """按 MODEL_PRICES 计算实际成本（USD）。未知模型拒绝记 0。"""
     prices = MODEL_PRICES.get(model)
     if prices is None:
-        # 未知 model 视为 0（避免阻塞；写日志告警由调用方负责）
-        return 0.0
+        raise UnpricedModelError(model)
     in_cost = prices["input"] * input_tokens / 1_000_000
     out_cost = prices["output"] * output_tokens / 1_000_000
     return in_cost + out_cost

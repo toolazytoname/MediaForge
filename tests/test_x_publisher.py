@@ -261,7 +261,12 @@ class TestPublishThread:
                 raise PublishError(f"X API error: {resp['error']}")
             return resp
 
-        a = XApiPublisher(bearer_token="dummy", http_post=fake_post)
+        a = XApiPublisher(
+            bearer_token="dummy",
+            http_post=fake_post,
+            user_id="user-1",
+            scopes=("tweet.write", "users.read"),
+        )
         return a, captured
 
     def _account(self) -> AccountConfig:
@@ -304,6 +309,26 @@ class TestPublishThread:
         assert result.platform_post_id == "111" or result.platform_post_id == "555"
         # url 字段格式
         assert "x.com" in (result.url or "") or result.url is None
+
+    def test_direct_publish_fails_closed_without_user_context(
+        self, tmp_path: Path,
+    ) -> None:
+        """仅 app-only bearer 时直发必须 fail closed。"""
+        conn = _conn(tmp_path)
+        pub, thread_path = _seed_publication(conn, out_root=tmp_path)
+        bundle = PostBundle(
+            content_id=pub.content_id, title="t",
+            body_path=thread_path, media_paths=(), tags=(), extra={},
+        )
+        from pipeline.publishers.x_api import XApiPublisher
+
+        def must_not_call(*a, **k):
+            raise AssertionError("must not call X API without user-context")
+
+        adapter = XApiPublisher(bearer_token="dummy", http_post=must_not_call)
+        assert adapter.capabilities().direct is False
+        with pytest.raises(PublishError, match="user-context"):
+            adapter.publish(bundle, self._account(), dry_run=False)
 
     def test_dry_run_does_not_call_http(
         self, tmp_path: Path,
@@ -369,7 +394,12 @@ class TestPublishThread:
                 return {"data": {"id": f"id{call_count['n']}", "text": "x"}}
             raise PublishError("server 500")
 
-        adapter = XApiPublisher(bearer_token="dummy", http_post=fake_post)
+        adapter = XApiPublisher(
+            bearer_token="dummy",
+            http_post=fake_post,
+            user_id="user-1",
+            scopes=("tweet.write", "users.read"),
+        )
         try:
             adapter.publish(bundle, self._account(), dry_run=False)
             assert False, "should have raised"
@@ -384,7 +414,7 @@ class TestPublishThread:
 
 
 class TestSafePublishXEndToEnd:
-    def test_x_dry_run_marks_published(
+    def test_x_dry_run_does_not_mark_published(
         self, tmp_path: Path,
     ) -> None:
         from pipeline.publishers.x_api import XApiPublisher
@@ -394,6 +424,9 @@ class TestSafePublishXEndToEnd:
         pub, thread_path = _seed_publication(
             conn, content_id="c_xe2e", out_root=tmp_path,
         )
+        before = conn.execute(
+            "SELECT * FROM publications WHERE id=?", (pub.id,),
+        ).fetchone()
         adapter = XApiPublisher(
             bearer_token="dummy",
             http_post=lambda *a, **k: (_ for _ in ()).throw(
@@ -412,14 +445,13 @@ class TestSafePublishXEndToEnd:
             conn, pub, adapter, config=cfg, account=account,
             dry_run=True, now_iso=_NOW_ISO,
         )
-        assert result.published is True
+        assert result.published is False
         assert result.dry_run is True
-        row = conn.execute(
-            "SELECT status, platform_post_id FROM publications WHERE id=?",
-            (pub.id,),
+        assert (result.platform_post_id or "").startswith("dry-")
+        after = conn.execute(
+            "SELECT * FROM publications WHERE id=?", (pub.id,),
         ).fetchone()
-        assert row["status"] == PublicationStatus.PUBLISHED.value
-        assert (row["platform_post_id"] or "").startswith("dry-")
+        assert tuple(after) == tuple(before)
 
     def test_partial_thread_failure_writes_partial_to_db_error(
         self, tmp_path: Path,
@@ -441,7 +473,12 @@ class TestSafePublishXEndToEnd:
                 return {"data": {"id": f"id{counter['n']}", "text": "x"}}
             raise PublishError("server 500")
 
-        adapter = XApiPublisher(bearer_token="dummy", http_post=fake_post)
+        adapter = XApiPublisher(
+            bearer_token="dummy",
+            http_post=fake_post,
+            user_id="user-1",
+            scopes=("tweet.write", "users.read"),
+        )
         cfg = PublishConfig(
             enabled=True, allowed_platforms=["x"],
             min_gap_hours=4, max_daily_per_account=3,

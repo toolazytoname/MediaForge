@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 from pipeline.publishers.base import (
     AccountConfig,
@@ -36,6 +37,7 @@ from pipeline.publishers.base import (
     PublishResult,
     PublisherAdapter,
 )
+from pipeline.publishers.capabilities import AdapterCapabilities, default_capabilities
 
 
 # ── 常量 ───────────────────────────────────────────────────
@@ -44,28 +46,77 @@ X_API_BASE = "https://api.twitter.com/2/tweets"
 TWEET_MAX_LEN = 260          # M2-3 已 hard-limit（≤ 260 字符，超 X 280 上限留 20 字符余量）
 THREAD_MIN_TWEETS = 3
 THREAD_MAX_TWEETS = 10
+REQUIRED_DIRECT_SCOPES = frozenset({"tweet.write", "users.read"})
 
 
 # ── helpers ────────────────────────────────────────────────
 
 
-def load_x_credentials(path: str | Path) -> str:
-    """secrets/x_<account>.json → bearer_token 字符串。
+@dataclass(frozen=True)
+class XCredentials:
+    """X 凭据。app-only bearer 只能预览；直发必须有 user-context。"""
 
-    文件格式：`{"bearer_token": "AAAA..."}`
-    缺字段抛 ValueError；文件不存在抛 FileNotFoundError。
+    access_token: str
+    user_id: str | None = None
+    scopes: tuple[str, ...] = ()
+    auth_mode: str = "app_bearer"
+
+    @property
+    def has_user_context(self) -> bool:
+        if not self.user_id:
+            return False
+        have = {scope.lower() for scope in self.scopes}
+        return REQUIRED_DIRECT_SCOPES.issubset(have)
+
+
+def _parse_scopes(raw: object) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        parts = raw.replace(",", " ").split()
+        return tuple(part for part in parts if part)
+    if isinstance(raw, (list, tuple)):
+        return tuple(str(item) for item in raw if str(item).strip())
+    return ()
+
+
+def load_x_credential_set(path: str | Path) -> XCredentials:
+    """secrets/x_<account>.json → XCredentials。
+
+    兼容旧格式 ``{"bearer_token": "..."}``（app-only，不可直发）。
+    直发需要 user-context：``user_id`` + scopes 含 tweet.write 与 users.read。
+    token 字段接受 ``access_token`` 或 ``bearer_token``。
     """
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"X credentials file not found: {p}")
     raw = json.loads(p.read_text(encoding="utf-8"))
-    token = raw.get("bearer_token")
+    if not isinstance(raw, dict):
+        raise ValueError(f"X credentials at {p} must be a JSON object")
+    token = raw.get("access_token") or raw.get("bearer_token")
     if not isinstance(token, str) or not token:
         raise ValueError(
-            f"X credentials at {p} missing 'bearer_token' field "
+            f"X credentials at {p} missing 'bearer_token' or 'access_token' "
             f"(got keys: {list(raw.keys())})"
         )
-    return token
+    user_id = raw.get("user_id") or raw.get("user_context_id")
+    if user_id is not None:
+        user_id = str(user_id).strip() or None
+    scopes = _parse_scopes(raw.get("scopes") or raw.get("scope"))
+    auth_mode = str(raw.get("auth_mode") or "").strip()
+    if not auth_mode:
+        auth_mode = "oauth2_user" if user_id else "app_bearer"
+    return XCredentials(
+        access_token=token,
+        user_id=user_id,
+        scopes=scopes,
+        auth_mode=auth_mode,
+    )
+
+
+def load_x_credentials(path: str | Path) -> str:
+    """向后兼容：只返回 access/bearer token 字符串。"""
+    return load_x_credential_set(path).access_token
 
 
 def split_thread(thread_md: str) -> list[str]:
@@ -219,12 +270,39 @@ class XApiPublisher(PublisherAdapter):
         bearer_token: str,
         http_post: Callable[..., dict] | None = None,
         api_base: str = X_API_BASE,
+        user_id: str | None = None,
+        scopes: Iterable[str] = (),
+        credentials: XCredentials | None = None,
     ) -> None:
-        if not bearer_token:
+        if credentials is not None:
+            self._creds = credentials
+        else:
+            if not bearer_token:
+                raise ValueError("XApiPublisher requires bearer_token")
+            self._creds = XCredentials(
+                access_token=bearer_token,
+                user_id=user_id,
+                scopes=tuple(scopes),
+                auth_mode="oauth2_user" if user_id else "app_bearer",
+            )
+        if not self._creds.access_token:
             raise ValueError("XApiPublisher requires bearer_token")
-        self._token = bearer_token
+        self._token = self._creds.access_token
         self._post = http_post or _httpx_post
         self._api = api_base.rstrip("/")
+
+    def capabilities(self) -> AdapterCapabilities:
+        return default_capabilities(
+            direct=self._creds.has_user_context,
+            detail=(
+                "X user-context OAuth present; direct publish enabled"
+                if self._creds.has_user_context
+                else (
+                    "X direct publish disabled: app-only bearer cannot post. "
+                    "Need user_id + tweet.write/users.read (OAuth 2 PKCE / user-context)"
+                )
+            ),
+        )
 
     # ── 本地校验（不触网络） ──
 
@@ -286,6 +364,14 @@ class XApiPublisher(PublisherAdapter):
             )
         tweets = split_thread(thread_path.read_text(encoding="utf-8"))
 
+        if not dry_run and not self._creds.has_user_context:
+            raise PublishError(
+                "X direct publish is disabled: missing verifiable user-context "
+                "OAuth (user_id + scopes tweet.write and users.read). "
+                "App-only bearer tokens cannot create tweets. "
+                "Capability 'direct' is unavailable until user-context is configured."
+            )
+
         # dry-run：不调 HTTP；返回 dry- 模拟结果
         if dry_run:
             return PublishResult(
@@ -345,26 +431,16 @@ class XApiPublisher(PublisherAdapter):
             }, ensure_ascii=False),
         )
 
-        # 全部成功
-        first_id = published_ids[0]
-        return PublishResult(
-            platform_post_id=first_id,
-            url=f"https://x.com/i/status/{first_id}",
-            raw_response=json.dumps({
-                "platform": "x",
-                "account": account.id,
-                "thread_ids": published_ids,
-                "tweet_count": len(tweets),
-            }, ensure_ascii=False),
-        )
-
 
 __all__ = [
     "XApiPublisher",
+    "XCredentials",
     "load_x_credentials",
+    "load_x_credential_set",
     "split_thread",
     "X_API_BASE",
     "TWEET_MAX_LEN",
     "THREAD_MIN_TWEETS",
     "THREAD_MAX_TWEETS",
+    "REQUIRED_DIRECT_SCOPES",
 ]

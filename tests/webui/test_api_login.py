@@ -83,9 +83,8 @@ def _patch_run_login(monkeypatch, *, return_value=None, side_effect=None):
 
 def test_endpoint_source_path_contains_login() -> None:
     """accounts.py source contains POST /accounts/{platform}/{account}/login route."""
-    source = Path(
-        "/Users/lazy/Code/crack/MediaForge/pipeline/webui/api/accounts.py",
-    ).read_text(encoding="utf-8")
+    from tests.repo_root import REPO_ROOT
+    source = (REPO_ROOT / "pipeline/webui/api/accounts.py").read_text(encoding="utf-8")
     assert "/accounts/{platform}/{account}/login" in source
 
 

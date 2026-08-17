@@ -10,7 +10,7 @@ import { useSettingsStore } from '../stores'
 import { storeToRefs } from 'pinia'
 
 const store = useSettingsStore()
-const { config, doctor, keyGroups, loading } = storeToRefs(store)
+const { config, doctor, keyGroups, textProvider, loading } = storeToRefs(store)
 
 // 每个 key 名对应的输入框暂存值（不回填已保存的明文，只在提交时读取）
 const pendingValues = reactive<Record<string, string>>({})
@@ -126,6 +126,20 @@ async function onSavePlatforms() {
     </a-card>
 
     <a-card title="API Key 配置" style="margin-bottom: 16px">
+      <a-alert
+        v-if="textProvider?.error"
+        type="warning"
+        show-icon
+        style="margin-bottom: 12px"
+        :message="`文本 provider 未选定：${textProvider.error}`"
+      />
+      <a-alert
+        v-else-if="textProvider?.name"
+        type="info"
+        show-icon
+        style="margin-bottom: 12px"
+        :message="`当前文本 provider：${textProvider.name}（${textProvider.reason}）`"
+      />
       <div v-for="group in keyGroups" :key="group.group" style="margin-bottom: 16px">
         <h4>{{ group.label }}</h4>
         <a-space v-for="item in group.keys" :key="item.name" style="width: 100%; margin-bottom: 8px" align="baseline">

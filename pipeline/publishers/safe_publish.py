@@ -89,13 +89,15 @@ def safe_publish(
       2. adapter.platform 不在 allowed_platforms → 返回
       3. scheduled_at > now → 返回
 
-    写 DB 的部分（事务化）：
+    写 DB 的部分（仅 dry_run=False；事务化）：
       A. 乐观锁抢锁：UPDATE ... WHERE status='queued'（rowcount==1 才继续）
       B. INTENT 日志
       C. adapter.validate(bundle) — 本地格式校验
-      D. adapter.publish(bundle, account, dry_run) — 真实发布
+      D. adapter.publish(bundle, account, dry_run=False) — 真实发布
       E. 落库 status=published + platform_post_id + url
          或 status=failed + error
+
+    dry_run=True 只生成预览结果，不抢锁、不改 publications / 其它正式业务表。
     """
     logger = get_logger("publish", log_dir=log_dir)
 
@@ -134,6 +136,9 @@ def safe_publish(
             reason=f"content not found: {publication.content_id}",
         )
     bundle = build_post_bundle(conn, publication, content=content)
+
+    if dry_run:
+        return _preview_only(logger, publication, adapter, account, bundle)
 
     # ── 第二道锁：乐观锁抢锁 ──
     now = db.now_utc()
@@ -209,6 +214,57 @@ def safe_publish(
         platform_post_id=result.platform_post_id,
         url=result.url,
         dry_run=dry_run,
+    )
+
+
+def _preview_only(
+    logger,
+    publication: Publication,
+    adapter: PublisherAdapter,
+    account: AccountConfig,
+    bundle: PostBundle,
+) -> SafePublishResult:
+    """dry-run 预览：调 adapter 但不改正式业务表。"""
+    log_event(
+        logger, 20,
+        f"{INTENT_LOG_PREFIX} {publication.id} "
+        f"platform={adapter.platform} account={account.id} "
+        f"dry_run=True preview_only",
+        stage="publish", ref_id=publication.id,
+    )
+    issues = adapter.validate(bundle)
+    if issues:
+        return SafePublishResult(
+            published=False,
+            reason=f"validate: {'; '.join(issues)}",
+            dry_run=True,
+        )
+    try:
+        result = adapter.publish(bundle, account, dry_run=True)
+    except PublishError as e:
+        log_event(
+            logger, 30,
+            f"dry-run preview failed: {e}",
+            stage="publish", ref_id=publication.id,
+        )
+        return SafePublishResult(
+            published=False, reason=f"publish error: {e}", dry_run=True,
+        )
+    except Exception as e:
+        log_event(
+            logger, 40,
+            f"dry-run preview unexpected error: {e!r}",
+            stage="publish", ref_id=publication.id,
+        )
+        return SafePublishResult(
+            published=False, reason=f"unexpected error: {e}", dry_run=True,
+        )
+    return SafePublishResult(
+        published=False,
+        reason="dry-run preview",
+        platform_post_id=result.platform_post_id,
+        url=result.url,
+        dry_run=True,
     )
 
 

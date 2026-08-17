@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
-# 与 llm.py::setup_provider_from_env 优先级链同源
+# 与 llm.py::setup_provider_from_env 的已知文本 key 同源（选择须显式）
 LLM_ENV_VARS = ("AGNES_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 
 # 与 image_gen.py::setup_provider_from_env 优先级链同源。OPENAI_API_KEY 是
@@ -25,6 +26,37 @@ LLM_ENV_VARS = ("AGNES_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY", "OPENAI
 IMAGE_ENV_VARS = ("OPENAI_API_KEY", "MINIMAX_IMAGE_API_KEY", "MINIMAX_API_KEY")
 
 DEFAULT_ENV_SECRETS_PATH = "secrets/env.json"
+SECRET_FILE_MODE = 0o600
+LLM_PROVIDER_ENV = "LLM_PROVIDER"
+
+
+def atomic_write_secret(path: str | Path, data: bytes, *, mode: int = SECRET_FILE_MODE) -> None:
+    """原子替换写入秘密文件，并设置最小权限（默认 0600）。"""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{p.name}.", suffix=".tmp", dir=str(p.parent),
+    )
+    try:
+        try:
+            os.fchmod(fd, mode)
+        except OSError:
+            pass
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, p)
+        try:
+            os.chmod(p, mode)
+        except OSError:
+            pass
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _read(path: str | Path) -> dict[str, str]:
@@ -38,9 +70,8 @@ def _read(path: str | Path) -> dict[str, str]:
 
 
 def _write(path: str | Path, data: dict[str, str]) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    payload = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    atomic_write_secret(path, payload)
 
 
 def load_env_secrets(path: str | Path = DEFAULT_ENV_SECRETS_PATH) -> None:
@@ -86,6 +117,9 @@ __all__ = [
     "LLM_ENV_VARS",
     "IMAGE_ENV_VARS",
     "DEFAULT_ENV_SECRETS_PATH",
+    "SECRET_FILE_MODE",
+    "LLM_PROVIDER_ENV",
+    "atomic_write_secret",
     "load_env_secrets",
     "write_env_secret",
     "delete_env_secret",

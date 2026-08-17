@@ -59,6 +59,7 @@ class TestWriteDeleteEnvSecret:
 
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data == {"MINIMAX_API_KEY": "sk-123"}
+        assert (path.stat().st_mode & 0o777) == 0o600
 
     def test_write_preserves_other_keys(self, tmp_path: Path) -> None:
         path = tmp_path / "env.json"

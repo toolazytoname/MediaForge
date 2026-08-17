@@ -458,12 +458,12 @@ class XiaohongshuPublisher(PublisherAdapter):
                 url=url,
                 raw_response=stdout[-4000:],  # 截断防爆
             )
-        # state == "unknown" + EXIT_OK → CLI 退出 0 但没发状态行
-        # 视作软成功，URL/post_id 拿不到也返回（编排层靠 exit_code 判定）
-        return PublishResult(
-            platform_post_id=None,
-            url=None,
-            raw_response=stdout[-4000:],
+        # exit 0 但状态未知：不得记成功。编排层只能看到明确
+        # published / ready_to_publish / 失败，不能把 unknown 当成功。
+        raise PublishError(
+            f"{PLATFORM}/{account.id} CLI exit={exit_code} but status is "
+            f"{state!r} (no protocol success receipt); "
+            f"refusing to treat unknown receipt as publish success"
         )
 
 

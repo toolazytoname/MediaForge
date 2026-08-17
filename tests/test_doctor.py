@@ -550,13 +550,12 @@ class TestNoSecretLeakage:
             secrets_dir=str(tmp_path / "secrets"),
         )
         all_text = "\n".join(r.hint for r in results)
-        # 绝不能出现 key 值
+        # 绝不能出现 key 值或其独特正文（勿用裸 "sk-"：临时路径 task- 会误伤）
         assert fake_key not in all_text, (
             f"hint 泄露了 key 值！all_hints={all_text!r}"
         )
-        # 也不应出现 sk- 前缀
-        assert "sk-" not in all_text, (
-            f"hint 出现 'sk-' 前缀（疑似 key 泄露）！all_hints={all_text!r}"
+        assert "a1b2c3d4e5f6" not in all_text, (
+            f"hint 出现 key 正文（疑似泄露）！all_hints={all_text!r}"
         )
 
     def test_str_check_result_never_contains_key(

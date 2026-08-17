@@ -407,16 +407,18 @@ class TestE2EDryRun:
     ) -> None:
         """case B: publish.enabled=true + dry_run=True → adapter.publish 被调 1 次且 dry_run=True。
 
-        断言（§9 必测第 4 条）：
-          - SafePublishResult(published=True, dry_run=True)
+        断言：
+          - SafePublishResult(published=False, dry_run=True)
           - adapter.publishes == [True]（被调 1 次，dry_run=True）
           - adapter 返回 post_id 含 'dry-' 前缀
-          - publication status 推到 published（safe_publish 不区分 dry_run vs 真发；
-            测试隔离靠 adapter 自身行为——它识别 dry_run 返回 dry- 前缀 post_id）
+          - 正式 publications 行逐字段不变
         """
         conn, pub, account = self._run_pipeline_to_queued_publication(
             tmp_path
         )
+        before = conn.execute(
+            "SELECT * FROM publications WHERE id=?", (pub.id,),
+        ).fetchone()
         adapter = CountingMockAdapter()
         cfg = PublishConfig(
             enabled=True,
@@ -440,16 +442,13 @@ class TestE2EDryRun:
         # adapter.publish 被调 1 次，dry_run=True
         assert adapter.publishes == [True]
         assert adapter.validate_calls == 1
-        # SafePublishResult 反映 dry_run 模式
-        assert result.published is True
+        # dry-run 不是真实发布
+        assert result.published is False
         assert result.dry_run is True
-        # adapter 在 dry_run 下返回 dry- 前缀 post_id
         assert result.platform_post_id == "dry-post_001"
-        # DB 状态被推到 published（safe_publish 不区分 dry_run；
-        # 测试隔离靠 adapter 自身返回 dry- 前缀 post_id）
-        row = conn.execute(
-            "SELECT status, platform_post_id FROM publications WHERE id=?",
-            (pub.id,),
+        after = conn.execute(
+            "SELECT * FROM publications WHERE id=?", (pub.id,),
         ).fetchone()
-        assert row["status"] == PublicationStatus.PUBLISHED.value
-        assert row["platform_post_id"] == "dry-post_001"
+        assert tuple(after) == tuple(before)
+        assert after["status"] == PublicationStatus.QUEUED.value
+        assert after["platform_post_id"] is None
