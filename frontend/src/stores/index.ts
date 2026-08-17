@@ -650,7 +650,7 @@ export interface LoginGuidance {
   platform: string
   command: string
   notes: string
-  auth_type?: 'scan_qr' | 'config_file'
+  auth_type?: 'scan_qr' | 'config_file' | 'oauth_user'
 }
 
 // U7-7: 一键登录 run 状态（前端轮询持有）

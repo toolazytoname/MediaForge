@@ -111,6 +111,18 @@ def _build_youtube(account: AccountConfig, config: Any) -> PublisherAdapter:
     return YoutubePublisher(credentials=creds)
 
 
+def _build_tiktok(account: AccountConfig, config: Any) -> PublisherAdapter:
+    from pipeline.publishers.tiktok import TikTokPublisher, load_tiktok_credential_set
+    creds = load_tiktok_credential_set(account.credentials_path)
+    return TikTokPublisher(credentials=creds)
+
+
+def _build_instagram(account: AccountConfig, config: Any) -> PublisherAdapter:
+    from pipeline.publishers.instagram import InstagramPublisher, load_instagram_credential_set
+    creds = load_instagram_credential_set(account.credentials_path)
+    return InstagramPublisher(credentials=creds)
+
+
 def _build_wechat_mp(account: AccountConfig, config: Any) -> PublisherAdapter:
     """公众号 → WechatMpPublisher（官方草稿箱 API，M13）。"""
     from pipeline.publishers.wechat_mp import WechatMpPublisher, load_wechat_credentials
@@ -125,6 +137,8 @@ _BUILDERS: dict[str, Callable[[AccountConfig, Any], PublisherAdapter]] = {
     "douyin": _build_douyin,
     "wechat_mp": _build_wechat_mp,
     "youtube": _build_youtube,
+    "tiktok": _build_tiktok,
+    "instagram": _build_instagram,
 }
 
 
@@ -161,7 +175,10 @@ def build_adapters(
 
     out: dict[str, list[tuple[AccountConfig, PublisherAdapter]]] = {}
     platforms = cfg.platforms.model_dump(exclude_none=False)
-    for platform_name in ("x", "toutiao", "xiaohongshu", "douyin", "wechat_mp", "youtube"):
+    for platform_name in (
+        "x", "toutiao", "xiaohongshu", "douyin", "wechat_mp",
+        "youtube", "tiktok", "instagram",
+    ):
         plat_obj = getattr(cfg.platforms, platform_name, None)
         if plat_obj is None:
             continue

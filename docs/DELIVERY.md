@@ -1,3 +1,16 @@
+## 官方平台 Wave 2（LAZY-81）
+
+TikTok Content Posting API、Instagram Professional `container` + `media_publish`、X 用户 OAuth：
+
+- 缺 user-context / 必要 scope 时 `direct=false` 且 fail closed
+- TikTok 未审核 client 只允许 Inbox Upload（用户在 App 内继续编辑），不得宣称公开 Direct Post
+- Instagram 无公开可抓取 HTTPS 媒体 URL、无 Professional 授权或无应用审核时 fail closed
+- X 发帖必须是 OAuth 2.0 PKCE 或 OAuth 1.0a user-context；app-only bearer 不能发帖
+- 成功必须有平台 id（Instagram 还有 permalink）；未知回执记失败
+- `oauth_token_metadata` 只存 key_ref / last4 / scopes，不存 access_token
+- 账号中心不再把抖音等官方 OAuth 平台画成扫码/cookie 一键登录
+- 无真实 App 资质时只用 mock/契约测试；真人 3 天 smoke 未测
+
 ## 官方平台 Wave 1（LAZY-71）
 
 抖音默认走官方 OAuth `video.create` / 图文 `create_image_text`，YouTube 走 `videos.insert`：

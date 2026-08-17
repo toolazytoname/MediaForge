@@ -321,7 +321,7 @@ def test_unsupported_platform_returns_400(
     assert body["detail"]["error"]["code"] == "platform_not_supported"
     assert "toutiao" in body["detail"]["error"]["message"]
     assert "xiaohongshu" in body["detail"]["error"]["message"]
-    assert "douyin" in body["detail"]["error"]["message"]
+    assert "douyin" not in body["detail"]["error"]["message"]
 
 
 def test_wechat_mp_returns_400(
@@ -332,6 +332,17 @@ def test_wechat_mp_returns_400(
     """wechat_mp not in whitelist (config file path) -> 400."""
     response = client.post("/api/v1/accounts/wechat_mp/main/login", json={})
     assert response.status_code == 400
+
+
+def test_douyin_oauth_is_not_web_login(
+    client: TestClient,
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Official OAuth Douyin is not a QR one-click login platform."""
+    response = client.post("/api/v1/accounts/douyin/main/login", json={})
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"]["code"] == "platform_not_supported"
 
 
 # progress message propagation ────────────────────────────

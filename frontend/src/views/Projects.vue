@@ -103,7 +103,7 @@ const wechatCopy = computed(() => capabilitiesStore.forPlatform('wechat_mp')?.ui
 const toutiaoCopy = computed(() => capabilitiesStore.forPlatform('toutiao')?.ui.confirm_copy ?? '仅本地安全导出，供人工导入。不会直发。')
 const wechatLabel = computed(() => capabilitiesStore.forPlatform('wechat_mp')?.label ?? '微信公众号')
 const toutiaoLabel = computed(() => capabilitiesStore.forPlatform('toutiao')?.label ?? '今日头条')
-const officialCapabilities = computed(() => capabilitiesStore.items.filter(item => item.platform === 'douyin' || item.platform === 'youtube'))
+const officialCapabilities = computed(() => capabilitiesStore.items.filter(item => ['douyin', 'youtube', 'tiktok', 'instagram', 'x'].includes(item.platform)))
 
 async function loadPage(): Promise<void> {
   detailError.value = null

@@ -5,7 +5,7 @@ GET /api/v1/accounts/login-guidance — 每平台登录指引（静态）
 
 U7-7:
 POST /api/v1/accounts/{platform}/{account}/login — Web UI 一键登录触发端点
-  - 校验 platform ∈ {toutiao,xiaohongshu,douyin}（白名单）
+  - 校验 platform ∈ {toutiao,xiaohongshu}（扫码白名单；官方 OAuth 不在此列）
   - 一键登录的 mutex / 后台任务 / progress 监听全部由
     `pipeline.webui.login_bridge` 负责（accounts.py 不直接 import
     run_login / PublishError / execute_login_run，避免循环 import 风险）
@@ -35,9 +35,9 @@ router = APIRouter(tags=["accounts"])
 _LOGGER = logging.getLogger("pipeline.webui.api.accounts")
 
 
-# Web UI 支持的一键登录平台白名单（与 _PLATFORM_LOGIN_DISPATCH 一致）
-# x / wechat_mp 走配置文件，不属于扫码登录流程
-_SUPPORTED_WEB_LOGIN = frozenset({"toutiao", "xiaohongshu", "douyin"})
+# Web UI 支持的一键登录平台白名单（扫码 / cookie）。
+# 官方 OAuth 平台（抖音 / YouTube / TikTok / Instagram / X / 公众号）不是扫码路径。
+_SUPPORTED_WEB_LOGIN = frozenset({"toutiao", "xiaohongshu"})
 
 
 @router.get("/accounts")
@@ -78,9 +78,12 @@ def login_guidance() -> dict[str, Any]:
             },
             {
                 "platform": "x",
-                "auth_type": "config_file",
-                "command": "(env: X_BEARER_TOKEN=...)",
-                "notes": "X 用 API v2 OAuth bearer token；非扫码路径",
+                "auth_type": "oauth_user",
+                "command": "secrets/x_<account>.json",
+                "notes": (
+                    "X 用户 OAuth 2.0 PKCE（或 OAuth 1.0a user-context）。"
+                    "app-only bearer 不能发帖。需要 user_id + tweet.write/users.read。"
+                ),
             },
             {
                 "platform": "douyin",
@@ -88,7 +91,7 @@ def login_guidance() -> dict[str, Any]:
                 "command": "secrets/douyin_<account>.json",
                 "notes": (
                     "默认走官方 OAuth：access_token + open_id + video.create。"
-                    "Playwright 扫码仅当 platforms.douyin.assisted=true。"
+                    "不是扫码/cookie 一键登录。Playwright 仅当 platforms.douyin.assisted=true。"
                 ),
             },
             {
@@ -109,6 +112,24 @@ def login_guidance() -> dict[str, Any]:
                 "notes": (
                     "YouTube Data API OAuth（youtube.upload）。"
                     "未完成应用审核时只允许 private/unlisted，不得宣称可公开直发。"
+                ),
+            },
+            {
+                "platform": "tiktok",
+                "auth_type": "oauth_user",
+                "command": "secrets/tiktok_<account>.json",
+                "notes": (
+                    "TikTok Content Posting API：access_token + open_id + video.publish。"
+                    "未审核 client 只允许 Inbox Upload，由用户在 App 内继续编辑，不得宣称公开直发。"
+                ),
+            },
+            {
+                "platform": "instagram",
+                "auth_type": "oauth_user",
+                "command": "secrets/instagram_<account>.json",
+                "notes": (
+                    "Instagram Professional：ig_user_id + instagram_content_publish。"
+                    "需要公开可抓取 HTTPS 媒体 URL 与应用审核；缺任一条件 fail-closed。"
                 ),
             },
         ]
