@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from pipeline import master_documents as master_store
 from pipeline import research as research_store
+from pipeline.autonomy import AutonomyError, require_llm
 from pipeline.creators import llm
 from pipeline.webui import deps
 from pipeline.webui.api import projects as projects_api
@@ -124,7 +125,10 @@ def _draft_prompt(project_id: str) -> str:
 def propose_draft(project_id: str) -> dict[str, str]:
     """Generate a review-only first draft; never persist or overwrite the master."""
     try:
+        require_llm(project_id, projects_root=_root())
         prompt = _draft_prompt(project_id)
+    except AutonomyError as error:
+        raise _error(error.http_status, error.code, error) from error
     except (master_store.MasterDocumentError, research_store.ResearchManifestError,
             projects_api.project_store.ProjectManifestError) as error:
         if str(error) == f"project not found: {project_id}":
@@ -196,6 +200,7 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
     this handler.
     """
     try:
+        require_llm(project_id, projects_root=_root())
         action, selection = _suggestion_input(body)
         if action not in {"clarify", "shorten", "change_voice", "add_counterpoint"}:
             raise master_store.MasterDocumentError(
@@ -209,6 +214,8 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
                 "selection must occur exactly once in the current master body"
             )
         prompt = _suggestion_prompt(project_id, master, action, selection)
+    except AutonomyError as error:
+        raise _error(error.http_status, error.code, error) from error
     except master_store.MasterDocumentError as error:
         raise _master_error(project_id, error) from error
     if not _llm_is_configured():

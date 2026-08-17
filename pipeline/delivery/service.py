@@ -23,7 +23,8 @@ from pipeline.delivery.store import (
     upsert_binding,
 )
 from pipeline.models import Content, ContentStatus, Publication, PublicationStatus, Topic, TopicStatus
-from pipeline.publishers.base import AccountConfig, PublishResult, PublisherAdapter
+from pipeline.autonomy import AutonomyError, require_delivery_mode
+from pipeline.publishers.base import AccountConfig, PublishError, PublishResult, PublisherAdapter
 from pipeline.publishers.capability_registry import mode_allowed
 from pipeline.publishers.safe_publish import SafePublishResult, safe_publish
 from pipeline.utils.ids import new_id
@@ -151,6 +152,10 @@ def create_export_delivery(
 ) -> DeliveryResult:
     _require_bridge(cfg)
     state = _approval_or_409(project_id, projects_root)
+    try:
+        require_delivery_mode(project_id, "export", projects_root=projects_root)
+    except AutonomyError as error:
+        raise DeliveryError(str(error), http_status=error.http_status, code=error.code) from error
     snapshot = state.approval.snapshot
     assert snapshot is not None
     fingerprint = approvals.approval_fingerprint(snapshot)
@@ -212,6 +217,10 @@ def create_draft(
 ) -> DeliveryResult:
     _require_bridge(cfg)
     state = _approval_or_409(project_id, projects_root)
+    try:
+        require_delivery_mode(project_id, "draft", projects_root=projects_root)
+    except AutonomyError as error:
+        raise DeliveryError(str(error), http_status=error.http_status, code=error.code) from error
     snapshot = state.approval.snapshot
     assert snapshot is not None
     deliverable = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
@@ -292,7 +301,7 @@ def create_draft(
     ))
 
     result = safe_publish(
-        conn, publication, adapter, config=publish_config, account=account,
+        conn, publication, _RequireMediaId(adapter), config=publish_config, account=account,
         dry_run=False, now_iso=now,
     )
     refreshed = db.get_publication(conn, publication.id)
@@ -358,6 +367,26 @@ def _draft_outcome(
     if "unknown" in reason.lower():
         return "unknown", reason, None, None
     return "failure", reason, None, None
+
+
+class _RequireMediaId:
+    """Adapter wrapper: a wechat draft without media_id must fail, not publish."""
+
+    def __init__(self, inner: PublisherAdapter):
+        self._inner = inner
+        self.platform = inner.platform
+
+    def capabilities(self):
+        return self._inner.capabilities()
+
+    def validate(self, bundle):
+        return self._inner.validate(bundle)
+
+    def publish(self, bundle, account, dry_run=False) -> PublishResult:
+        result = self._inner.publish(bundle, account, dry_run)
+        if not dry_run and not result.platform_post_id:
+            raise PublishError("wechat draft succeeded without media_id")
+        return result
 
 
 def _single_platform(deliverable: Deliverable) -> str:

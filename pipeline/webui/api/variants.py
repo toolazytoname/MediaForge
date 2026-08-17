@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pipeline import master_documents, project_exports, research
 from pipeline import variants as variant_store
 from pipeline import visuals
+from pipeline.autonomy import AutonomyError, require_llm
 from pipeline.creators import llm
 from pipeline.webui import deps
 from pipeline.webui.api import projects as projects_api
@@ -89,31 +90,52 @@ def _adapt_prompt(project_id: str, platform: str) -> str:
 def create_variant(project_id: str, platform: str, body: dict[str, Any] | None = Body(None)):
     try:
         existing = next((item for item in variant_store.load_variants(project_id, projects_root=_root()).variants if item.platform == platform), None)
-        if existing is not None:
+        if existing is not None and (body is None or body.get("adapt_with_ai") is True):
             return JSONResponse(status_code=200, content=asdict(existing))
         if body is None:
             result = variant_store.create_from_master(project_id, platform, now=_now(), projects_root=_root())
-        else:
-            if set(body) != {"adapt_with_ai"} or body["adapt_with_ai"] is not True:
-                raise variant_store.VariantsError("variant creation accepts only adapt_with_ai=true")
-            if not _llm_is_configured():
-                raise _err(503, "llm_provider_unavailable", "AI provider is not configured; create a copy and edit manually instead")
-            prompt = _adapt_prompt(project_id, platform)
-            conn = deps.get_conn()
-            try:
-                adapted = llm.complete_json(
-                    prompt, stage=f"variant_{platform}", ref_id=project_id,
-                    model_tier="creative", max_tokens=6000, conn=conn,
-                    parse=_parse_adaptation,
-                )
-            finally:
-                conn.close()
+            return JSONResponse(status_code=201, content=asdict(result))
+        if set(body) == {"title", "summary", "body"}:
             result = variant_store.create_adapted(
-                project_id, platform, **adapted, now=_now(), projects_root=_root(),
+                project_id, platform, title=body["title"], summary=body["summary"],
+                body=body["body"], now=_now(), projects_root=_root(),
             )
-        return JSONResponse(status_code=201, content=asdict(result))
+            payload = asdict(result)
+            payload["persisted"] = True
+            return JSONResponse(status_code=201, content=payload)
+        if set(body) != {"adapt_with_ai"} or body["adapt_with_ai"] is not True:
+            raise variant_store.VariantsError("variant creation accepts adapt_with_ai=true or an explicit title/summary/body accept")
+        _project, policy = require_llm(project_id, projects_root=_root())
+        if not _llm_is_configured():
+            raise _err(503, "llm_provider_unavailable", "AI provider is not configured; create a copy and edit manually instead")
+        prompt = _adapt_prompt(project_id, platform)
+        conn = deps.get_conn()
+        try:
+            adapted = llm.complete_json(
+                prompt, stage=f"variant_{platform}", ref_id=project_id,
+                model_tier="creative", max_tokens=6000, conn=conn,
+                parse=_parse_adaptation,
+            )
+        finally:
+            conn.close()
+        if not policy.persist_ai_adapt:
+            return JSONResponse(status_code=200, content={
+                "persisted": False,
+                "platform": platform,
+                "title": adapted["title"],
+                "summary": adapted["summary"],
+                "body": adapted["body"],
+            })
+        result = variant_store.create_adapted(
+            project_id, platform, **adapted, now=_now(), projects_root=_root(),
+        )
+        payload = asdict(result)
+        payload["persisted"] = True
+        return JSONResponse(status_code=201, content=payload)
     except HTTPException:
         raise
+    except AutonomyError as error:
+        raise _err(error.http_status, error.code, error) from error
     except variant_store.VariantsError as error:
         raise _variant_error(project_id, error) from error
     except Exception as error:

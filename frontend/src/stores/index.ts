@@ -1581,18 +1581,37 @@ export interface PlatformVariantVersion { version: number; title: string; summar
 export interface PlatformVariant { platform: 'wechat_mp' | 'toutiao'; title: string; summary: string; body: string; asset_ids: string[]; source_master_version: number; version: number; locked: boolean; manually_modified: boolean; upstream_updated: boolean; created_at: string; updated_at: string; history: PlatformVariantVersion[] }
 export interface VariantSet { project_id: string; variants: PlatformVariant[] }
 
+export interface VariantAdaptationPreview {
+  persisted: false
+  platform: PlatformVariant['platform']
+  title: string
+  summary: string
+  body: string
+}
+
 export const useVariantsStore = defineStore('variants', () => {
   const variants = ref<PlatformVariant[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
   async function load(projectId: string) { loading.value = true; error.value = null; try { variants.value = (await api.get<VariantSet>(`/projects/${projectId}/variants`)).data.variants } catch (e) { error.value = unwrapError(e) } finally { loading.value = false } }
-  async function create(projectId: string, platform: PlatformVariant['platform'], adaptWithAi = false) { const item = (await api.post<PlatformVariant>(`/projects/${projectId}/variants/${platform}`, adaptWithAi ? { adapt_with_ai: true } : undefined, { timeout: GENERATION_TIMEOUT_MS })).data; variants.value = variants.value.some(x => x.platform === platform) ? variants.value.map(x => x.platform === platform ? item : x) : [...variants.value, item]; return item }
+  async function create(projectId: string, platform: PlatformVariant['platform'], adaptWithAi = false): Promise<PlatformVariant | VariantAdaptationPreview> {
+    const item = (await api.post<PlatformVariant | VariantAdaptationPreview>(`/projects/${projectId}/variants/${platform}`, adaptWithAi ? { adapt_with_ai: true } : undefined, { timeout: GENERATION_TIMEOUT_MS })).data
+    if ('persisted' in item && item.persisted === false) return item
+    const saved = item as PlatformVariant
+    variants.value = variants.value.some(x => x.platform === platform) ? variants.value.map(x => x.platform === platform ? saved : x) : [...variants.value, saved]
+    return saved
+  }
+  async function acceptAdaptation(projectId: string, platform: PlatformVariant['platform'], input: Pick<PlatformVariant, 'title' | 'summary' | 'body'>) {
+    const item = (await api.post<PlatformVariant>(`/projects/${projectId}/variants/${platform}`, input)).data
+    variants.value = variants.value.some(x => x.platform === platform) ? variants.value.map(x => x.platform === platform ? item : x) : [...variants.value, item]
+    return item
+  }
   async function save(projectId: string, platform: PlatformVariant['platform'], input: Pick<PlatformVariant, 'title' | 'summary' | 'body' | 'asset_ids'>) { const item = (await api.put<PlatformVariant>(`/projects/${projectId}/variants/${platform}`, input)).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   async function lock(projectId: string, platform: PlatformVariant['platform'], locked: boolean) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/lock`, { locked })).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   async function checkUpstream(projectId: string, platform: PlatformVariant['platform']) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/check-upstream`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   async function acknowledgeMaster(projectId: string, platform: PlatformVariant['platform']) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/acknowledge-master`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
   async function restore(projectId: string, platform: PlatformVariant['platform'], version: number) { const item = (await apiPost<PlatformVariant>(`/projects/${projectId}/variants/${platform}/versions/${version}/restore`, {})).data; variants.value = variants.value.map(x => x.platform === platform ? item : x); return item }
-  return { variants, loading, error, load, create, save, lock, checkUpstream, acknowledgeMaster, restore }
+  return { variants, loading, error, load, create, acceptAdaptation, save, lock, checkUpstream, acknowledgeMaster, restore }
 })
 
 export interface ApprovalCheck { id: string; status: 'pending' | 'approved'; note: string | null; approved_by: string | null; approved_at: string | null }
@@ -1618,8 +1637,72 @@ export const useApprovalsStore = defineStore('approvals', () => {
   async function recheck(projectId: string, actor: string) { status.value = (await apiPost<ApprovalStatus>(`/projects/${projectId}/approval/recheck`, { actor })).data; return status.value }
   async function decide(projectId: string, checkId: string, approved: boolean, actor: string, note?: string) { status.value = (await apiPost<ApprovalStatus>(`/projects/${projectId}/approval/checks/${checkId}`, { approved, actor, ...(note ? { note } : {}) })).data; return status.value }
   async function exportPackage(projectId: string) { return (await apiPost<ProjectExportResult>(`/projects/${projectId}/export`, {})).data }
-  async function createWechatDraft(projectId: string, actor: string) {
-    return (await apiPost<DeliveryAttemptResult>(`/projects/${projectId}/deliverables/dlv_article_wechat_mp/draft`, { actor })).data
+  async function createWechatDraft(projectId: string, actor: string, retryOfId?: string | null) {
+    return (await apiPost<DeliveryAttemptResult>(`/projects/${projectId}/deliverables/dlv_article_wechat_mp/draft`, {
+      actor,
+      ...(retryOfId ? { retry_of_id: retryOfId } : {}),
+    })).data
   }
   return { status, loading, error, load, recheck, decide, exportPackage, createWechatDraft }
+})
+
+export interface CapabilityItem {
+  platform: string
+  label: string
+  ui: { preview_kind: string; confirm_copy: string; fields: string[] }
+  delivery: { preview: boolean; export: boolean; draft: boolean; direct: boolean }
+}
+
+export interface NextActionResult {
+  project_id: string
+  autonomy: ProjectItem['autonomy']
+  policy: { key: string; label: string; help: string; llm_allowed: boolean; image_gen_allowed: boolean }
+  research_ready: boolean
+  master_ready: boolean
+  approval_complete: boolean
+  cta: { key: string; label: string }
+}
+
+export interface LibraryAsset extends VisualAsset {
+  project_id: string
+  project_title: string
+  url: string | null
+}
+
+export const useCapabilitiesStore = defineStore('capabilities', () => {
+  const items = ref<CapabilityItem[]>([])
+  async function load() {
+    items.value = (await api.get<{ items: CapabilityItem[] }>('/capabilities')).data.items
+  }
+  function forPlatform(platform: string): CapabilityItem | undefined {
+    return items.value.find((item) => item.platform === platform)
+  }
+  return { items, load, forPlatform }
+})
+
+export const useWorkspaceStore = defineStore('workspace', () => {
+  const nextAction = ref<NextActionResult | null>(null)
+  async function load(projectId: string) {
+    nextAction.value = (await api.get<NextActionResult>(`/projects/${projectId}/next-action`)).data
+    return nextAction.value
+  }
+  return { nextAction, load }
+})
+
+export const useLibraryStore = defineStore('visual-library', () => {
+  const items = ref<LibraryAsset[]>([])
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+  async function load() {
+    loading.value = true
+    error.value = null
+    try {
+      items.value = (await api.get<{ items: LibraryAsset[] }>('/visual-library')).data.items
+    } catch (e) {
+      error.value = unwrapError(e)
+    } finally {
+      loading.value = false
+    }
+  }
+  return { items, loading, error, load }
 })

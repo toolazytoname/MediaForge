@@ -16,6 +16,7 @@ import {
   usePreviewStore,
   useRealPublishStore,
   useSettingsStore,
+  useCapabilitiesStore,
   type PreviewResult,
   type RealPublishResult,
 } from '../stores'
@@ -28,6 +29,7 @@ const store = usePublishStore()
 const previewStore = usePreviewStore()
 const realPublishStore = useRealPublishStore()
 const settingsStore = useSettingsStore()
+const capabilitiesStore = useCapabilitiesStore()
 const { records, loading } = storeToRefs(store)
 const filters = ref<{ status?: string; platform?: string; content_id?: string; with_metric?: boolean }>({
   with_metric: true,
@@ -53,6 +55,7 @@ onMounted(async () => {
   if (!settingsStore.config) {
     await settingsStore.load()
   }
+  await capabilitiesStore.load()
   reload()
 })
 
@@ -113,9 +116,10 @@ async function onRealPublish(record: { id: string; platform: string }) {
     return
   }
 
+  const capability = capabilitiesStore.forPlatform(record.platform)
   Modal.confirm({
     title: '确认真实发布',
-    content: '此操作将真实发布到頭條，不可撤销，确定发布吗？',
+    content: capability?.ui.confirm_copy ?? `将提交到 ${capability?.label ?? record.platform}。此操作不可撤销。`,
     okText: '确定发布',
     okType: 'danger',
     cancelText: '取消',

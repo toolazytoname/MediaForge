@@ -11,7 +11,9 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 from PIL import Image, UnidentifiedImageError
 
+from pipeline import projects as project_store
 from pipeline import visuals
+from pipeline.autonomy import AutonomyError, require_image_gen
 from pipeline.creators import image_gen
 from pipeline.webui.api import projects as projects_api
 
@@ -138,7 +140,36 @@ def _edit_with_retry(provider: image_gen.OpenAIImageProvider, prompt: str, *, im
     assert last_error is not None
     raise last_error
 
+@router.get("/visual-library")
+def list_visual_library() -> dict[str, Any]:
+    """List project-owned vas_ assets so the library page is not a placeholder."""
+    from dataclasses import asdict
+    items: list[dict[str, Any]] = []
+    try:
+        projects = project_store.list_projects(projects_root=_root())
+    except project_store.ProjectManifestError as error:
+        raise _err(500, "project_manifest_invalid", str(error))
+    for project in projects:
+        try:
+            plan = visuals.load_visuals(project.id, projects_root=_root())
+        except visuals.VisualsError:
+            continue
+        for asset in plan.assets:
+            payload = asdict(asset)
+            payload["project_id"] = project.id
+            payload["project_title"] = project.title
+            payload["url"] = (
+                f"/output/projects/{project.id}/{asset.file_path}" if asset.file_path else None
+            )
+            items.append(payload)
+    return {"items": items, "total": len(items)}
+
+
 def _create_asset(project_id: str, body: dict[str, Any], *, edit: bool) -> dict[str, Any]:
+    try:
+        require_image_gen(project_id, projects_root=_root())
+    except AutonomyError as error:
+        raise _err(error.http_status, error.code, str(error)) from error
     allowed = {"slot_id", "prompt"} | ({"reference_asset_id"} if edit else set())
     if set(body) != allowed: raise _err(400, "invalid_visual_request", "invalid image request fields")
     if not isinstance(body["slot_id"], str) or not body["slot_id"].strip():

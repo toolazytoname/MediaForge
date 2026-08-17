@@ -9,7 +9,9 @@ from fastapi import APIRouter, Body, HTTPException
 from pipeline.deliverables import DeliverablesError, get_deliverable, load_deliverables, seed_id_for
 from pipeline.delivery.service import (
     DeliveryError,
+    _approval_or_409,
     attempt_to_dict,
+    bridge_enabled,
     create_draft,
     create_export_delivery,
     preview_deliverable,
@@ -92,11 +94,17 @@ def export_one(project_id: str, deliverable_id: str, body: dict[str, Any] = Body
 def draft(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
     if body.get("mode") == "direct" or "confirm_token" in body:
         raise HTTPException(status_code=403, detail={"error": {"code": "direct_hidden", "message": "Project UI does not expose direct publish"}})
-    cfg, err = deps.get_config()
-    if err or cfg is None:
-        raise HTTPException(status_code=400, detail={"error": {"code": "config_missing", "message": err or "config missing"}})
     actor = _actor(body)
     retry_of_id = body.get("retry_of_id")
+    cfg, err = deps.get_config()
+    if cfg is not None and not bridge_enabled(cfg):
+        raise HTTPException(status_code=403, detail={"error": {"code": "delivery_bridge_off", "message": "delivery bridge is off"}})
+    try:
+        _approval_or_409(project_id, _root())
+    except DeliveryError as error:
+        raise _raise(error) from error
+    if err or cfg is None:
+        raise HTTPException(status_code=400, detail={"error": {"code": "config_missing", "message": err or "config missing"}})
     try:
         deliverable = get_deliverable(project_id, deliverable_id, projects_root=_root())
         platform = deliverable.targets[0]
