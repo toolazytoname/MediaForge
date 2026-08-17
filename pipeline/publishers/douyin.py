@@ -126,6 +126,17 @@ class DouyinPublisher(PublisherAdapter):
         )
         self._ai_ratio = ai_ratio
 
+    def capabilities(self):
+        from pipeline.publishers.capabilities import default_capabilities
+        return default_capabilities(
+            draft=False,
+            direct=False,
+            detail=(
+                "Playwright douyin is assisted-only. Default path is official "
+                "OAuth video.create; this adapter never claims unattended direct."
+            ),
+        )
+
     # ── validate ─────────────────────────────────────
 
     def validate(self, bundle: PostBundle) -> list[str]:

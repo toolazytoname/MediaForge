@@ -84,9 +84,12 @@ def login_guidance() -> dict[str, Any]:
             },
             {
                 "platform": "douyin",
-                "auth_type": "scan_qr",
-                "command": "python -m pipeline.run login douyin main",
-                "notes": "扫码登录抖音创作者后台；Playwright + storage_state",
+                "auth_type": "oauth_user",
+                "command": "secrets/douyin_<account>.json",
+                "notes": (
+                    "默认走官方 OAuth：access_token + open_id + video.create。"
+                    "Playwright 扫码仅当 platforms.douyin.assisted=true。"
+                ),
             },
             {
                 "platform": "wechat_mp",
@@ -97,6 +100,15 @@ def login_guidance() -> dict[str, Any]:
                     "credentials 指向该文件（内容 {\"app_id\":..., \"app_secret\":...}），"
                     "并在公众号后台设置与开发→基本配置→IP 白名单加入服务器出口 IP"
                     "（否则 access_token 请求返回 errcode 40164）"
+                ),
+            },
+            {
+                "platform": "youtube",
+                "auth_type": "oauth_user",
+                "command": "secrets/youtube_<account>.json",
+                "notes": (
+                    "YouTube Data API OAuth（youtube.upload）。"
+                    "未完成应用审核时只允许 private/unlisted，不得宣称可公开直发。"
                 ),
             },
         ]

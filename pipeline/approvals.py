@@ -156,6 +156,7 @@ def _current_snapshot(project_id: str, root: str | Path) -> tuple[ApprovalSnapsh
     except deliverable_store.DeliverablesError as exc: raise ApprovalError(f"cannot read deliverables: {exc}") from exc
     articles = [item for item in bundle.items if item.kind == deliverable_store.KIND_ARTICLE]
     galleries = [item for item in bundle.items if item.kind == deliverable_store.KIND_GALLERY]
+    videos = [item for item in bundle.items if item.kind == deliverable_store.KIND_VIDEO]
     require_article_package = bool(articles) or not galleries
     by_platform = {item.platform: item for item in items}
     selected = tuple(sorted(item.id for item in plan.assets if item.status == "selected"))
@@ -193,7 +194,7 @@ def _current_snapshot(project_id: str, root: str | Path) -> tuple[ApprovalSnapsh
         if master is None or len(by_platform) < 2:
             return None, blockers
         variant_versions = {"wechat_mp": by_platform["wechat_mp"].version, "toutiao": by_platform["toutiao"].version}
-        deliverable_versions = {item.id: item.version for item in (*articles, *galleries)}
+        deliverable_versions = {item.id: item.version for item in (*articles, *galleries, *videos)}
         if not any(item.id.startswith("dlv_article_") for item in articles):
             deliverable_versions.update(
                 {f"dlv_article_{platform}": version for platform, version in variant_versions.items()}
@@ -212,7 +213,7 @@ def _current_snapshot(project_id: str, root: str | Path) -> tuple[ApprovalSnapsh
         return None, ["组图尚未引用已选择的视觉资产"]
     return ApprovalSnapshot(
         None, {}, visual_ids, _research_fingerprint(board),
-        {item.id: item.version for item in galleries},
+        {item.id: item.version for item in (*galleries, *videos)},
     ), blockers
 
 

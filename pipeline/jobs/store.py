@@ -14,6 +14,7 @@ from typing import Any
 from pipeline import db
 from pipeline.utils.errors import UnpricedModelError
 from pipeline.utils.ids import new_id
+from pipeline.utils.redact import redact_value
 
 JOB_STATES = frozenset({"queued", "running", "done", "failed", "cancelled"})
 TERMINAL_STATES = frozenset({"done", "failed", "cancelled"})
@@ -71,7 +72,8 @@ def insert_job(
         raise ValueError(f"invalid durable job state: {state}")
     if not idempotency_key:
         raise ValueError("idempotency_key is required")
-    body = json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    sanitized = redact_value(request)
+    body = json.dumps(sanitized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     parsed = json.loads(body)
     if not isinstance(parsed, dict):
         raise ValueError("request_json must be a JSON object")

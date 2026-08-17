@@ -34,6 +34,14 @@ def test_capabilities_hide_wechat_direct_and_unapproved_draft_is_409(tmp_path, m
     xhs = next(item for item in caps.json()["items"] if item["platform"] == "xiaohongshu")
     assert xhs["delivery"]["direct"] is False
     assert xhs["delivery"]["export"] is True
+    douyin = next(item for item in caps.json()["items"] if item["platform"] == "douyin")
+    youtube = next(item for item in caps.json()["items"] if item["platform"] == "youtube")
+    assert douyin["review"]["requires_app_review"] is True
+    assert douyin["auth"]["kind"] == "oauth_user"
+    assert douyin["delivery_effective"]["direct"] is False
+    assert youtube["review"]["requires_app_review"] is True
+    assert youtube["review"]["default_visibility"] == "private"
+    assert youtube["delivery_effective"]["direct"] is False
     hidden = client.post(
         "/api/v1/projects/prj_delivery_api/deliverables/dlv_article_wechat_mp/direct",
         json={"actor": "lazy"},

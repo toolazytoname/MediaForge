@@ -90,6 +90,13 @@ def _bundle(
 # ── 构造 ──────────────────────────────────────────────
 
 
+def test_playwright_adapter_never_claims_direct(cookies_path: Path) -> None:
+    pub = DouyinPublisher(cookies_path=cookies_path)
+    caps = pub.capabilities()
+    assert caps.direct is False
+    assert "assisted" in caps.detail.lower()
+
+
 def test_init_requires_cookies_path(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="cookies_path"):
         DouyinPublisher(cookies_path=None)  # type: ignore[arg-type]

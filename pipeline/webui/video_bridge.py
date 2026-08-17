@@ -25,6 +25,7 @@ from pipeline.models import Content, ContentStatus
 from pipeline.projects import DEFAULT_PROJECTS_ROOT
 from pipeline.utils.errors import BudgetExceeded, CreateError, UnpricedModelError
 from pipeline.utils.ids import new_id
+from pipeline.utils.redact import redact_value
 from pipeline.webui import serialize
 
 
@@ -70,11 +71,6 @@ _ENGINE_STATE = {
     "failed": "failed",
     "cancelled": "cancelled",
 }
-
-_SECRET_MARKERS = (
-    "token", "secret", "password", "cookie", "authorization",
-    "api_key", "apikey", "pexels",
-)
 
 _MAX_CANONICAL_CHARS = 4000
 _CHARS_PER_SECOND = 4.5
@@ -159,15 +155,11 @@ def _build_engine(cfg, engine: str) -> VideoEngine:
 
 
 def _redact_style(style: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for key, value in style.items():
-        lowered = str(key).lower()
-        if any(marker in lowered for marker in _SECRET_MARKERS):
-            out[key] = "[redacted]"
-        else:
-            out[key] = value
-    json.dumps(out)
-    return out
+    redacted = redact_value(style)
+    if not isinstance(redacted, dict):
+        raise ValueError("style must be a JSON object")
+    json.dumps(redacted)
+    return redacted
 
 
 def _timeout_s(cfg, engine: str, override: int | None) -> int:

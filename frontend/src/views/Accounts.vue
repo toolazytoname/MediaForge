@@ -58,6 +58,7 @@ const ALL_KNOWN_PLATFORMS: readonly { name: string; group: 'domestic' | 'intl' }
   { name: 'douyin', group: 'domestic' },
   { name: 'wechat_mp', group: 'domestic' },
   { name: 'x', group: 'intl' },
+  { name: 'youtube', group: 'intl' },
 ]
 
 // 按平台聚合账号,合并 ALL_KNOWN_PLATFORMS (空平台也要渲染引导)

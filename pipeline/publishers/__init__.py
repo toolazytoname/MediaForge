@@ -75,21 +75,40 @@ def _build_xiaohongshu(
     return XiaohongshuPublisher(skills_path=skills_path)
 
 
+def _explicit_assisted(config: Any, platform: str) -> bool:
+    """Playwright / cookie login is opt-in. MagicMock truthiness must not count."""
+    if config is None:
+        return False
+    platforms = getattr(config, "platforms", None)
+    plat = getattr(platforms, platform, None) if platforms is not None else None
+    if plat is None:
+        return False
+    return getattr(plat, "assisted", False) is True
+
+
 def _build_douyin(account: AccountConfig, config: Any) -> PublisherAdapter:
-    """抖音 → DouyinPublisher（Playwright 自写，PRD §3.4 AI 标识必勾）。"""
-    from pipeline.publishers.douyin import DouyinPublisher
-    # AI 标识占比：config.platforms.douyin.ai_ratio > 默认 'high'
-    # M4-3 bug fix：与 _build_x/toutiao/xhs 对齐，防御 config=None（registry 单元测试场景）。
-    ai_ratio = "high"
-    if config is not None:
-        plat = getattr(config.platforms, "douyin", None)
-        if plat is not None and hasattr(plat, "ai_ratio"):
-            ai_ratio = plat.ai_ratio or "high"
-    return DouyinPublisher(
-        cookies_path=account.credentials_path,
-        screenshot_dir=Path("logs/screenshots/douyin"),
-        ai_ratio=ai_ratio,
-    )
+    """抖音默认走官方 OAuth API。Playwright 仅当 assisted=true 时降级。"""
+    if _explicit_assisted(config, "douyin"):
+        from pipeline.publishers.douyin import DouyinPublisher
+        ai_ratio = "high"
+        if config is not None:
+            plat = getattr(config.platforms, "douyin", None)
+            if plat is not None and getattr(plat, "ai_ratio", None):
+                ai_ratio = plat.ai_ratio or "high"
+        return DouyinPublisher(
+            cookies_path=account.credentials_path,
+            screenshot_dir=Path("logs/screenshots/douyin"),
+            ai_ratio=ai_ratio,
+        )
+    from pipeline.publishers.douyin_api import DouyinApiPublisher, load_douyin_credential_set
+    creds = load_douyin_credential_set(account.credentials_path)
+    return DouyinApiPublisher(credentials=creds)
+
+
+def _build_youtube(account: AccountConfig, config: Any) -> PublisherAdapter:
+    from pipeline.publishers.youtube import YoutubePublisher, load_youtube_credential_set
+    creds = load_youtube_credential_set(account.credentials_path)
+    return YoutubePublisher(credentials=creds)
 
 
 def _build_wechat_mp(account: AccountConfig, config: Any) -> PublisherAdapter:
@@ -105,6 +124,7 @@ _BUILDERS: dict[str, Callable[[AccountConfig, Any], PublisherAdapter]] = {
     "xiaohongshu": _build_xiaohongshu,
     "douyin": _build_douyin,
     "wechat_mp": _build_wechat_mp,
+    "youtube": _build_youtube,
 }
 
 
@@ -141,7 +161,7 @@ def build_adapters(
 
     out: dict[str, list[tuple[AccountConfig, PublisherAdapter]]] = {}
     platforms = cfg.platforms.model_dump(exclude_none=False)
-    for platform_name in ("x", "toutiao", "xiaohongshu", "douyin", "wechat_mp"):
+    for platform_name in ("x", "toutiao", "xiaohongshu", "douyin", "wechat_mp", "youtube"):
         plat_obj = getattr(cfg.platforms, platform_name, None)
         if plat_obj is None:
             continue

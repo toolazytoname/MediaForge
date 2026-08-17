@@ -129,6 +129,19 @@ platforms:
     accounts:
       - id: main
         credentials: secrets/wechat_mp_main.json   # {"app_id": "...", "app_secret": "..."}
+  douyin:
+    kind: api
+    assisted: false              # true 才降级 Playwright 扫码；默认官方 OAuth
+    windows: ["11:00-13:00", "19:00-22:00"]
+    accounts:
+      - id: main
+        credentials: secrets/douyin_main.json   # {"access_token","open_id","scopes":["video.create"]}
+  youtube:
+    kind: api
+    windows: ["10:00-12:00", "20:00-22:00"]
+    accounts:
+      - id: main
+        credentials: secrets/youtube_main.json  # {"access_token","user_id","scopes":["https://www.googleapis.com/auth/youtube.upload"],"app_reviewed": false}
     # 前置条件（操作性，非代码能解决）：
     #   1. 公众号后台 → 设置与开发 → 基本配置 → IP 白名单，需把出口 IP 加入，
     #      否则 access_token 请求返回 errcode 40164。

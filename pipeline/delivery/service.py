@@ -23,11 +23,15 @@ from pipeline.delivery.store import (
     upsert_binding,
 )
 from pipeline.models import Content, ContentStatus, Publication, PublicationStatus, Topic, TopicStatus
-from pipeline.autonomy import AutonomyError, require_delivery_mode
+from pipeline.autonomy import AutonomyError, load_policy, require_delivery_mode
+from pipeline.oauth.store import upsert_oauth_metadata
 from pipeline.publishers.base import AccountConfig, PublishError, PublishResult, PublisherAdapter
-from pipeline.publishers.capability_registry import mode_allowed
+from pipeline.publishers.capability_registry import get_capability, mode_allowed
 from pipeline.publishers.safe_publish import SafePublishResult, safe_publish
 from pipeline.utils.ids import new_id
+from pipeline.utils.redact import token_last4
+
+OFFICIAL_PLATFORMS = frozenset({"douyin", "youtube"})
 
 _PROJECT_PILLAR = "project"
 
@@ -343,6 +347,230 @@ def create_draft(
     return DeliveryResult(attempt, publication_id=publication.id, media_id=media_id)
 
 
+def create_official_delivery(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    deliverable_id: str,
+    actor: str,
+    adapter: PublisherAdapter,
+    account: AccountConfig,
+    confirm_token: str,
+    cfg: AppConfig | None = None,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+    bundle: Any | None = None,
+    visibility: str | None = None,
+    retry_of_id: str | None = None,
+) -> DeliveryResult:
+    """Official Douyin/YouTube publish. Fail-closed without user-context or receipt."""
+    _require_bridge(cfg)
+    if not confirm_token or not str(confirm_token).strip():
+        raise DeliveryError(
+            "official publish requires an explicit confirm token",
+            http_status=403,
+            code="confirm_required",
+        )
+    state = _approval_or_409(project_id, projects_root)
+    _project, policy = load_policy(project_id, projects_root=projects_root)
+    if policy.key == "pack":
+        raise DeliveryError(
+            "自动内容包不得官方直发",
+            http_status=403,
+            code="autonomy_forbids_delivery",
+        )
+    snapshot = state.approval.snapshot
+    assert snapshot is not None
+    deliverable = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
+    platform = _single_platform(deliverable)
+    if platform not in OFFICIAL_PLATFORMS:
+        raise DeliveryError(f"{platform} is not an official Wave 1 adapter", code="mode_not_allowed")
+    if not mode_allowed(platform, "direct", adapter):
+        raise DeliveryError(
+            f"{platform} direct is unavailable without user-context OAuth",
+            code="mode_not_allowed",
+        )
+    if snapshot.deliverable_versions.get(deliverable.id) != deliverable.version:
+        raise DeliveryError("deliverable version is not the approved snapshot", http_status=409, code="not_approved")
+    if bundle is None:
+        raise DeliveryError("official publish requires a media bundle", code="bundle_missing")
+    fingerprint = approvals.approval_fingerprint(snapshot)
+    key = make_idempotency_key(
+        project_id=project_id, deliverable_id=deliverable.id,
+        deliverable_version=deliverable.version, platform=platform,
+        account_id=account.id, mode="direct", approval_fingerprint=fingerprint,
+        retry_of_id=retry_of_id,
+    )
+    existing = get_attempt_by_key(conn, key)
+    if existing is not None:
+        return DeliveryResult(
+            existing, replayed=True,
+            publication_id=existing.publication_id, media_id=existing.platform_post_id,
+        )
+    _record_oauth_metadata(conn, adapter, account, platform)
+    extra = dict(getattr(bundle, "extra", None) or {})
+    if visibility:
+        extra["visibility"] = visibility
+        bundle = type(bundle)(
+            **{**bundle.__dict__, "extra": extra},
+        )
+    issues = adapter.validate(bundle)
+    if issues:
+        err = "; ".join(issues)
+        attempt = insert_attempt(
+            conn, project_id=project_id, deliverable_id=deliverable.id,
+            deliverable_version=deliverable.version, approval_fingerprint=fingerprint,
+            platform=platform, account_id=account.id, mode="direct", outcome="failure",
+            idempotency_key=key, request_hash_value=request_hash({
+                "platform": platform, "deliverable_id": deliverable.id,
+            }),
+            actor=actor, retry_of_id=retry_of_id, error=err,
+            confirm_token_hash=_hash_confirm(confirm_token),
+            raw_receipt=json_dumps({"error": err, "platform": platform}),
+        )
+        insert_audit(
+            conn, actor=actor, action="delivery.official",
+            payload={"outcome": "failure", "platform": platform, "error": err},
+            project_id=project_id, deliverable_id=deliverable.id,
+        )
+        return DeliveryResult(attempt)
+    try:
+        result = adapter.publish(bundle, account, dry_run=False)
+    except PublishError as error:
+        outcome, post_id, url, err = _official_failure(str(error))
+        attempt = insert_attempt(
+            conn, project_id=project_id, deliverable_id=deliverable.id,
+            deliverable_version=deliverable.version, approval_fingerprint=fingerprint,
+            platform=platform, account_id=account.id, mode="direct", outcome=outcome,
+            idempotency_key=key, request_hash_value=request_hash({
+                "platform": platform, "deliverable_id": deliverable.id,
+            }),
+            actor=actor, retry_of_id=retry_of_id, error=err,
+            confirm_token_hash=_hash_confirm(confirm_token),
+            raw_receipt=json_dumps({"error": err, "platform": platform}),
+        )
+        insert_audit(
+            conn, actor=actor, action="delivery.official",
+            payload={"outcome": outcome, "platform": platform, "error": err},
+            project_id=project_id, deliverable_id=deliverable.id,
+        )
+        return DeliveryResult(attempt)
+    outcome, post_id, url, err = _official_success(platform, result)
+    attempt = insert_attempt(
+        conn, project_id=project_id, deliverable_id=deliverable.id,
+        deliverable_version=deliverable.version, approval_fingerprint=fingerprint,
+        platform=platform, account_id=account.id, mode="direct", outcome=outcome,
+        idempotency_key=key, request_hash_value=request_hash({
+            "platform": platform, "deliverable_id": deliverable.id,
+        }),
+        actor=actor, retry_of_id=retry_of_id, platform_post_id=post_id,
+        platform_url=url, raw_receipt=json_receipt(result), error=err,
+        confirm_token_hash=_hash_confirm(confirm_token),
+    )
+    insert_audit(
+        conn, actor=actor, action="delivery.official",
+        payload={"outcome": outcome, "platform": platform, "platform_post_id": post_id},
+        project_id=project_id, deliverable_id=deliverable.id,
+    )
+    return DeliveryResult(attempt, media_id=post_id)
+
+
+def compensate_delivery(
+    conn: sqlite3.Connection,
+    *,
+    attempt_id: str,
+    actor: str,
+    adapter: PublisherAdapter,
+    cfg: AppConfig | None = None,
+) -> DeliveryResult:
+    """Minimal delete/compensation for a prior official success. Fixture-friendly."""
+    _require_bridge(cfg)
+    from pipeline.delivery.store import get_attempt
+    prior = get_attempt(conn, attempt_id)
+    if prior is None:
+        raise DeliveryError("compensation target not found", http_status=404, code="attempt_not_found")
+    if prior.outcome != "success" or not prior.platform_post_id:
+        raise DeliveryError("only successful attempts with a platform id can be compensated", code="not_compensatable")
+    compensate = getattr(adapter, "compensate", None)
+    if not callable(compensate):
+        raise DeliveryError(f"{prior.platform} has no compensate contract", code="compensate_unsupported")
+    key = make_idempotency_key(
+        project_id=prior.project_id, deliverable_id=prior.deliverable_id,
+        deliverable_version=prior.deliverable_version, platform=prior.platform,
+        account_id=prior.account_id, mode=prior.mode,
+        approval_fingerprint=f"compensate:{prior.id}",
+    )
+    existing = get_attempt_by_key(conn, key)
+    if existing is not None:
+        return DeliveryResult(existing, replayed=True)
+    try:
+        compensate(prior.platform_post_id)
+        outcome, error = "success", None
+    except PublishError as exc:
+        outcome, error = "failure", str(exc)
+    attempt = insert_attempt(
+        conn, project_id=prior.project_id, deliverable_id=prior.deliverable_id,
+        deliverable_version=prior.deliverable_version,
+        approval_fingerprint=prior.approval_fingerprint, platform=prior.platform,
+        account_id=prior.account_id, mode=prior.mode, outcome=outcome,
+        idempotency_key=key, request_hash_value=request_hash({
+            "compensate": prior.id, "platform_post_id": prior.platform_post_id,
+        }),
+        actor=actor, compensation_of_id=prior.id, error=error,
+        platform_post_id=prior.platform_post_id,
+        raw_receipt=json_dumps({"compensated": prior.platform_post_id, "error": error}),
+    )
+    insert_audit(
+        conn, actor=actor, action="delivery.compensate",
+        payload={"outcome": outcome, "compensation_of_id": prior.id},
+        project_id=prior.project_id, deliverable_id=prior.deliverable_id,
+    )
+    return DeliveryResult(attempt)
+
+
+def _official_success(platform: str, result: PublishResult) -> tuple[str, str | None, str | None, str | None]:
+    required = get_capability(platform).receipts.success_requires
+    post_id = result.platform_post_id
+    url = result.url
+    if "platform_post_id" in required and not post_id:
+        return "failure", None, url, f"{platform} returned no platform_post_id; unknown is failure"
+    if "url" in required and not url:
+        return "failure", post_id, None, f"{platform} returned no url; unknown is failure"
+    return "success", post_id, url, None
+
+
+def _official_failure(message: str) -> tuple[str, None, None, str]:
+    # Unknown receipts are product failures; do not persist outcome=unknown as success.
+    return "failure", None, None, message
+
+
+def _hash_confirm(token: str) -> str:
+    import hashlib
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _record_oauth_metadata(
+    conn: sqlite3.Connection, adapter: PublisherAdapter, account: AccountConfig, platform: str,
+) -> None:
+    creds = getattr(adapter, "_creds", None)
+    if creds is None:
+        return
+    token = getattr(creds, "access_token", None)
+    user_id = getattr(creds, "open_id", None) or getattr(creds, "user_id", None)
+    scopes = getattr(creds, "scopes", ())
+    has_ctx = bool(getattr(creds, "has_user_context", False))
+    upsert_oauth_metadata(
+        conn,
+        platform=platform,
+        account_id=account.id,
+        auth_kind="oauth_user",
+        key_ref=str(account.credentials_path),
+        last4=token_last4(token if isinstance(token, str) else None),
+        scopes=scopes,
+        user_id=str(user_id) if user_id else None,
+        has_user_context=has_ctx,
+    )
+
+
 def _reuse_or_insert_publication(
     conn: sqlite3.Connection, *, content_id: str, platform: str, account_id: str, now: str,
 ) -> Publication:
@@ -450,4 +678,10 @@ def _user_label(attempt: DeliveryAttempt) -> str:
         return "已创建公众号草稿"
     if attempt.mode == "draft":
         return "草稿失败"
+    if attempt.platform == "douyin" and attempt.outcome == "success":
+        return "已提交抖音官方发布"
+    if attempt.platform == "youtube" and attempt.outcome == "success":
+        return "已上传 YouTube"
+    if attempt.compensation_of_id and attempt.outcome == "success":
+        return "已补偿删除平台内容"
     return attempt.outcome

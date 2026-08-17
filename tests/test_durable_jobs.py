@@ -89,6 +89,44 @@ def _count_jobs(conn) -> int:
     return conn.execute("SELECT COUNT(*) AS n FROM durable_jobs").fetchone()["n"]
 
 
+def test_video_bridge_redacts_nested_style_secrets(tmp_path, monkeypatch):
+    conn = _open_db(tmp_path)
+    content = _seed_content(tmp_path, conn, id="c_redact")
+    engine = ScriptedEngine()
+    monkeypatch.setitem(video_bridge._ENGINE_BUILDERS, "mpt", lambda cfg: engine)
+    job = video_bridge.submit_video_job(
+        conn, FakeConfig(), content.id, "mpt", "口播", 8, "9:16",
+        {"auth": {"api_key": "nested-secret"}, "mood": "calm"},
+        idempotency_key="k-style",
+    )
+    stored = job_store.get_job(conn, job["job_id"])
+    assert stored is not None
+    payload = json.loads(stored.request_json)
+    assert payload["style"]["auth"]["api_key"] == "[redacted]"
+    assert payload["style"]["mood"] == "calm"
+    assert "nested-secret" not in stored.request_json
+    conn.close()
+
+
+def test_nested_style_and_auth_secrets_are_redacted(tmp_path):
+    conn = _open_db(tmp_path)
+    job = job_store.insert_job(
+        conn, kind="video_render", idempotency_key="k-nested",
+        request={
+            "engine_job_id": "ej",
+            "api_key": "top-secret",
+            "style": {"auth": {"api_key": "nested-secret", "mood": "calm"}},
+        },
+        engine="fake",
+    )
+    payload = json.loads(job.request_json)
+    assert payload["api_key"] == "[redacted]"
+    assert payload["style"]["auth"]["api_key"] == "[redacted]"
+    assert payload["style"]["auth"]["mood"] == "calm"
+    assert "nested-secret" not in job.request_json
+    conn.close()
+
+
 def test_request_json_is_append_only(tmp_path):
     conn = _open_db(tmp_path)
     job = job_store.insert_job(
