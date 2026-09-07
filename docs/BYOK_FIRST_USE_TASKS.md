@@ -64,7 +64,7 @@ BYOK-1 后结果：**89 passed**。原先失败的 MiniMax `setup_provider_from_
 - [x] 图片 PNG 校验失败要进入正常错误路径。目前 Pillow 可以抛 `OSError`，新代码的 decode catch 尚未覆盖；新增合法 base64 但非 PNG/损坏 PNG 的测试。
 - [x] 复核本轮所有 diff 的回归面，恢复上述专项全绿。该任务完成再提交，不能将 82/2 表述为通过。
 
-  ✅ 完成于 2026-09-07，commit 待写入，备注：隔离整份测试环境、修好公众号启用参数与 PNG OSError 路径，专项 89 passed。
+  ✅ 完成于 2026-09-07，commit e2e20b1，备注：隔离整份测试环境、修好公众号启用参数与 PNG OSError 路径，专项 89 passed。
 
 ### BYOK-2 完成配置与文本协议后端
 
