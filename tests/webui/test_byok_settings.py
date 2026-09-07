@@ -6,6 +6,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from pipeline.creators import image_gen, llm
+from pipeline.env_keys import IMAGE_ENV_VARS, LLM_ENV_VARS, LLM_PROVIDER_ENV
 from pipeline.webui import deps
 from pipeline.webui.api import byok_settings
 from pipeline.webui.app import create_app
@@ -27,11 +28,17 @@ publish:
 """
 
 
+def _clear_provider_credentials() -> None:
+    names = set(LLM_ENV_VARS) | set(IMAGE_ENV_VARS) | {LLM_PROVIDER_ENV}
+    names.update(key for key in os.environ if key.startswith("OPENAI_"))
+    for name in names:
+        os.environ.pop(name, None)
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "environ", os.environ.copy())
-    for name in [key for key in os.environ if key.startswith("OPENAI_") or key == "LLM_PROVIDER"]:
-        os.environ.pop(name, None)
+    _clear_provider_credentials()
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(_MINIMAL_CONFIG, encoding="utf-8")
     monkeypatch.setattr(byok_settings, "_ENV_PATH", tmp_path / "env.json")
@@ -90,6 +97,21 @@ def test_key_deletion_clears_live_providers(client):
     assert client.delete("/api/v1/settings/byok/key").status_code == 200
     assert isinstance(llm._PROVIDER, llm.MockProvider)
     assert image_gen._PROVIDER is None
+    assert not client.get("/api/v1/settings/byok").json()["key_set"]
+
+
+@pytest.mark.parametrize("env_name, value", [
+    ("MINIMAX_IMAGE_API_KEY", "minimax-image-key"),
+    ("MINIMAX_API_KEY", "minimax-chat-key"),
+])
+def test_key_deletion_falls_back_to_minimax_when_image_key_remains(client, monkeypatch, env_name, value):
+    monkeypatch.setenv(env_name, value)
+    client.put("/api/v1/settings/byok", json=config())
+    assert isinstance(image_gen._PROVIDER, image_gen.OpenAIImageProvider)
+    assert client.delete("/api/v1/settings/byok/key").status_code == 200
+    assert isinstance(llm._PROVIDER, llm.MockProvider)
+    assert isinstance(image_gen._PROVIDER, image_gen.MiniMaxImageProvider)
+    assert image_gen._PROVIDER._api_key == value
     assert not client.get("/api/v1/settings/byok").json()["key_set"]
 
 

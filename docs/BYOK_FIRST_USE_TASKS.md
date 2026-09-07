@@ -1,8 +1,8 @@
 # MediaForge 首次实用闭环：接手任务清单
 
 > 交接日期：2026-09-07。基线：`main` / `a99b1d4`。
-> 用户已批准实施；本次因用户改由其他模型执行而暂停实现。
-> **当前有未提交的实现和测试，不是可交付版本。保留它们，阅读后继续修复，不要 reset/clean。**
+> 用户已批准实施。BYOK-1 测试隔离已补完，下一任务是 BYOK-2；**不要从零重做，不要 reset/clean。**
+> 当前不能代表已经能实际写稿、出图或发送草稿。
 
 ## 1. 已确认的目标与边界
 
@@ -29,30 +29,37 @@
 - [x] 真实 GET `/v1/models` 返回 `gpt-image-2`、`gpt-5.6-sol` 等；**没有实际调用文本生成、图片生成、图片编辑或公众号接口**。
 - [x] 改动前相关专项测试 85 passed。
 
-### 已开始但尚未完成的实现
+### 已提交的半成品基线（不是可交付）
 
-以下文件都属于本轮改动，尚未提交：
+初版后端已提交，不是「尚未提交」：
 
-| 文件 | 当前改动 |
+| commit | 内容 |
 | --- | --- |
-| `pipeline/env_keys.py` | 新增整组配置原子持久化及更新进程环境的 helper |
-| `pipeline/creators/llm.py` | 新增 Responses 分支、按实际 OpenAI 模型记账、环境单价覆盖、初始化失败清除旧 provider |
-| `pipeline/creators/image_gen.py` | 改用 PNG output_format、增加 PNG 校验、初始化时清除旧 provider |
-| `pipeline/webui/api/byok_settings.py`（新文件） | BYOK 配置及模型列表检查、公众号凭据保存/检查/启用接口草稿 |
-| `pipeline/webui/api/__init__.py` | 注册上述路由 |
-| `tests/test_byok_responses.py`（新文件） | Responses 请求/输出/审计测试 |
-| `tests/webui/test_byok_settings.py`（新文件） | 配置持久化/校验/密钥清除/公众号测试 |
-| `tests/test_image_gen.py` | 调整图片请求参数断言 |
+| `e2e20b1` | BYOK-1 三处修复 + 初版 BYOK 后端/测试 |
+| `c4c7961` | 任务清单写入 `e2e20b1` |
 
-**尚未改任何前端源码、未保存真实 key、未创建或修改真实稿件、未运行全量回归或生产构建。**
+涉及文件：`pipeline/env_keys.py`、`pipeline/creators/llm.py`、`pipeline/creators/image_gen.py`、`pipeline/webui/api/byok_settings.py`、`pipeline/webui/api/__init__.py`、`tests/test_byok_responses.py`、`tests/webui/test_byok_settings.py`、`tests/test_image_gen.py`。
 
-最近一次命令：
+**尚未改任何前端源码、未保存真实 key、未创建或修改真实稿件、未做真实写稿/出图/公众号发送。**
+
+### 验证记录
+
+专项（实现者）：
 
 ```bash
 .venv/bin/python -m pytest tests/test_byok_responses.py tests/webui/test_byok_settings.py tests/test_openai_provider.py tests/test_image_gen.py -q
 ```
 
-BYOK-1 后结果：**89 passed**。原先失败的 MiniMax `setup_provider_from_env` 两项已随环境隔离恢复；未进行真实生成或公众号发送。
+结果 **89 passed**。原先失败的 MiniMax `setup_provider_from_env` 两项已随 OpenAI 环境隔离恢复。
+
+复核者实际验证：
+
+- 专项 89 passed，与实现者报告一致。
+- 全量 `1829 passed, 3 failed, 5 errors`。
+- 其中七项是 SOCKS 代理依赖；去掉代理环境后这七项 passed。
+- 剩下一项是 BYOK fixture 未清理宿主 MiniMax key：`test_key_deletion_clears_live_providers` 在存在 `MINIMAX_IMAGE_API_KEY` 时失败（删 OpenAI key 后生产回退 MiniMax，测试却断言 provider 为空）。该项已补：默认测试清掉全部相关 provider 凭据，并另测保留 MiniMax 时的生产回退。注入宿主 MiniMax/Agnes/Anthropic key 后专项 **91 passed**。
+
+下一任务是 BYOK-2，不要从 BYOK-1 重做产品规划。当前不能代表已经能写稿、出图或发送草稿。
 
 ## 3. 按顺序执行的任务
 
@@ -63,10 +70,17 @@ BYOK-1 后结果：**89 passed**。原先失败的 MiniMax `setup_provider_from_
 - [x] 为公众号启用增加真正的临时 config 测试：无凭据不改配置；启用后仅有 `wechat_mp` 在白名单；其它平台不会被启用；配置文件不存在时返回可理解错误。
 - [x] 图片 PNG 校验失败要进入正常错误路径。目前 Pillow 可以抛 `OSError`，新代码的 decode catch 尚未覆盖；新增合法 base64 但非 PNG/损坏 PNG 的测试。
 - [x] 复核本轮所有 diff 的回归面，恢复上述专项全绿。该任务完成再提交，不能将 82/2 表述为通过。
+- [x] 补完测试隔离：fixture 复制环境后还要清掉全部相关 provider 凭据（`LLM_ENV_VARS` / `IMAGE_ENV_VARS` / `LLM_PROVIDER`），不能只删 `OPENAI_*`。存在 `MINIMAX_IMAGE_API_KEY` 或 `MINIMAX_API_KEY` 时，清除 OpenAI key 会按生产优先级回退 MiniMax；默认断言「无图 provider」的测试必须在无 MiniMax 凭据下运行。另测保留 MiniMax 时的回退，不要改生产优先级来掩盖污染。
 
   ✅ 完成于 2026-09-07，commit e2e20b1，备注：隔离整份测试环境、修好公众号启用参数与 PNG OSError 路径，专项 89 passed。
+  ✅ MiniMax 凭据隔离补完于 2026-09-07，commit 待写入，备注：清掉全部相关 provider 凭据并另测 MiniMax 回退；注入宿主 MiniMax key 后专项 91 passed。未改生产优先级。
 
 ### BYOK-2 完成配置与文本协议后端
+
+初版后端里已看到、应在本任务处理、不是 BYOK-1 三处修复引入的问题：
+
+- 设置接口返回的默认文本模型/协议（`gpt-5.6-sol` / `responses`）与实际 `OpenAIProvider.from_env()` 默认（spec 模型 / `chat_completions`）不一致。
+- Responses 截断或非 completed 失败时，上游已返回的 usage 没有记账。
 
 - [ ] 完成以下现有草稿接口：`GET/PUT /settings/byok`、`DELETE /settings/byok/key`、`POST /settings/byok/check`，均在 `/api/v1` 下。
 - [ ] 配置字段：`base_url`、`text_model`、`image_model`、`wire_api`（responses/chat_completions）、可选 `api_key`、可选输入/输出单价（USD/百万 token）。留空 key 保留已有值，删除使用显式接口。
@@ -141,4 +155,4 @@ rg -n 'import anthropic' pipeline -g '*.py'
 - https://developers.openai.com/api/reference/resources/images
 - https://developers.openai.com/api/docs/models/gpt-5.6-sol
 
-接手指令建议：**先读项目四份必读文档和本清单，检查当前 git diff，从 BYOK-1 恢复专项绿色开始，按顺序实现；不要重新规划产品，不要丢弃当前未提交代码，不要将模型列表成功当成生成成功。**
+接手指令建议：**先读项目四份必读文档和本清单。BYOK-1 已提交；从 BYOK-2 继续。设置默认模型/协议与实际 provider 不一致、Responses 截断时 usage 未记账，纳入 BYOK-2。不要从 BYOK-1 重做，不要重新规划产品，不要将专项绿色或模型列表成功当成已经能写稿、出图或发送草稿。**
