@@ -37,6 +37,7 @@
 | --- | --- |
 | `e2e20b1` | BYOK-1 三处修复 + 初版 BYOK 后端/测试 |
 | `c4c7961` | 任务清单写入 `e2e20b1` |
+| `048639d` | 补完 MiniMax 凭据隔离与回退测试，同步交接状态 |
 
 涉及文件：`pipeline/env_keys.py`、`pipeline/creators/llm.py`、`pipeline/creators/image_gen.py`、`pipeline/webui/api/byok_settings.py`、`pipeline/webui/api/__init__.py`、`tests/test_byok_responses.py`、`tests/webui/test_byok_settings.py`、`tests/test_image_gen.py`。
 
@@ -73,7 +74,7 @@
 - [x] 补完测试隔离：fixture 复制环境后还要清掉全部相关 provider 凭据（`LLM_ENV_VARS` / `IMAGE_ENV_VARS` / `LLM_PROVIDER`），不能只删 `OPENAI_*`。存在 `MINIMAX_IMAGE_API_KEY` 或 `MINIMAX_API_KEY` 时，清除 OpenAI key 会按生产优先级回退 MiniMax；默认断言「无图 provider」的测试必须在无 MiniMax 凭据下运行。另测保留 MiniMax 时的回退，不要改生产优先级来掩盖污染。
 
   ✅ 完成于 2026-09-07，commit e2e20b1，备注：隔离整份测试环境、修好公众号启用参数与 PNG OSError 路径，专项 89 passed。
-  ✅ MiniMax 凭据隔离补完于 2026-09-07，commit 待写入，备注：清掉全部相关 provider 凭据并另测 MiniMax 回退；注入宿主 MiniMax key 后专项 91 passed。未改生产优先级。
+  ✅ MiniMax 凭据隔离补完于 2026-09-07，commit 048639d，备注：清掉全部相关 provider 凭据并另测 MiniMax 回退；注入宿主 MiniMax key 后专项 91 passed。未改生产优先级。
 
 ### BYOK-2 完成配置与文本协议后端
 
