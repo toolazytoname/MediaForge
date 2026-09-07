@@ -459,6 +459,7 @@ class OpenAIProvider(LLMProvider):
         model: str | None = None,
         timeout_s: float | None = None,
         spec: ProviderSpec | None = None,
+        wire_api: str = "chat_completions",
     ) -> None:
         if not api_key:
             raise ValueError(
@@ -474,6 +475,9 @@ class OpenAIProvider(LLMProvider):
                 f"got spec.protocol={spec.protocol!r} for name={spec.name!r}"
             )
         self._spec = spec
+        if wire_api not in {"responses", "chat_completions"}:
+            raise ValueError("unsupported OpenAI wire_api")
+        self._wire_api = wire_api
         self._api_key = api_key
         self._base_url = (
             base_url if base_url is not None else spec.default_base_url
@@ -519,6 +523,7 @@ class OpenAIProvider(LLMProvider):
                 os.environ.get(f"{prefix}_TIMEOUT_S", spec.default_timeout_s)
             ),
             spec=spec,
+            wire_api=os.environ.get(f"{prefix}_WIRE_API", "chat_completions"),
         )
 
     def call(
@@ -532,7 +537,8 @@ class OpenAIProvider(LLMProvider):
                 "OpenAIProvider requires httpx; install requirements.txt"
             ) from e
 
-        url = f"{self._base_url}/chat/completions"
+        endpoint = "responses" if self._wire_api == "responses" else "chat/completions"
+        url = f"{self._base_url}/{endpoint}"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -542,6 +548,9 @@ class OpenAIProvider(LLMProvider):
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if self._wire_api == "responses":
+            payload = {"model": self._model, "input": prompt,
+                       "max_output_tokens": max_tokens, "store": False}
 
         try:
             resp = httpx.post(
@@ -561,12 +570,12 @@ class OpenAIProvider(LLMProvider):
         if resp.status_code == 429 or resp.status_code >= 500:
             raise RetryableError(
                 f"OpenAI({self._spec.name}) HTTP {resp.status_code}: "
-                f"{resp.text[:200]}"
+                "upstream temporarily unavailable"
             )
         if resp.status_code >= 400:
             raise ValueError(
                 f"OpenAI({self._spec.name}) HTTP {resp.status_code}: "
-                f"{resp.text[:500]}"
+                "check endpoint, model and credentials"
             )
 
         try:
@@ -574,14 +583,27 @@ class OpenAIProvider(LLMProvider):
         except json.JSONDecodeError as e:
             raise ValueError(
                 f"OpenAI({self._spec.name}) response not JSON: {e}; "
-                f"body={resp.text[:200]}"
+                "upstream body omitted"
             ) from e
 
         try:
-            text = data["choices"][0]["message"]["content"]
-            usage = data.get("usage", {})
-            input_tokens = int(usage.get("prompt_tokens", 0))
-            output_tokens = int(usage.get("completion_tokens", 0))
+            if self._wire_api == "responses":
+                if data.get("status") != "completed":
+                    raise ValueError("response did not complete")
+                text = "\n".join(
+                    part["text"] for item in data["output"] if item.get("type") == "message"
+                    for part in item.get("content", []) if part.get("type") == "output_text"
+                )
+                usage = data.get("usage", {})
+                input_tokens = int(usage.get("input_tokens", 0))
+                output_tokens = int(usage.get("output_tokens", 0))
+            else:
+                text = data["choices"][0]["message"]["content"]
+                usage = data.get("usage", {})
+                input_tokens = int(usage.get("prompt_tokens", 0))
+                output_tokens = int(usage.get("completion_tokens", 0))
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("empty model output")
         except (KeyError, TypeError, ValueError, IndexError) as e:
             raise ValueError(
                 f"OpenAI({self._spec.name}) response malformed: {e}; "
@@ -744,6 +766,7 @@ def setup_provider_from_env(*, name: str | None = None) -> LLMProvider:
     - 未指定且零个 key → MockProvider
     - 未指定且多个 key → AmbiguousProviderError（禁止静默改选）
     """
+    set_provider(MockProvider())
     resolved, _reason = resolve_text_provider(explicit=name)
     provider = _build_named_provider(resolved)
     set_provider(provider)
@@ -788,12 +811,19 @@ def _resolve_model(model_tier: str) -> str:
             f"unknown model_tier: {model_tier!r}; "
             f"known: {sorted(_TIER_MAP)}"
         )
+    if isinstance(_PROVIDER, OpenAIProvider):
+        return _PROVIDER._model
     return _TIER_MAP[model_tier]
 
 
 def _cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
     """按 MODEL_PRICES 计算实际成本（USD）。未知模型拒绝记 0。"""
     prices = MODEL_PRICES.get(model)
+    if isinstance(_PROVIDER, OpenAIProvider) and _PROVIDER._spec.name == "openai" and model == _PROVIDER._model:
+        in_price = os.environ.get("OPENAI_INPUT_PRICE")
+        out_price = os.environ.get("OPENAI_OUTPUT_PRICE")
+        if in_price is not None and out_price is not None:
+            prices = {"input": float(in_price), "output": float(out_price)}
     if prices is None:
         raise UnpricedModelError(model)
     in_cost = prices["input"] * input_tokens / 1_000_000

@@ -261,7 +261,7 @@ class OpenAIImageProvider(ImageProvider):
             raise ValueError(f"OpenAIImageProvider: invalid aspect_ratio={aspect_ratio!r}")
         if not (1 <= n <= 4):
             raise ValueError(f"OpenAIImageProvider: n must be 1..4, got {n}")
-        payload = {"model": self._model, "prompt": prompt, "n": n, "size": self._SIZES[aspect_ratio], "response_format": "b64_json"}
+        payload = {"model": self._model, "prompt": prompt, "n": n, "size": self._SIZES[aspect_ratio], "output_format": "png"}
         return self._json_call("/images/generations", payload)
 
     def estimated_cost_usd(self, *, aspect_ratio: str, n: int = 1) -> float:
@@ -280,7 +280,7 @@ class OpenAIImageProvider(ImageProvider):
         if not image_path.is_file():
             raise ValueError(f"OpenAIImageProvider: reference image not found: {image_path}")
         boundary = "----MediaForgeImageBoundary"
-        fields = {"model": self._model, "prompt": prompt, "n": str(n), "size": self._SIZES[aspect_ratio], "response_format": "b64_json"}
+        fields = {"model": self._model, "prompt": prompt, "n": str(n), "size": self._SIZES[aspect_ratio], "output_format": "png"}
         chunks: list[bytes] = []
         for name, value in fields.items():
             chunks.extend([f"--{boundary}\r\n".encode(), f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(), value.encode(), b"\r\n"])
@@ -296,7 +296,7 @@ class OpenAIImageProvider(ImageProvider):
             with request.urlopen(req, timeout=self._timeout_s) as response:
                 payload = json.loads(response.read())
         except error.HTTPError as exc:
-            detail = exc.read()[:300].decode("utf-8", "replace") if exc.fp else ""
+            detail = "check image endpoint, model and credentials"
             if exc.code == 429 or 500 <= exc.code < 600:
                 raise RetryableError(f"OpenAIImageProvider HTTP {exc.code}: {detail[:200]}") from exc
             raise ValueError(f"OpenAIImageProvider HTTP {exc.code}: {detail}") from exc
@@ -309,8 +309,15 @@ class OpenAIImageProvider(ImageProvider):
             if not isinstance(item, dict) or not isinstance(item.get("b64_json"), str):
                 raise ValueError("OpenAIImageProvider: response data item lacks b64_json")
             try:
-                result.append(base64.b64decode(item["b64_json"], validate=True))
-            except (ValueError, TypeError) as exc:
+                raw = base64.b64decode(item["b64_json"], validate=True)
+                from io import BytesIO
+                from PIL import Image
+                with Image.open(BytesIO(raw)) as img:
+                    if img.format != "PNG":
+                        raise ValueError("expected PNG image")
+                    img.verify()
+                result.append(raw)
+            except (ValueError, TypeError, OSError, SyntaxError) as exc:
                 raise ValueError(f"OpenAIImageProvider: image decode failed: {exc}") from exc
         return result
 
@@ -328,6 +335,8 @@ def set_provider(provider: ImageProvider) -> None:
 
 def setup_provider_from_env() -> ImageProvider:
     """Initialize OpenAI when configured, otherwise retain the MiniMax fallback."""
+    global _PROVIDER
+    _PROVIDER = None
     provider: ImageProvider
     if os.environ.get("OPENAI_API_KEY"):
         provider = OpenAIImageProvider.from_env()

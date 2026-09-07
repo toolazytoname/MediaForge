@@ -91,6 +91,22 @@ def write_env_secret(name: str, value: str, path: str | Path = DEFAULT_ENV_SECRE
     _write(path, data)
 
 
+def update_env_secrets(values: dict[str, str | None], path: str | Path = DEFAULT_ENV_SECRETS_PATH) -> None:
+    """Persist one complete configuration before updating the live environment."""
+    data = _read(path)
+    for name, value in values.items():
+        if value is None:
+            data.pop(name, None)
+        else:
+            data[name] = value
+    _write(path, data)
+    for name, value in values.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+
+
 def delete_env_secret(name: str, path: str | Path = DEFAULT_ENV_SECRETS_PATH) -> bool:
     """从 `secrets/env.json` 删除一个 key。
 
@@ -122,6 +138,7 @@ __all__ = [
     "atomic_write_secret",
     "load_env_secrets",
     "write_env_secret",
+    "update_env_secrets",
     "delete_env_secret",
     "mask",
 ]

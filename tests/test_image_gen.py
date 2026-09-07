@@ -52,7 +52,7 @@ class TestOpenAIImageProvider:
             assert provider.call("editorial cover", aspect_ratio="16:9", n=1) == [_VALID_PNG_BYTES]
         request_data = mock.call_args.args[0]
         assert request_data.full_url == "https://api.openai.com/v1/images/generations"
-        assert json.loads(request_data.data) == {"model": "gpt-image-2", "prompt": "editorial cover", "n": 1, "size": "1536x1024", "response_format": "b64_json"}
+        assert json.loads(request_data.data) == {"model": "gpt-image-2", "prompt": "editorial cover", "n": 1, "size": "1536x1024", "output_format": "png"}
         assert provider.estimated_cost_usd(aspect_ratio="16:9") > 0
 
     def test_edit_uses_multipart_and_retries_are_retryable(self, tmp_path):
@@ -75,6 +75,29 @@ class TestOpenAIImageProvider:
         with patch("pipeline.creators.image_gen.request.urlopen") as mock:
             mock.return_value = _mock_urlopen_response(json_body={"data": [{}]})
             with pytest.raises(ValueError, match="lacks b64_json"):
+                provider.call("x", aspect_ratio="1:1", n=1)
+
+    def test_rejects_valid_base64_that_is_not_png(self):
+        from PIL import Image
+        jpeg = io.BytesIO()
+        Image.new("RGB", (1, 1), (255, 0, 0)).save(jpeg, format="JPEG")
+        jpeg_b64 = base64.b64encode(jpeg.getvalue()).decode("ascii")
+        provider = image_gen.OpenAIImageProvider("openai-secret")
+        with patch("pipeline.creators.image_gen.request.urlopen") as mock:
+            mock.return_value = _mock_urlopen_response(
+                json_body={"data": [{"b64_json": jpeg_b64}]}
+            )
+            with pytest.raises(ValueError, match="decode failed"):
+                provider.call("x", aspect_ratio="1:1", n=1)
+
+    def test_rejects_corrupt_png_as_value_error(self):
+        corrupt_b64 = base64.b64encode(_VALID_PNG_BYTES[:24]).decode("ascii")
+        provider = image_gen.OpenAIImageProvider("openai-secret")
+        with patch("pipeline.creators.image_gen.request.urlopen") as mock:
+            mock.return_value = _mock_urlopen_response(
+                json_body={"data": [{"b64_json": corrupt_b64}]}
+            )
+            with pytest.raises(ValueError, match="decode failed"):
                 provider.call("x", aspect_ratio="1:1", n=1)
 
 
