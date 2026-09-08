@@ -129,11 +129,11 @@
 - [x] 浏览器走项目 `prj_a63f79b2`：读取已有资料 → 真实 AI 主稿建议 → 人工可审阅，不自动替换现稿。
 - [x] 真实生成 1 张封面 + 2 张插图，再编辑其中 1 张；检查返回图像可打开、候选可放大、版本与成本可追溯，不把本地导入冒充 API 生成。
 - [x] 微信与头条独立预览中图文正常；Markdown 复制/下载可用；拒绝 AI 建议或更新主稿不会静默覆盖平台稿。
-- [ ] 用户填写公众号凭据后检查 IP 白名单与权限；逐项人工审阅后送入草稿箱，检查真实 media_id 和公众号后台图片完整性。
+- [x] 用户填写公众号凭据后检查 IP 白名单与权限；逐项人工审阅后送入草稿箱，检查真实 media_id 和公众号后台图片完整性。
 - [x] 凭据仍未提供则将“公众号真实发送验收”单独标记等待用户，交付已验证的写稿/配图/预览入口，不伪造草稿回执，也不把整个任务误标为完成。
 
   ✅ 部分完成于 2026-09-08。本机 `127.0.0.1:8788` 已加载新 bundle。真实 AI 主稿建议 HTTP 200、约 2800 字，现稿标题/版本未变。真实 GPT Image 2 候选：`vas_91553d94`（封面）、`vas_3479aec1`、`vas_8dd5dad4`，编辑 `vas_abab8241`，均为 PNG。未选择覆盖原 selected 资产。
-  ⚠️ 等待用户：公众号 AppID/AppSecret 未提供，`secrets/wechat_mp_main.json` 不存在，未送草稿箱、无 media_id。
+  ✅ 公众号草稿已送入：attempt `da_8fa0c0ba`，`media_id=T0wXMUxGNoEwkhzIN5QdEFUVn2YpxoR2v0avT8k5WaZcSVVU2xWPs1gXBBMpDmgA`。这是草稿箱回执，不是公开发布。请到公众号后台核对正文和图片。凭据仅在 `secrets/wechat_mp_main.json`。
   Playwright 桌面/手机走查见 BYOK-7 截图。
 
 ### BYOK-7 回归、记录与提交

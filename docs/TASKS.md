@@ -11,7 +11,7 @@
 
 ### 当前接手任务：BYOK 首次实用闭环（2026-09-07）
 
-- [ ] 用户已批准“中转站 AI 写稿 + GPT Image 2 配图 + Markdown 编辑/预览 + 公众号草稿箱”。任务拆分与验收要求见 [BYOK_FIRST_USE_TASKS.md](./BYOK_FIRST_USE_TASKS.md)。BYOK-1–5 已提交；真实 AI 主稿建议与 GPT Image 2 封面/两张插图/一次编辑已在 `prj_a63f79b2` 生成候选且未覆盖现稿。全量 1848 passed，前端生产构建通过。**公众号真实发送仍等待用户凭据**，未伪造草稿回执。访问 `http://127.0.0.1:8788/`。此条不是 R0 作者签字完成记录。
+- [ ] 用户已批准“中转站 AI 写稿 + GPT Image 2 配图 + Markdown 编辑/预览 + 公众号草稿箱”。任务拆分与验收要求见 [BYOK_FIRST_USE_TASKS.md](./BYOK_FIRST_USE_TASKS.md)。BYOK-1–5 已提交；真实 AI 主稿建议与 GPT Image 2 配图已在 `prj_a63f79b2` 生成候选且未覆盖现稿。公众号草稿已送入，`media_id=T0wXMUxGNoEwkhzIN5QdEFUVn2YpxoR2v0avT8k5WaZcSVVU2xWPs1gXBBMpDmgA`（草稿箱，非公开发布）。访问 `http://127.0.0.1:8788/`。此条不是 R0 作者签字完成记录。
 
 > **优先级**：本章节的 R0 → R9 是当前产品重启的正式执行顺序。它们优先于未完成的遗留 M* 任务；已完成的历史记录保持不动。完整产品方向见 [PRODUCT_RESET_PLAN.md](./PRODUCT_RESET_PLAN.md)。
 >
