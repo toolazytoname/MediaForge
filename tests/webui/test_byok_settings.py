@@ -115,6 +115,71 @@ def test_key_deletion_falls_back_to_minimax_when_image_key_remains(client, monke
     assert not client.get("/api/v1/settings/byok").json()["key_set"]
 
 
+def test_byok_defaults_match_live_provider(client, monkeypatch):
+    body = client.get("/api/v1/settings/byok").json()
+    assert body["text_model"] == "gpt-5.6-sol"
+    assert body["wire_api"] == "responses"
+    assert body["cost_kind"] == "estimate"
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    provider = llm.OpenAIProvider.from_env("openai")
+    assert provider._model == body["text_model"]
+    assert provider._wire_api == body["wire_api"]
+
+
+def test_save_preserves_unrelated_secrets(client, tmp_path):
+    (tmp_path / "env.json").write_text('{"MINIMAX_API_KEY": "keep-me"}\n', encoding="utf-8")
+    assert client.put("/api/v1/settings/byok", json=config()).status_code == 200
+    data = json.loads((tmp_path / "env.json").read_text())
+    assert data["MINIMAX_API_KEY"] == "keep-me"
+    assert data["OPENAI_API_KEY"] == "private-test-key"
+
+
+def test_check_requires_key(client):
+    response = client.post("/api/v1/settings/byok/check")
+    assert response.json()["ok"] is False
+    assert "API key" in response.json()["message"]
+
+
+def test_check_missing_model_is_visible(client, monkeypatch):
+    client.put("/api/v1/settings/byok", json=config())
+    class Fake:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"data": [{"id": "other-model"}]}
+    monkeypatch.setattr("httpx.get", lambda *args, **kwargs: Fake())
+    response = client.post("/api/v1/settings/byok/check")
+    body = response.json()
+    assert body["ok"] is False
+    assert "gpt-5.6-sol" in body["message"]
+    assert "gpt-image-2" in body["missing_models"]
+
+
+def test_check_unpriced_is_visible(client, monkeypatch):
+    client.put("/api/v1/settings/byok", json=config(text_model="private-model", input_price=None, output_price=None))
+    class Fake:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"data": [{"id": "private-model"}, {"id": "gpt-image-2"}]}
+    monkeypatch.setattr("httpx.get", lambda *args, **kwargs: Fake())
+    response = client.post("/api/v1/settings/byok/check")
+    body = response.json()
+    assert body["ok"] is True
+    assert body["priced"] is False
+    assert "单价" in body["message"]
+
+
+def test_check_does_not_leak_key(client, monkeypatch):
+    client.put("/api/v1/settings/byok", json=config())
+    def boom(*args, **kwargs):
+        raise RuntimeError("Authorization Bearer private-test-key")
+    monkeypatch.setattr("httpx.get", boom)
+    response = client.post("/api/v1/settings/byok/check")
+    assert "private-test-key" not in response.text
+    assert response.json()["ok"] is False
+
+
 def test_unknown_model_requires_prices_before_spending(client):
     result = client.put("/api/v1/settings/byok", json=config(text_model="private-model", input_price=None, output_price=None))
     assert result.status_code == 200

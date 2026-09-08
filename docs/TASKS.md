@@ -11,7 +11,7 @@
 
 ### 当前接手任务：BYOK 首次实用闭环（2026-09-07）
 
-- [ ] 用户已批准“中转站 AI 写稿 + GPT Image 2 配图 + Markdown 编辑/预览 + 公众号草稿箱”。任务拆分与验收要求见 [BYOK_FIRST_USE_TASKS.md](./BYOK_FIRST_USE_TASKS.md)。BYOK-1 已补完 MiniMax 凭据隔离与回退测试；下一任务 BYOK-2（含设置默认值与实际 provider 不一致、Responses 截断 usage 未记账）。当前不能代表已能实际写稿、出图或发送草稿。公众号凭据由用户后续提供。此条不是 R0 作者签字或真实发送验收完成记录。
+- [ ] 用户已批准“中转站 AI 写稿 + GPT Image 2 配图 + Markdown 编辑/预览 + 公众号草稿箱”。任务拆分与验收要求见 [BYOK_FIRST_USE_TASKS.md](./BYOK_FIRST_USE_TASKS.md)。BYOK-1 已完成；BYOK-2 进行中。当前不能代表已能实际写稿、出图或发送草稿。公众号凭据由用户后续提供。此条不是 R0 作者签字或真实发送验收完成记录。
 
 > **优先级**：本章节的 R0 → R9 是当前产品重启的正式执行顺序。它们优先于未完成的遗留 M* 任务；已完成的历史记录保持不动。完整产品方向见 [PRODUCT_RESET_PLAN.md](./PRODUCT_RESET_PLAN.md)。
 >

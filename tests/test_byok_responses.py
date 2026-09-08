@@ -50,3 +50,38 @@ def test_audit_uses_model_actually_sent(monkeypatch, tmp_path):
         assert conn.execute("SELECT model FROM llm_calls").fetchone()[0] == "gpt-4o"
     finally:
         conn.close()
+
+
+def test_from_env_openai_defaults_match_settings(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_WIRE_API", raising=False)
+    provider = llm.OpenAIProvider.from_env("openai")
+    assert provider._model == "gpt-5.6-sol"
+    assert provider._wire_api == "responses"
+    assert llm.PROVIDER_SPECS["openai"].default_model == "gpt-5.6-sol"
+
+
+def test_incomplete_response_records_usage(monkeypatch, tmp_path):
+    from pipeline import db
+    provider = llm.OpenAIProvider("key", model="gpt-5.6-sol", wire_api="responses")
+    response = Mock(status_code=200)
+    response.json.return_value = {
+        "status": "incomplete",
+        "output": [{"type": "message", "content": [{"type": "output_text", "text": "partial"}]}],
+        "usage": {"input_tokens": 11, "output_tokens": 7},
+    }
+    monkeypatch.setattr("httpx.post", Mock(return_value=response))
+    monkeypatch.setattr(llm, "_PROVIDER", provider)
+    monkeypatch.setattr(llm, "_LOG_DIR", tmp_path / "logs")
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+    try:
+        with pytest.raises(llm.IncompleteResponseError):
+            llm.complete("write", stage="project_master_draft", conn=conn)
+        row = conn.execute("SELECT model, input_tokens, output_tokens, cost_usd FROM llm_calls").fetchone()
+        assert row[0] == "gpt-5.6-sol"
+        assert row[1] == 11 and row[2] == 7
+        assert row[3] > 0
+    finally:
+        conn.close()

@@ -51,6 +51,9 @@ MODEL_PRICES: dict[str, dict[str, float]] = {
     "MiniMax-M3": {"input": 0.30, "output": 1.20},
     "agnes-2.0-flash": {"input": 0.0, "output": 0.0},  # TODO: 以 agnes-ai.com 官方为准
     "gpt-4o": {"input": 2.50, "output": 10.00},
+    # Official list-price estimate for budget only — not the relay invoice.
+    # Checked against https://developers.openai.com/api/docs/models/gpt-5.6-sol
+    "gpt-5.6-sol": {"input": 4.0, "output": 20.0},
     # M-x：image 模型按张计费（不走 token 算式）
     # docs: https://platform.minimaxi.com/docs/guides/image-generation
     # 当前限时 $0/张；标准 $0.003/张（取保守值用于预算护栏）
@@ -150,8 +153,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         name="openai",
         protocol="openai",
         default_base_url="https://api.openai.com/v1",
-        default_model="gpt-4o",
-        default_timeout_s=60.0,
+        default_model="gpt-5.6-sol",
+        default_timeout_s=120.0,
         default_api_version=None,
         supports_response_format=True,
         min_temperature=0.0,
@@ -179,6 +182,15 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
 
 class RetryableError(Exception):
     """429 / 5xx / 网络瞬时错误——应触发重试。"""
+
+
+class IncompleteResponseError(ValueError):
+    """Responses 截断、拒绝或空内容：HTTP 已成功，usage 仍需记账。"""
+
+    def __init__(self, message: str, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        super().__init__(message)
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
 
 class LLMProvider(ABC):
@@ -459,7 +471,7 @@ class OpenAIProvider(LLMProvider):
         model: str | None = None,
         timeout_s: float | None = None,
         spec: ProviderSpec | None = None,
-        wire_api: str = "chat_completions",
+        wire_api: str | None = None,
     ) -> None:
         if not api_key:
             raise ValueError(
@@ -475,6 +487,8 @@ class OpenAIProvider(LLMProvider):
                 f"got spec.protocol={spec.protocol!r} for name={spec.name!r}"
             )
         self._spec = spec
+        if wire_api is None:
+            wire_api = "responses" if spec.name == "openai" else "chat_completions"
         if wire_api not in {"responses", "chat_completions"}:
             raise ValueError("unsupported OpenAI wire_api")
         self._wire_api = wire_api
@@ -515,6 +529,7 @@ class OpenAIProvider(LLMProvider):
             raise ValueError(
                 f"OpenAIProvider.from_env: {prefix}_API_KEY env var not set"
             )
+        default_wire = "responses" if name == "openai" else "chat_completions"
         return cls(
             api_key=api_key,
             base_url=os.environ.get(f"{prefix}_BASE_URL", spec.default_base_url),
@@ -523,7 +538,7 @@ class OpenAIProvider(LLMProvider):
                 os.environ.get(f"{prefix}_TIMEOUT_S", spec.default_timeout_s)
             ),
             spec=spec,
-            wire_api=os.environ.get(f"{prefix}_WIRE_API", "chat_completions"),
+            wire_api=os.environ.get(f"{prefix}_WIRE_API", default_wire),
         )
 
     def call(
@@ -588,22 +603,15 @@ class OpenAIProvider(LLMProvider):
 
         try:
             if self._wire_api == "responses":
-                if data.get("status") != "completed":
-                    raise ValueError("response did not complete")
-                text = "\n".join(
-                    part["text"] for item in data["output"] if item.get("type") == "message"
-                    for part in item.get("content", []) if part.get("type") == "output_text"
-                )
-                usage = data.get("usage", {})
-                input_tokens = int(usage.get("input_tokens", 0))
-                output_tokens = int(usage.get("output_tokens", 0))
-            else:
-                text = data["choices"][0]["message"]["content"]
-                usage = data.get("usage", {})
-                input_tokens = int(usage.get("prompt_tokens", 0))
-                output_tokens = int(usage.get("completion_tokens", 0))
+                return self._parse_responses(data)
+            text = data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+            input_tokens = int(usage.get("prompt_tokens", 0))
+            output_tokens = int(usage.get("completion_tokens", 0))
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("empty model output")
+        except IncompleteResponseError:
+            raise
         except (KeyError, TypeError, ValueError, IndexError) as e:
             raise ValueError(
                 f"OpenAI({self._spec.name}) response malformed: {e}; "
@@ -615,6 +623,32 @@ class OpenAIProvider(LLMProvider):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+
+    def _parse_responses(self, data: dict[str, Any]) -> CompletionResult:
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        input_tokens = int(usage.get("input_tokens", 0) or 0)
+        output_tokens = int(usage.get("output_tokens", 0) or 0)
+        output = data.get("output") if isinstance(data.get("output"), list) else []
+        texts: list[str] = []
+        refused = False
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            for part in item.get("content") or []:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                    texts.append(part["text"])
+                if part.get("type") == "refusal":
+                    refused = True
+        text = "\n".join(texts)
+        if data.get("status") != "completed" or refused or not text.strip():
+            raise IncompleteResponseError(
+                "response did not complete" if data.get("status") != "completed" else "empty model output",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+        return CompletionResult(text, input_tokens, output_tokens)
 
 
 # ── Provider 工厂（M1-9：注册表驱动，新增 provider 不改主逻辑）──
@@ -956,10 +990,22 @@ def complete(
                 stage=stage, used_usd=used, limit_usd=BUDGET_LIMIT_USD
             )
 
-    # 重试调用
-    result = _call_with_retry(prompt, model, max_tokens)
+    try:
+        result = _call_with_retry(prompt, model, max_tokens)
+    except IncompleteResponseError as exc:
+        result = CompletionResult("", exc.input_tokens, exc.output_tokens)
+        cost = _cost_usd(model, result.input_tokens, result.output_tokens)
+        _record_llm_call(
+            db_conn,
+            stage=stage, ref_id=ref_id, model=model,
+            result=result, cost_usd=cost, now=now_iso,
+        )
+        _dump_log(
+            stage=stage, ref_id=ref_id, prompt=prompt,
+            response=f"<incomplete: {exc}>", model=model, cost_usd=cost, now=now_iso,
+        )
+        raise
 
-    # 记账 + 落盘
     cost = _cost_usd(model, result.input_tokens, result.output_tokens)
     _record_llm_call(
         db_conn,

@@ -36,19 +36,27 @@ def _price(value: Any) -> str | None:
     return str(value)
 
 
+def _openai_defaults() -> tuple[str, str]:
+    spec = llm.PROVIDER_SPECS["openai"]
+    return spec.default_model, "responses"
+
+
 @router.get("/settings/byok")
 def get_byok() -> dict[str, Any]:
-    model = os.environ.get("OPENAI_MODEL", "gpt-5.6-sol")
+    default_model, default_wire = _openai_defaults()
+    model = os.environ.get("OPENAI_MODEL", default_model)
     prices = [os.environ.get(key) for key in ("OPENAI_INPUT_PRICE", "OPENAI_OUTPUT_PRICE")]
     key = os.environ.get("OPENAI_API_KEY", "")
+    user_priced = all(p is not None for p in prices)
     return {
-        "base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        "base_url": os.environ.get("OPENAI_BASE_URL", llm.PROVIDER_SPECS["openai"].default_base_url),
         "text_model": model, "image_model": os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-2"),
-        "wire_api": os.environ.get("OPENAI_WIRE_API", "responses"),
+        "wire_api": os.environ.get("OPENAI_WIRE_API", default_wire),
         "key_set": bool(key), "masked": mask(key) if key else None,
         "input_price": float(prices[0]) if prices[0] is not None else None,
         "output_price": float(prices[1]) if prices[1] is not None else None,
-        "priced": all(p is not None for p in prices) or model in llm.MODEL_PRICES,
+        "priced": user_priced or model in llm.MODEL_PRICES,
+        "price_source": "user" if user_priced else ("official_estimate" if model in llm.MODEL_PRICES else "unpriced"),
         "cost_kind": "estimate",
     }
 
@@ -96,7 +104,10 @@ def delete_byok_key() -> dict[str, Any]:
 def check_byok() -> dict[str, Any]:
     config = get_byok()
     if not config["key_set"]:
-        return {"ok": False, "message": "请先保存 API key"}
+        return {
+            "ok": False, "priced": config["priced"], "price_source": config["price_source"],
+            "missing_models": [], "models": [], "message": "请先保存 API key",
+        }
     try:
         response = httpx.get(config["base_url"] + "/models", headers={
             "Authorization": "Bearer " + os.environ["OPENAI_API_KEY"],
@@ -104,10 +115,22 @@ def check_byok() -> dict[str, Any]:
         response.raise_for_status()
         models = [item["id"] for item in response.json()["data"]]
     except Exception:
-        return {"ok": False, "message": "模型列表检查失败，请核对地址、key 和网络。"}
+        return {
+            "ok": False, "priced": config["priced"], "price_source": config["price_source"],
+            "missing_models": [], "models": [],
+            "message": "模型列表检查失败，请核对地址、key 和网络。",
+        }
     missing = [name for name in (config["text_model"], config["image_model"]) if name not in models]
-    return {"ok": not missing, "models": models, "message":
-            f"模型列表未包含：{', '.join(missing)}" if missing else "模型列表可访问；真实写稿和出图仍需在项目中验证。"}
+    if missing:
+        message = f"模型列表未包含：{', '.join(missing)}"
+    elif not config["priced"]:
+        message = "模型列表可访问，但未配置估算单价，付费调用前会被阻止。真实写稿和出图仍需在项目中验证。"
+    else:
+        message = "模型列表可访问；真实写稿和出图仍需在项目中验证。所列单价仅为预算估算，不是中转实付。"
+    return {
+        "ok": not missing, "priced": config["priced"], "price_source": config["price_source"],
+        "missing_models": missing, "models": models, "message": message,
+    }
 
 
 @router.get("/settings/wechat")

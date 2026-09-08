@@ -78,18 +78,15 @@
 
 ### BYOK-2 完成配置与文本协议后端
 
-初版后端里已看到、应在本任务处理、不是 BYOK-1 三处修复引入的问题：
+- [x] 完成以下现有草稿接口：`GET/PUT /settings/byok`、`DELETE /settings/byok/key`、`POST /settings/byok/check`，均在 `/api/v1` 下。
+- [x] 配置字段：`base_url`、`text_model`、`image_model`、`wire_api`（responses/chat_completions）、可选 `api_key`、可选输入/输出单价（USD/百万 token）。留空 key 保留已有值，删除使用显式接口。
+- [x] 持久化到 `secrets/env.json`，原子写、0600；保存后立即生效，重启后恢复；保留无关配置。环境来源与磁盘配置的优先级保持清晰。
+- [x] 检查接口只查模型列表，不把它作为真实生成成功；无 key、无价格、模型缺失分别可见。任意响应、日志和异常均不泄漏 key。
+- [x] Responses 经过统一 `complete()`，正确处理完成/截断/拒绝/空内容、usage 与重试；保留 Chat Completions 兼容。实际发送的模型、审计模型和预算估算保持一致。
+- [x] 未定价模型在付费调用前明确阻止。支持用户配置估算单价，不使用旧 Claude 价格或零价伪装。GPT-5.6 Sol 官方参考价为输入 $4、输出 $20/百万 token（本次已查官方文档）；如采用此默认，明确仅作预算估算，不冒充中转实付价格。
+- [x] 中转公开 `/api/pricing` 返回 model_ratio/completion_ratio 等倍率；未核实倍率和账户分组的计费换算，不直接称为美元单价。
 
-- 设置接口返回的默认文本模型/协议（`gpt-5.6-sol` / `responses`）与实际 `OpenAIProvider.from_env()` 默认（spec 模型 / `chat_completions`）不一致。
-- Responses 截断或非 completed 失败时，上游已返回的 usage 没有记账。
-
-- [ ] 完成以下现有草稿接口：`GET/PUT /settings/byok`、`DELETE /settings/byok/key`、`POST /settings/byok/check`，均在 `/api/v1` 下。
-- [ ] 配置字段：`base_url`、`text_model`、`image_model`、`wire_api`（responses/chat_completions）、可选 `api_key`、可选输入/输出单价（USD/百万 token）。留空 key 保留已有值，删除使用显式接口。
-- [ ] 持久化到 `secrets/env.json`，原子写、0600；保存后立即生效，重启后恢复；保留无关配置。环境来源与磁盘配置的优先级保持清晰。
-- [ ] 检查接口只查模型列表，不把它作为真实生成成功；无 key、无价格、模型缺失分别可见。任意响应、日志和异常均不泄漏 key。
-- [ ] Responses 经过统一 `complete()`，正确处理完成/截断/拒绝/空内容、usage 与重试；保留 Chat Completions 兼容。实际发送的模型、审计模型和预算估算保持一致。
-- [ ] 未定价模型在付费调用前明确阻止。支持用户配置估算单价，不使用旧 Claude 价格或零价伪装。GPT-5.6 Sol 官方参考价为输入 $4、输出 $20/百万 token（本次已查官方文档）；如采用此默认，明确仅作预算估算，不冒充中转实付价格。
-- [ ] 中转公开 `/api/pricing` 返回 model_ratio/completion_ratio 等倍率；未核实倍率和账户分组的计费换算，不直接称为美元单价。
+  ✅ 完成于 2026-09-08，commit 待写入，备注：OpenAI 默认与设置页对齐为 gpt-5.6-sol/responses；截断 Responses 记账 usage；检查接口区分缺 key/缺模型/未定价。未把中转 /api/pricing 倍率当美元。
 
 ### BYOK-3 完成设置页
 
