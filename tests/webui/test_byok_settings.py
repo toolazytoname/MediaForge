@@ -170,6 +170,31 @@ def test_check_unpriced_is_visible(client, monkeypatch):
     assert "单价" in body["message"]
 
 
+def test_check_retries_when_socks_extra_missing(client, monkeypatch):
+    client.put("/api/v1/settings/byok", json=config())
+    class Fake:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"data": [{"id": "gpt-5.6-sol"}, {"id": "gpt-image-2"}]}
+    def boom(*args, **kwargs):
+        raise ImportError("socksio")
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def get(self, *args, **kwargs):
+            return Fake()
+    monkeypatch.setattr("httpx.get", boom)
+    monkeypatch.setattr("httpx.Client", Client)
+    body = client.post("/api/v1/settings/byok/check").json()
+    assert body["ok"] is True
+    assert "真实写稿" in body["message"]
+
+
 def test_check_does_not_leak_key(client, monkeypatch):
     client.put("/api/v1/settings/byok", json=config())
     def boom(*args, **kwargs):

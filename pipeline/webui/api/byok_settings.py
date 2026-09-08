@@ -28,6 +28,15 @@ def _bad(message: str) -> HTTPException:
     return HTTPException(400, detail={"error": {"code": "invalid_connection", "message": message}})
 
 
+def _httpx_get(url: str, **kwargs: Any):
+    try:
+        return httpx.get(url, **kwargs)
+    except ImportError:
+        timeout = kwargs.pop("timeout", 15)
+        with httpx.Client(trust_env=False, timeout=timeout) as client:
+            return client.get(url, **kwargs)
+
+
 def _price(value: Any) -> str | None:
     if value is None:
         return None
@@ -109,7 +118,7 @@ def check_byok() -> dict[str, Any]:
             "missing_models": [], "models": [], "message": "请先保存 API key",
         }
     try:
-        response = httpx.get(config["base_url"] + "/models", headers={
+        response = _httpx_get(config["base_url"] + "/models", headers={
             "Authorization": "Bearer " + os.environ["OPENAI_API_KEY"],
         }, timeout=15)
         response.raise_for_status()
@@ -198,7 +207,7 @@ def check_wechat() -> dict[str, Any]:
         app_id, secret = load_wechat_credentials(_wechat_secret_path())
         provider = WechatMpPublisher(app_id=app_id, app_secret=secret)
         token = provider._ensure_access_token()
-        response = httpx.get("https://api.weixin.qq.com/cgi-bin/draft/count", params={"access_token": token}, timeout=15)
+        response = _httpx_get("https://api.weixin.qq.com/cgi-bin/draft/count", params={"access_token": token}, timeout=15)
         response.raise_for_status()
         data = response.json()
         if data.get("errcode"):
