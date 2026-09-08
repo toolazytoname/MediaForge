@@ -27,7 +27,11 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from pipeline.creators.wechat_html import markdown_to_wechat_html
+from pipeline.creators.wechat_html import (
+    WechatImageMeta,
+    decorate_wechat_content_images,
+    markdown_to_wechat_html,
+)
 from pipeline.publishers.base import (
     AccountConfig,
     LoginExpired,
@@ -49,8 +53,12 @@ _AUTH_ERRCODES = {40001, 40013, 40125, 40164, 48001}
 _RATE_LIMIT_ERRCODES = {45009, 45011}
 _QUOTA_ERRCODES = {45008, 45028}
 
-# 正文内嵌插图的本地相对路径约定（derivative_wechat_mp.insert_generated_images 产出）
-_INLINE_IMAGE_MD_RE = re.compile(r"!\[([^\]]*)\]\((\.\./images/inline-\d+\.png)\)")
+# 正文图片的本地相对路径：封面 + 插图。封面默认只进 thumb_media_id，
+# 公众号正文要再走一遍 uploadimg，否则编辑器里只有文字。
+_INLINE_IMAGE_MD_RE = re.compile(
+    r"!\[([^\]]*)\]\((\.\./(?:cover|images/inline-\d+)\.png)\)"
+)
+_COVER_BODY_MARKDOWN = "![封面](../cover.png)"
 
 
 # ── 凭据 ───────────────────────────────────────────────────
@@ -325,8 +333,11 @@ class WechatMpPublisher(PublisherAdapter):
         if not cover_path.exists():
             raise PublishError(f"cover image not found at {cover_path}")
 
-        article_md = self._inline_images_to_cdn(article_md, wechat_dir)
-        html_body = markdown_to_wechat_html(article_md)
+        article_md = self._ensure_cover_in_body(article_md)
+        article_md, image_metas = self._inline_images_to_cdn(article_md, wechat_dir)
+        html_body = decorate_wechat_content_images(
+            markdown_to_wechat_html(article_md), image_metas,
+        )
         thumb_media_id = self._upload_cover(cover_path)
         draft_resp = self._upload_draft(
             title=title, digest=digest, html_body=html_body,
@@ -372,18 +383,28 @@ class WechatMpPublisher(PublisherAdapter):
             raise PublishError(f"wechat_mp content image upload missing url: {data!r}")
         return url
 
-    def _inline_images_to_cdn(self, article_md: str, wechat_dir: Path) -> str:
-        """把正文里本地相对路径插图（../images/inline-N.png）逐个上传到微信 CDN，
-        替换成返回的 url——draft/add 的正文 HTML 里图片必须是微信 CDN 地址。"""
+    def _ensure_cover_in_body(self, article_md: str) -> str:
+        """封面默认只作为 thumb_media_id；正文也插入一张，编辑器才能看见配图。"""
+        if "../cover.png" in article_md:
+            return article_md
+        return f"{_COVER_BODY_MARKDOWN}\n\n{article_md}"
+
+    def _inline_images_to_cdn(
+        self, article_md: str, wechat_dir: Path,
+    ) -> tuple[str, dict[str, WechatImageMeta]]:
+        """把正文里本地相对路径图片上传到微信 CDN，并记下宽高供编辑器属性使用。"""
+        metas: dict[str, WechatImageMeta] = {}
+
         def _replace(match: re.Match) -> str:
             caption, rel_path = match.group(1), match.group(2)
             local_path = (wechat_dir / rel_path).resolve()
             if not local_path.exists():
                 raise PublishError(f"inline image not found for upload: {local_path}")
             cdn_url = self._upload_content_image(local_path)
+            metas[cdn_url] = _image_meta(local_path, cdn_url)
             return f"![{caption}]({cdn_url})"
 
-        return _INLINE_IMAGE_MD_RE.sub(_replace, article_md)
+        return _INLINE_IMAGE_MD_RE.sub(_replace, article_md), metas
 
     def _upload_draft(
         self, *, title: str, digest: str, html_body: str, thumb_media_id: str,
@@ -399,11 +420,56 @@ class WechatMpPublisher(PublisherAdapter):
                     "digest": digest,
                     "content": html_body,
                     "thumb_media_id": thumb_media_id,
+                    "show_cover_pic": 1,
                     "need_open_comment": 0,
                     "only_fans_can_comment": 0,
                 }]
             },
         )
+
+    def _update_draft(
+        self, *, media_id: str, title: str, digest: str,
+        html_body: str, thumb_media_id: str,
+    ) -> dict:
+        token = self._ensure_access_token()
+        return self._post(
+            f"{self._api}/draft/update",
+            params={"access_token": token},
+            json_body={
+                "media_id": media_id,
+                "index": 0,
+                "articles": {
+                    "title": title,
+                    "author": "",
+                    "digest": digest,
+                    "content": html_body,
+                    "thumb_media_id": thumb_media_id,
+                    "show_cover_pic": 1,
+                    "need_open_comment": 0,
+                    "only_fans_can_comment": 0,
+                },
+            },
+        )
+
+
+def _image_meta(path: Path, cdn_url: str) -> WechatImageMeta:
+    image_type = path.suffix.lstrip(".").lower() or "png"
+    if image_type == "jpeg":
+        image_type = "jpg"
+    width = height = None
+    try:
+        from PIL import Image
+        with Image.open(path) as image:
+            width, height = image.size
+            if image.format:
+                image_type = image.format.lower()
+                if image_type == "jpeg":
+                    image_type = "jpg"
+    except OSError:
+        pass
+    return WechatImageMeta(
+        url=cdn_url, width=width, height=height, image_type=image_type,
+    )
 
 
 __all__ = [

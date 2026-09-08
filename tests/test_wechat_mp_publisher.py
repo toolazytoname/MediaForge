@@ -283,7 +283,11 @@ class TestPublishDraft:
 
         def fake_upload(url, *, params, file_path, timeout=60.0):
             calls.append({"kind": "upload", "url": url, "params": params, "file_path": file_path})
-            return upload_resp if upload_resp is not None else {"media_id": "cover_media_1"}
+            if upload_resp is not None:
+                return upload_resp
+            if url.endswith("/media/uploadimg"):
+                return {"url": "https://mmbiz.qpic.cn/cover-body"}
+            return {"media_id": "cover_media_1"}
 
         def fake_post(url, *, params, json_body, timeout=30.0):
             calls.append({"kind": "post", "url": url, "params": params, "json_body": json_body})
@@ -310,17 +314,26 @@ class TestPublishDraft:
         result = adapter.publish(_bundle(content_dir), _account(), dry_run=False)
 
         kinds = [c["kind"] for c in calls]
-        assert kinds == ["get", "upload", "post"]
-        # thumb_media_id 从封面上传结果正确传入草稿 JSON body
-        draft_call = calls[2]
-        assert draft_call["json_body"]["articles"][0]["thumb_media_id"] == "cover_media_1"
+        assert kinds == ["get", "upload", "upload", "post"]
+        draft_call = next(c for c in calls if c["kind"] == "post")
+        article = draft_call["json_body"]["articles"][0]
+        assert article["thumb_media_id"] == "cover_media_1"
+        assert article["show_cover_pic"] == 1
         assert result.platform_post_id == "draft_media_1"
         assert result.url is None  # 草稿箱无公开 url
 
     def test_cover_upload_failure_stops_before_draft(self, tmp_path: Path) -> None:
         content_dir = tmp_path / "content"
         _seed_valid_bundle(content_dir)
-        adapter, calls = self._make_adapter(upload_resp={"media_id": ""})
+        adapter, calls = self._make_adapter()
+
+        def fake_upload(url, *, params, file_path, timeout=60.0):
+            calls.append({"kind": "upload", "url": url, "params": params, "file_path": file_path})
+            if url.endswith("/media/uploadimg"):
+                return {"url": "https://mmbiz.qpic.cn/cover-body"}
+            return {"media_id": ""}
+
+        adapter._upload = fake_upload
         with pytest.raises(PublishError, match="cover upload"):
             adapter.publish(_bundle(content_dir), _account(), dry_run=False)
         kinds = [c["kind"] for c in calls]
@@ -379,13 +392,19 @@ class TestPublishInlineImages:
 
         upload_calls = [c for c in calls if c["kind"] == "upload"]
         content_image_calls = [c for c in upload_calls if c["url"].endswith("/media/uploadimg")]
-        assert len(content_image_calls) == 1
-        assert content_image_calls[0]["file_path"] == content_dir / "images" / "inline-1.png"
+        assert len(content_image_calls) == 2
+        uploaded_files = {c["file_path"] for c in content_image_calls}
+        assert content_dir / "cover.png" in uploaded_files
+        assert content_dir / "images" / "inline-1.png" in uploaded_files
 
         draft_call = next(c for c in calls if c["kind"] == "post")
-        html = draft_call["json_body"]["articles"][0]["content"]
+        article = draft_call["json_body"]["articles"][0]
+        html = article["content"]
         assert "https://mmbiz.qpic.cn/abc123" in html
         assert "../images/inline-1.png" not in html
+        assert 'data-src="https://mmbiz.qpic.cn/abc123"' in html
+        assert 'class="rich_pages wxw-img"' in html
+        assert article["show_cover_pic"] == 1
 
     def test_dry_run_does_not_upload_inline_images(self, tmp_path: Path) -> None:
         content_dir = tmp_path / "content"
@@ -414,14 +433,18 @@ class TestPublishInlineImages:
         with pytest.raises(PublishError, match="url"):
             adapter.publish(_bundle(content_dir), _account(), dry_run=False)
 
-    def test_article_without_inline_images_unaffected(self, tmp_path: Path) -> None:
-        """回归：无插图正文的既有行为不变（不多触发任何 upload/post 调用）。"""
+    def test_article_without_inline_images_still_puts_cover_in_body(self, tmp_path: Path) -> None:
+        """无插图时仍把封面上传进正文，避免草稿箱只有文字。"""
         content_dir = tmp_path / "content"
         _seed_valid_bundle(content_dir)
-        adapter, calls = self._make_adapter()
+        adapter, calls = self._make_adapter(content_image_url="https://mmbiz.qpic.cn/cover1")
         adapter.publish(_bundle(content_dir), _account(), dry_run=False)
         kinds = [c["kind"] for c in calls]
-        assert kinds == ["get", "upload", "post"]
+        assert kinds == ["get", "upload", "upload", "post"]
+        html = next(c for c in calls if c["kind"] == "post")["json_body"]["articles"][0]["content"]
+        assert "https://mmbiz.qpic.cn/cover1" in html
+        assert 'class="rich_pages wxw-img"' in html
+        assert "../cover.png" not in html
 
 
 # ── TestErrorClassification ───────────────────────────────

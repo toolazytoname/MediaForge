@@ -10,6 +10,8 @@ html-post-processor.ts`（231 行，正则/字符串清洗，因 Deno 端无 DOM
 from __future__ import annotations
 
 import html as html_mod
+import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
 
 import markdown as markdown_lib
@@ -162,3 +164,68 @@ def postprocess_html(raw_html: str, *, theme: str = "elegant") -> str:
 def markdown_to_wechat_html(markdown_text: str, *, theme: str = "elegant") -> str:
     """便捷组合：markdown_to_semantic_html → postprocess_html。"""
     return postprocess_html(markdown_to_semantic_html(markdown_text), theme=theme)
+
+
+@dataclass(frozen=True)
+class WechatImageMeta:
+    url: str
+    width: int | None = None
+    height: int | None = None
+    image_type: str = "png"
+
+
+_IMG_TAG_RE = re.compile(r"<img\b([^>]*?)\s*/?>", re.IGNORECASE)
+_IMG_ATTR_RE = re.compile(r'([^\s=]+)="([^"]*)"')
+
+
+def decorate_wechat_content_images(
+    html: str,
+    metas: dict[str, WechatImageMeta] | None = None,
+) -> str:
+    """给正文 <img> 补上公众号编辑器识别所需属性。
+
+    draft/add 会把 src 收成 data-src 并丢掉 class；后台新编辑器因此经常
+    只显示文字。发送前同时带上 src、data-src、class=rich_pages wxw-img、
+    data-type，以及能读到的 data-w / data-ratio。
+    """
+    lookup = metas or {}
+
+    def _replace(match: re.Match[str]) -> str:
+        attr_map = dict(_IMG_ATTR_RE.findall(match.group(1)))
+        src = attr_map.get("src") or attr_map.get("data-src") or ""
+        meta = lookup.get(src) or lookup.get(html_mod.unescape(src))
+        url = meta.url if meta is not None else src
+        if not url:
+            return match.group(0)
+        image_type = meta.image_type if meta is not None else _guess_image_type(url)
+        width = meta.width if meta is not None else None
+        height = meta.height if meta is not None else None
+        style = attr_map.get("style") or (
+            "max-width:100%;display:block;margin:12px auto;"
+        )
+        alt = attr_map.get("alt") or ""
+        attrs = [
+            f'src="{html_mod.escape(url, quote=True)}"',
+            f'data-src="{html_mod.escape(url, quote=True)}"',
+            'class="rich_pages wxw-img"',
+            f'data-type="{html_mod.escape(image_type, quote=True)}"',
+        ]
+        if width:
+            attrs.append(f'data-w="{int(width)}"')
+        if width and height:
+            ratio = f"{height / width:.6f}".rstrip("0").rstrip(".")
+            attrs.append(f'data-ratio="{ratio}"')
+        if alt:
+            attrs.append(f'alt="{html_mod.escape(alt, quote=True)}"')
+        attrs.append(f'style="{html_mod.escape(style, quote=True)}"')
+        return "<img " + " ".join(attrs) + ">"
+
+    return _IMG_TAG_RE.sub(_replace, html)
+
+
+def _guess_image_type(url: str) -> str:
+    lowered = url.lower()
+    for ext in ("jpeg", "jpg", "png", "gif", "webp"):
+        if f".{ext}" in lowered or f"mmbiz_{ext}" in lowered:
+            return "jpg" if ext == "jpeg" else ext
+    return "png"

@@ -10,6 +10,8 @@ from __future__ import annotations
 import pytest
 
 from pipeline.creators.wechat_html import (
+    WechatImageMeta,
+    decorate_wechat_content_images,
     markdown_to_semantic_html,
     markdown_to_wechat_html,
     postprocess_html,
@@ -125,3 +127,31 @@ class TestMarkdownToWechatHtml:
         assert "<h1 style=" in out
         assert "<blockquote style=" in out
         assert "<table style=" in out
+
+
+class TestDecorateWechatContentImages:
+    def test_adds_editor_attrs_and_keeps_src(self):
+        html = '<p><img alt="插图" src="https://mmbiz.qpic.cn/abc.png"></p>'
+        meta = WechatImageMeta(
+            url="https://mmbiz.qpic.cn/abc.png",
+            width=1672, height=941, image_type="png",
+        )
+        out = decorate_wechat_content_images(
+            html, {"https://mmbiz.qpic.cn/abc.png": meta},
+        )
+        assert 'src="https://mmbiz.qpic.cn/abc.png"' in out
+        assert 'data-src="https://mmbiz.qpic.cn/abc.png"' in out
+        assert 'class="rich_pages wxw-img"' in out
+        assert 'data-type="png"' in out
+        assert 'data-w="1672"' in out
+        assert 'data-ratio="0.562799"' in out
+        assert 'alt="插图"' in out
+
+    def test_without_meta_still_mirrors_src_to_data_src(self):
+        html = '<img src="https://mmbiz.qpic.cn/x.jpg">'
+        out = decorate_wechat_content_images(html)
+        assert 'src="https://mmbiz.qpic.cn/x.jpg"' in out
+        assert 'data-src="https://mmbiz.qpic.cn/x.jpg"' in out
+        assert 'class="rich_pages wxw-img"' in out
+        assert 'data-type="jpg"' in out
+        assert "data-w=" not in out
