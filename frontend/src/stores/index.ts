@@ -884,11 +884,50 @@ export interface TextProviderStatus {
   error: string | null
 }
 
+export interface ByokSettings {
+  base_url: string
+  text_model: string
+  image_model: string
+  wire_api: 'responses' | 'chat_completions'
+  key_set: boolean
+  masked: string | null
+  input_price: number | null
+  output_price: number | null
+  priced: boolean
+  price_source: 'user' | 'official_estimate' | 'unpriced'
+  cost_kind: 'estimate'
+  reload_error?: string | null
+}
+
+export interface ByokCheckResult {
+  ok: boolean
+  priced: boolean
+  price_source: string
+  missing_models: string[]
+  models: string[]
+  message: string
+}
+
+export interface WechatSettings {
+  app_id: string
+  configured: boolean
+  delivery_enabled: boolean
+  credentials_path: string
+  warning: string | null
+}
+
+export interface WechatCheckResult {
+  ok: boolean
+  message: string
+}
+
 export const useSettingsStore = defineStore('settings', () => {
   const config = ref<Record<string, any> | null>(null)
   const doctor = ref<DoctorItem[]>([])
   const keyGroups = ref<SettingsKeyGroup[]>([])
   const textProvider = ref<TextProviderStatus | null>(null)
+  const byok = ref<ByokSettings | null>(null)
+  const wechat = ref<WechatSettings | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
   async function load() {
@@ -958,10 +997,106 @@ export const useSettingsStore = defineStore('settings', () => {
       return false
     }
   }
+  async function loadByok(): Promise<ByokSettings | null> {
+    try {
+      byok.value = (await api.get<ByokSettings>('/settings/byok')).data
+      return byok.value
+    } catch (e) {
+      message.error(`加载连接配置失败：${unwrapError(e)}`)
+      return null
+    }
+  }
+  async function saveByok(input: {
+    base_url: string
+    text_model: string
+    image_model: string
+    wire_api: 'responses' | 'chat_completions'
+    api_key?: string
+    input_price: number | null
+    output_price: number | null
+  }): Promise<boolean> {
+    try {
+      const body: Record<string, unknown> = {
+        base_url: input.base_url,
+        text_model: input.text_model,
+        image_model: input.image_model,
+        wire_api: input.wire_api,
+        input_price: input.input_price,
+        output_price: input.output_price,
+      }
+      if (input.api_key) body.api_key = input.api_key
+      byok.value = (await api.put<ByokSettings>('/settings/byok', body)).data
+      message.success('已保存中转站连接')
+      return true
+    } catch (e) {
+      message.error(`保存失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  async function clearByokKey(): Promise<boolean> {
+    try {
+      byok.value = (await api.delete<ByokSettings>('/settings/byok/key')).data
+      message.success('已清除 API key')
+      return true
+    } catch (e) {
+      message.error(`清除失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  async function checkByok(): Promise<ByokCheckResult | null> {
+    try {
+      return (await api.post<ByokCheckResult>('/settings/byok/check')).data
+    } catch (e) {
+      message.error(`检查失败：${unwrapError(e)}`)
+      return null
+    }
+  }
+  async function loadWechat(): Promise<WechatSettings | null> {
+    try {
+      wechat.value = (await api.get<WechatSettings>('/settings/wechat')).data
+      return wechat.value
+    } catch (e) {
+      message.error(`加载公众号配置失败：${unwrapError(e)}`)
+      return null
+    }
+  }
+  async function saveWechat(input: { app_id: string; app_secret?: string }): Promise<boolean> {
+    try {
+      const body: Record<string, unknown> = { app_id: input.app_id }
+      if (input.app_secret) body.app_secret = input.app_secret
+      wechat.value = (await api.put<WechatSettings>('/settings/wechat', body)).data
+      message.success('已保存公众号凭据')
+      return true
+    } catch (e) {
+      message.error(`保存失败：${unwrapError(e)}`)
+      return false
+    }
+  }
+  async function checkWechat(): Promise<WechatCheckResult | null> {
+    try {
+      return (await api.post<WechatCheckResult>('/settings/wechat/check')).data
+    } catch (e) {
+      message.error(`检查失败：${unwrapError(e)}`)
+      return null
+    }
+  }
+  async function enableWechat(): Promise<boolean> {
+    try {
+      wechat.value = (await api.post<WechatSettings>('/settings/wechat/enable')).data
+      await load()
+      message.success('已启用公众号草稿交付')
+      return true
+    } catch (e) {
+      message.error(`启用失败：${unwrapError(e)}`)
+      return false
+    }
+  }
   return {
-    config, doctor, keyGroups, textProvider, loading, error,
+    config, doctor, keyGroups, textProvider, byok, wechat, loading, error,
     load, loadKeys, saveKey, clearKey,
     setPublishEnabled, setPublishAllowedPlatforms,
+    loadByok, saveByok, clearByokKey, checkByok,
+    loadWechat, saveWechat, checkWechat, enableWechat,
   }
 })
 

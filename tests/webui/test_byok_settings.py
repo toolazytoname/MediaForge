@@ -210,6 +210,25 @@ def test_wechat_check_redacts_upstream_secret(client, monkeypatch):
     assert response.json()["ok"] is False
 
 
+def test_wechat_saves_to_config_referenced_path(client, tmp_path):
+    cfg = tmp_path / "config.yaml"
+    secret_path = tmp_path / "from-config.json"
+    cfg.write_text(
+        _MINIMAL_CONFIG
+        + "platforms:\n  wechat_mp:\n    kind: api\n    windows: ['09:00-11:00']\n"
+        + "    accounts:\n      - id: main\n        credentials: "
+        + str(secret_path)
+        + "\n",
+        encoding="utf-8",
+    )
+    response = client.put("/api/v1/settings/wechat", json=_WECHAT_APP)
+    assert response.status_code == 200, response.text
+    assert response.json()["credentials_path"] == str(secret_path)
+    assert secret_path.is_file()
+    assert json.loads(secret_path.read_text())["app_secret"] == "wx-private-value"
+    assert not (tmp_path / "wechat.json").exists()
+
+
 def test_enable_wechat_without_credentials_does_not_change_config(client, tmp_path):
     cfg = tmp_path / "config.yaml"
     original = cfg.read_bytes()

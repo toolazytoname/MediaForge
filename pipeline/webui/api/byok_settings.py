@@ -133,19 +133,43 @@ def check_byok() -> dict[str, Any]:
     }
 
 
+def _wechat_secret_path() -> Path:
+    cfg, err = deps.get_config()
+    try:
+        platform = cfg.platforms.wechat_mp if cfg else None
+        accounts = platform.accounts if platform else []
+        if accounts and getattr(accounts[0], "credentials", None):
+            return Path(accounts[0].credentials)
+    except Exception:
+        pass
+    return _WECHAT_PATH
+
+
 @router.get("/settings/wechat")
 def get_wechat() -> dict[str, Any]:
+    path = _wechat_secret_path()
     app_id = ""
     configured = False
-    if _WECHAT_PATH.is_file():
+    if path.is_file():
         try:
-            app_id, secret = load_wechat_credentials(_WECHAT_PATH)
+            app_id, secret = load_wechat_credentials(path)
             configured = bool(secret)
         except (ValueError, OSError):
             pass
-    cfg, _ = deps.get_config()
+    cfg, cfg_err = deps.get_config()
     enabled = bool(cfg and cfg.publish.enabled and "wechat_mp" in cfg.publish.allowed_platforms)
-    return {"app_id": app_id, "configured": configured, "delivery_enabled": enabled}
+    mismatch = path != _WECHAT_PATH and not path.is_file() and _WECHAT_PATH.is_file()
+    warning = None
+    if cfg is None and cfg_err:
+        warning = "无法读取本地配置，公众号凭据将写到默认 secrets/wechat_mp_main.json。"
+    elif str(path) != str(_WECHAT_PATH):
+        warning = f"当前发送方读取 {path}，设置页会保存到同一位置。"
+    if mismatch:
+        warning = f"配置引用 {path}，但该文件不存在；默认文件 {_WECHAT_PATH} 有凭据却不会被发送方读取。"
+    return {
+        "app_id": app_id, "configured": configured, "delivery_enabled": enabled,
+        "credentials_path": str(path), "warning": warning,
+    }
 
 
 @router.put("/settings/wechat")
@@ -156,12 +180,13 @@ def save_wechat(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not isinstance(app_id, str) or not re.fullmatch(r"wx[a-zA-Z0-9]{16}", app_id):
         raise _bad("请填写有效的公众号 AppID")
     secret = body.get("app_secret")
-    if secret is None and _WECHAT_PATH.is_file():
-        old_id, old_secret = load_wechat_credentials(_WECHAT_PATH)
+    path = _wechat_secret_path()
+    if secret is None and path.is_file():
+        old_id, old_secret = load_wechat_credentials(path)
         secret = old_secret if old_id == app_id else None
     if not isinstance(secret, str) or not secret.strip():
         raise _bad("请填写 AppSecret")
-    atomic_write_secret(_WECHAT_PATH, json.dumps({"app_id": app_id, "app_secret": secret.strip()}).encode())
+    atomic_write_secret(_wechat_secret_path(), json.dumps({"app_id": app_id, "app_secret": secret.strip()}).encode())
     return get_wechat()
 
 
@@ -170,7 +195,7 @@ def check_wechat() -> dict[str, Any]:
     if not get_wechat()["configured"]:
         return {"ok": False, "message": "请先保存 AppID 和 AppSecret"}
     try:
-        app_id, secret = load_wechat_credentials(_WECHAT_PATH)
+        app_id, secret = load_wechat_credentials(_wechat_secret_path())
         provider = WechatMpPublisher(app_id=app_id, app_secret=secret)
         token = provider._ensure_access_token()
         response = httpx.get("https://api.weixin.qq.com/cgi-bin/draft/count", params={"access_token": token}, timeout=15)

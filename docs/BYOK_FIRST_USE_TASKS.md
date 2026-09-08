@@ -86,16 +86,18 @@
 - [x] 未定价模型在付费调用前明确阻止。支持用户配置估算单价，不使用旧 Claude 价格或零价伪装。GPT-5.6 Sol 官方参考价为输入 $4、输出 $20/百万 token（本次已查官方文档）；如采用此默认，明确仅作预算估算，不冒充中转实付价格。
 - [x] 中转公开 `/api/pricing` 返回 model_ratio/completion_ratio 等倍率；未核实倍率和账户分组的计费换算，不直接称为美元单价。
 
-  ✅ 完成于 2026-09-08，commit 待写入，备注：OpenAI 默认与设置页对齐为 gpt-5.6-sol/responses；截断 Responses 记账 usage；检查接口区分缺 key/缺模型/未定价。未把中转 /api/pricing 倍率当美元。
+  ✅ 完成于 2026-09-08，commit a3ae7a2，备注：OpenAI 默认与设置页对齐为 gpt-5.6-sol/responses；截断 Responses 记账 usage；检查接口区分缺 key/缺模型/未定价。未把中转 /api/pricing 倍率当美元。
 
 ### BYOK-3 完成设置页
 
-- [ ] 在既有 Vue/Ant Design Vue 设置页加入 BYOK 表单，普通可编辑字段与密码字段分开。提供整组保存、检查连接、清除 key 和状态反馈。
-- [ ] 提供现有 `main` 公众号的 AppID/AppSecret 表单、保存、连接检查、启用公众号草稿交付。AppSecret 不回填明文；修改 AppID 时不沿用另一账号 secret。
-- [ ] 复用 `GET/PUT /settings/wechat`、`POST /settings/wechat/check`、`POST /settings/wechat/enable`。检查 token 与草稿列表访问，文案不承诺已经验证写入权限。
-- [ ] 保存到配置实际引用的 `secrets/wechat_mp_main.json`，与发送方读取保持一致；若配置不匹配，显示修复提示，不能保存到无人读取的位置。
-- [ ] 费用标注为估算，用户可编辑单价；缺 key/缺价格时给出对应设置入口。设置页首屏优先 BYOK 与公众号接入，现有通用发布设置保留为次要项。
-- [ ] 桌面和手机布局无固定宽输入造成的横向溢出；复用现有图标库及组件，不引入新 UI 框架。
+- [x] 在既有 Vue/Ant Design Vue 设置页加入 BYOK 表单，普通可编辑字段与密码字段分开。提供整组保存、检查连接、清除 key 和状态反馈。
+- [x] 提供现有 `main` 公众号的 AppID/AppSecret 表单、保存、连接检查、启用公众号草稿交付。AppSecret 不回填明文；修改 AppID 时不沿用另一账号 secret。
+- [x] 复用 `GET/PUT /settings/wechat`、`POST /settings/wechat/check`、`POST /settings/wechat/enable`。检查 token 与草稿列表访问，文案不承诺已经验证写入权限。
+- [x] 保存到配置实际引用的 `secrets/wechat_mp_main.json`，与发送方读取保持一致；若配置不匹配，显示修复提示，不能保存到无人读取的位置。
+- [x] 费用标注为估算，用户可编辑单价；缺 key/缺价格时给出对应设置入口。设置页首屏优先 BYOK 与公众号接入，现有通用发布设置保留为次要项。
+- [x] 桌面和手机布局无固定宽输入造成的横向溢出；复用现有图标库及组件，不引入新 UI 框架。
+
+  ✅ 完成于 2026-09-08，commit 待写入，备注：设置页首屏 BYOK 与公众号；凭据写到配置实际引用路径。
 
 ### BYOK-4 图像与长请求闭环
 
