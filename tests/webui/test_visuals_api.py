@@ -34,12 +34,18 @@ def test_visual_plan_no_provider_and_fake_generation_are_auditable(client, tmp_p
     assert bad_prompt.status_code == 400 and bad_reference.status_code == 400
 
     provider = image_gen.OpenAIImageProvider("fake")
-    monkeypatch.setattr(provider, "call", lambda *args, **kwargs: [b"fake png"])
+    captured: list[str] = []
+    def fake_call(prompt, *args, **kwargs):
+        captured.append(prompt)
+        return [b"fake png"]
+    monkeypatch.setattr(provider, "call", fake_call)
     image_gen.set_provider(provider)
     generated = client.post("/api/v1/projects/prj_visual_api/visuals/assets", json={"slot_id": "vsl_cover", "prompt": "封面"})
     assert generated.status_code == 201
     asset = generated.json()
     assert asset["status"] == "candidate" and asset["cost_usd"] > 0
+    assert "克制" in asset["prompt"] and "安静的编辑插画" in asset["prompt"] and "封面" in asset["prompt"]
+    assert captured and captured[0] == asset["prompt"]
     assert (root / "prj_visual_api" / asset["file_path"]).read_bytes() == b"fake png"
     assert client.get("/api/v1/projects/prj_visual_api/visuals").json()["assets"][-1]["id"] == asset["id"]
 

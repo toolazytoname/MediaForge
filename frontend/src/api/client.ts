@@ -10,15 +10,16 @@ export const api = axios.create({
 // 衍生 / 出图这类同步长耗时端点专用超时——后端自身 LLM/图像调用带 3 次重试，
 // 单次 timeout 就有 60~120s（见 pipeline/creators/llm.py / image_gen.py），
 // 30s 全局默认必然先于后端超时触发，误报「timeout of 30000ms exceeded」。
-export const GENERATION_TIMEOUT_MS = 10 * 60 * 1000
+export const GENERATION_TIMEOUT_MS = 15 * 60 * 1000
 
 // M10 P2 阶段 C：写端点（POST）共用 helper
 // 直接暴露 axios.post 不需要 wrapper——但为类型清晰提供一个泛型版
 export async function apiPost<T = unknown>(
   url: string,
   body?: unknown,
+  timeoutMs: number = 30_000,
 ): Promise<AxiosResponse<T>> {
-  return api.post<T>(url, body)
+  return api.post<T>(url, body, { timeout: timeoutMs })
 }
 
 export interface ApiError {

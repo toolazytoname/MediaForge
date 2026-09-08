@@ -320,7 +320,7 @@ export const useMasterStore = defineStore('master', () => {
   }
 
   async function request(projectId: string, input: Pick<MasterSuggestion, 'action' | 'selection'>): Promise<MasterSuggestion> {
-    const response = await apiPost<MasterSuggestion>(`/projects/${projectId}/master/suggestions`, input.selection ? input : { action: input.action })
+    const response = await apiPost<MasterSuggestion>(`/projects/${projectId}/master/suggestions`, input.selection ? input : { action: input.action }, GENERATION_TIMEOUT_MS)
     suggestions.value = [...suggestions.value, response.data]
     return response.data
   }
@@ -371,12 +371,12 @@ export const useVisualsStore = defineStore('visuals', () => {
     return response.data
   }
   async function generate(projectId: string, slotId: string, prompt: string): Promise<VisualAsset> {
-    const response = await apiPost<VisualAsset>(`/projects/${projectId}/visuals/assets`, { slot_id: slotId, prompt })
+    const response = await apiPost<VisualAsset>(`/projects/${projectId}/visuals/assets`, { slot_id: slotId, prompt }, GENERATION_TIMEOUT_MS)
     if (plan.value?.project_id === projectId) plan.value = { ...plan.value, assets: [...plan.value.assets, response.data] }
     return response.data
   }
   async function edit(projectId: string, slotId: string, prompt: string, referenceAssetId: string): Promise<VisualAsset> {
-    const response = await apiPost<VisualAsset>(`/projects/${projectId}/visuals/assets/edit`, { slot_id: slotId, prompt, reference_asset_id: referenceAssetId })
+    const response = await apiPost<VisualAsset>(`/projects/${projectId}/visuals/assets/edit`, { slot_id: slotId, prompt, reference_asset_id: referenceAssetId }, GENERATION_TIMEOUT_MS)
     if (plan.value?.project_id === projectId) plan.value = { ...plan.value, assets: [...plan.value.assets, response.data] }
     return response.data
   }

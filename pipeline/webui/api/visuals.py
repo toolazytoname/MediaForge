@@ -40,6 +40,19 @@ def save_visuals(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str,
     try: return _plan(visuals.save_plan(project_id, bible=body["bible"], slots=body["slots"], projects_root=_root()))
     except visuals.VisualsError as error: raise _visual_error(project_id, error) from error
 
+def compose_image_prompt(plan: visuals.VisualPlan, slot: visuals.VisualSlot, user_prompt: str) -> str:
+    style = "; ".join(f"{key}: {value}" for key, value in (plan.bible or {}).items())
+    instruction = user_prompt.strip() or slot.direction
+    parts = [
+        f"Visual style: {style}" if style else "",
+        f"Slot purpose: {slot.purpose}",
+        f"Related passage: {slot.paragraph_anchor}" if slot.paragraph_anchor else "",
+        f"Direction: {slot.direction}",
+        f"User instruction: {instruction}",
+    ]
+    return "\n".join(part for part in parts if part)
+
+
 def _provider() -> image_gen.OpenAIImageProvider:
     provider = image_gen._PROVIDER
     if not isinstance(provider, image_gen.OpenAIImageProvider):
@@ -182,6 +195,7 @@ def _create_asset(project_id: str, body: dict[str, Any], *, edit: bool) -> dict[
         plan = visuals.load_visuals(project_id, projects_root=_root()); slot = next(item for item in plan.slots if item.id == body["slot_id"])
     except StopIteration: raise _err(400, "invalid_visual_request", "visual slot not found")
     except visuals.VisualsError as error: raise _visual_error(project_id, error) from error
+    sent_prompt = compose_image_prompt(plan, slot, body["prompt"])
     parent = None
     if edit:
         parent = next((item for item in plan.assets if item.id == body["reference_asset_id"]), None)
@@ -192,20 +206,20 @@ def _create_asset(project_id: str, body: dict[str, Any], *, edit: bool) -> dict[
     try:
         provider = _provider()
     except HTTPException as error:
-        _record_unavailable(project_id, slot=slot, prompt=body["prompt"], reference_asset_id=body.get("reference_asset_id"))
+        _record_unavailable(project_id, slot=slot, prompt=sent_prompt, reference_asset_id=body.get("reference_asset_id"))
         raise error
     asset_id = None
     try:
         from pipeline.utils.ids import new_id
         asset_id = new_id("vas"); path = visuals.asset_path(project_id, asset_id, projects_root=_root())
-        images = _edit_with_retry(provider, body["prompt"], image_path=Path(_root()) / project_id / parent.file_path, aspect_ratio=slot.aspect_ratio) if edit else image_gen._call_with_retry(provider, body["prompt"], aspect_ratio=slot.aspect_ratio, n=1)
+        images = _edit_with_retry(provider, sent_prompt, image_path=Path(_root()) / project_id / parent.file_path, aspect_ratio=slot.aspect_ratio) if edit else image_gen._call_with_retry(provider, sent_prompt, aspect_ratio=slot.aspect_ratio, n=1)
         image_gen._write_atomic(path, images[0])
-        asset = visuals.record_asset(project_id, slot_id=slot.id, prompt=body["prompt"], model=provider._model, size=slot.aspect_ratio, cost_usd=provider.estimated_cost_usd(aspect_ratio=slot.aspect_ratio), now=_now(), file_path=f"assets/{asset_id}.png", status="candidate", reference_asset_id=body.get("reference_asset_id"), projects_root=_root(), asset_id=asset_id)
+        asset = visuals.record_asset(project_id, slot_id=slot.id, prompt=sent_prompt, model=provider._model, size=slot.aspect_ratio, cost_usd=provider.estimated_cost_usd(aspect_ratio=slot.aspect_ratio), now=_now(), file_path=f"assets/{asset_id}.png", status="candidate", reference_asset_id=body.get("reference_asset_id"), projects_root=_root(), asset_id=asset_id)
         from dataclasses import asdict
         return asdict(asset)
     except (visuals.VisualsError, ValueError, image_gen.RetryableError, IndexError) as error:
         try:
-            visuals.record_asset(project_id, slot_id=body["slot_id"], prompt=body.get("prompt", "invalid"), model=provider._model, size=slot.aspect_ratio, cost_usd=provider.estimated_cost_usd(aspect_ratio=slot.aspect_ratio), now=_now(), file_path=None, status="failed", failure=str(error), reference_asset_id=body.get("reference_asset_id"), projects_root=_root(), asset_id=asset_id)
+            visuals.record_asset(project_id, slot_id=body["slot_id"], prompt=sent_prompt, model=provider._model, size=slot.aspect_ratio, cost_usd=provider.estimated_cost_usd(aspect_ratio=slot.aspect_ratio), now=_now(), file_path=None, status="failed", failure=str(error), reference_asset_id=body.get("reference_asset_id"), projects_root=_root(), asset_id=asset_id)
         except visuals.VisualsError: pass
         raise _err(502, "image_generation_failed", str(error)) from error
 
