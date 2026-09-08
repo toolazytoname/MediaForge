@@ -324,6 +324,7 @@ async function onSavePlatforms() {
 .key-group { margin-bottom: 16px; }
 .key-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .key-row code { min-width: 12em; }
+.key-row :deep(.ant-tag), .settings-form :deep(.ant-form-item-label) { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 .key-row :deep(.ant-input-password) { flex: 1 1 220px; min-width: 0; }
 .muted { margin-left: 8px; color: #666; }
 .config-json { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow: auto; max-height: 500px; }

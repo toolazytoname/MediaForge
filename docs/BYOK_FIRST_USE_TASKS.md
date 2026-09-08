@@ -29,19 +29,19 @@
 - [x] 真实 GET `/v1/models` 返回 `gpt-image-2`、`gpt-5.6-sol` 等；**没有实际调用文本生成、图片生成、图片编辑或公众号接口**。
 - [x] 改动前相关专项测试 85 passed。
 
-### 已提交的半成品基线（不是可交付）
-
-初版后端已提交，不是「尚未提交」：
+### 已提交基线
 
 | commit | 内容 |
 | --- | --- |
 | `e2e20b1` | BYOK-1 三处修复 + 初版 BYOK 后端/测试 |
 | `c4c7961` | 任务清单写入 `e2e20b1` |
-| `048639d` | 补完 MiniMax 凭据隔离与回退测试，同步交接状态 |
+| `048639d` | 补完 MiniMax 凭据隔离与回退测试 |
+| `a3ae7a2` | BYOK-2 默认协议对齐与截断 usage 记账 |
+| `a7b2918` | BYOK-3 设置页 |
+| `e3e2dc1` | BYOK-4/5 图像闭环与 Markdown 交付入口 |
+| `b33820e` | BYOK-6/7 真实验收记录与生产构建 |
 
-涉及文件：`pipeline/env_keys.py`、`pipeline/creators/llm.py`、`pipeline/creators/image_gen.py`、`pipeline/webui/api/byok_settings.py`、`pipeline/webui/api/__init__.py`、`tests/test_byok_responses.py`、`tests/webui/test_byok_settings.py`、`tests/test_image_gen.py`。
-
-**尚未改任何前端源码、未保存真实 key、未创建或修改真实稿件、未做真实写稿/出图/公众号发送。**
+密钥只在 `secrets/`（gitignore）。公众号凭据仍未提供，未送草稿箱。
 
 ### 验证记录
 
@@ -134,17 +134,18 @@
 
   ✅ 部分完成于 2026-09-08。本机 `127.0.0.1:8788` 已加载新 bundle。真实 AI 主稿建议 HTTP 200、约 2800 字，现稿标题/版本未变。真实 GPT Image 2 候选：`vas_91553d94`（封面）、`vas_3479aec1`、`vas_8dd5dad4`，编辑 `vas_abab8241`，均为 PNG。未选择覆盖原 selected 资产。
   ⚠️ 等待用户：公众号 AppID/AppSecret 未提供，`secrets/wechat_mp_main.json` 不存在，未送草稿箱、无 media_id。
-  ⚠️ 浏览器桌面/手机点选路径未用 Playwright 走完，前端文案已在生产 bundle 中核对。
+  Playwright 桌面/手机走查见 BYOK-7 截图。
 
 ### BYOK-7 回归、记录与提交
 
 - [x] 全量 Python 测试通过；前端生产构建通过；密钥扫描及 Anthropic 导入护栏通过。
-- [ ] 使用 agent-browser/Playwright 验证桌面及手机：设置保存恢复、错误提示、长请求等待、图片显示、Markdown 操作、草稿发送前状态。保存截图，不带密钥明文。
+- [x] 使用 agent-browser/Playwright 验证桌面及手机：设置保存恢复、错误提示、长请求等待、图片显示、Markdown 操作、草稿发送前状态。保存截图，不带密钥明文。
 - [x] `frontend/dist/` 只用构建生成，不手改 hash 文件。运行服务需实际加载最新路由与 bundle。
 - [x] 在 `docs/TASKS.md` 记录分项完成结果、commit 和未完成的真实验收项，更新本清单。
 - [x] 按已完成且测试通过的任务提交；保留用户无关改动。最终交付访问地址、真实完成项、测试结果和剩余账号前提。
 
-  ✅ 完成于 2026-09-08。全量 `1848 passed`（去掉 SOCKS 代理）；`npm run build` 成功；secret-scan ok；`import anthropic` 仅允许 llm.py。未做带密钥截图的 Playwright 桌面/手机走查。
+  ✅ 完成于 2026-09-08。全量 `1848 passed`（去掉 SOCKS 代理）；`npm run build` 成功；secret-scan ok；`import anthropic` 仅允许 llm.py。
+  ✅ Playwright 桌面 1280 与手机 390 走查设置页、主稿 Markdown、视觉候选、平台稿 Markdown、草稿发送前状态；截图在 `docs/product-validation/byok-browser/`，仅含脱敏 mask。手机页因长 mask 标签溢出已修。
 
 ## 4. 验证命令与参考
 
@@ -165,4 +166,4 @@ rg -n 'import anthropic' pipeline -g '*.py'
 - https://developers.openai.com/api/reference/resources/images
 - https://developers.openai.com/api/docs/models/gpt-5.6-sol
 
-接手指令建议：**BYOK-1–5 与回归已提交。访问 `http://127.0.0.1:8788/`。公众号真实发送仍等待用户凭据。不要把模型列表成功当成已公开发布。不要 reset/clean，不要提交 `secrets/`。**
+接手指令建议：**BYOK-1 的 MiniMax 凭据隔离已在 `048639d` 补完，不要从 BYOK-1 重做。访问 `http://127.0.0.1:8788/`。公众号真实发送仍等待用户凭据。不要把模型列表成功当成已公开发布。不要 reset/clean，不要提交 `secrets/`。**
