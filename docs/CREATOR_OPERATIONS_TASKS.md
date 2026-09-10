@@ -66,17 +66,19 @@
 
 ## UX-01 统一产品方向与最新基线
 
-- [ ] **目标**：把本轮授权、当前 git/凭据/草稿事实和过期交接写进本文件，并让 `TASKS.md` / `AGENTS.md` / BYOK 过期句指向这里。
+- [x] **目标**：把本轮授权、当前 git/凭据/草稿事实和过期交接写进本文件，并让 `TASKS.md` / `AGENTS.md` / BYOK 过期句指向这里。
 - **步骤**：落盘本清单；修正“缺公众号凭据、未送草稿箱、多账号一律后置、不得进入真实发布开发”等过期表述；保留 R0 未勾选与未跟踪截图。
 - **声明改动文件**：`docs/CREATOR_OPERATIONS_TASKS.md`、`docs/TASKS.md`、`docs/AGENTS.md` 或 `AGENTS.md`、`docs/BYOK_FIRST_USE_TASKS.md`、必要时 `docs/PRODUCT_RESET_PLAN.md` 文首指向。
 - **验收**：任意空白上下文只读本文件即可知道下一步；不再把缺凭据当成当前阻塞；三张 `open-*.png` 仍未跟踪。
 - **红线**：不改业务代码；不提交截图和 secrets。
 
+  ✅ 完成于 2026-09-10，commit 606ffa6，备注：本轮入口落盘，过期缺凭据/后置多账号表述已改。
+
 ---
 
 ## UX-02 账号创作档案与作品绑定
 
-- [ ] **目标**：每个微信/头条账号有独立创作档案；作品明确绑定账号；凭据按账号隔离；交付必须带账号身份。禁止回退到配置里的第一个账号。
+- [x] **目标**：每个微信/头条账号有独立创作档案；作品明确绑定账号；凭据按账号隔离；交付必须带账号身份。禁止回退到配置里的第一个账号。
 - **步骤**：
   1. sidecar `output/accounts/<account_id>/account.json`（`acc_` 前缀，`valid_sidecar_id`）；字段含定位、读者、风格、参考资料、创作方式、频率、时区、预算、交付目的地、`operations_enabled`（默认 false）、`credentials_ref`（只存 secrets 相对路径）。
   2. sidecar `output/projects/<project_id>/account_binding.json`：按平台绑定 `account_id`，不允许空绑定后猜 `accounts[0]`。
@@ -85,6 +87,8 @@
 - **测试**：创建/读取/原子写；路径穿越拒绝；两账号凭据 ref 不同；绑定缺失拒绝交付；`_adapter_for` / `_first_account` 不再静默取 `[0]`；导入 config 账号后 `operations_enabled is False`。
 - **声明改动文件**：`pipeline/account_profiles.py`、`pipeline/account_bindings.py`、`tests/test_account_profiles.py`、`tests/test_account_bindings.py`、`pipeline/webui/api/delivery.py`、`pipeline/scheduler.py`、相关 API/测试、本文件。
 - **红线**：不改 Project frozen 字段；不把 secret 写入 sidecar；不开启现有账号运营。
+
+  ✅ 完成于 2026-09-10，全量 `1867 passed`；交付草稿必须显式 `account_id`，多账号排期不得取 `accounts[0]`。
 
 ---
 

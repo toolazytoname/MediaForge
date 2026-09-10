@@ -27,6 +27,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
+from pipeline.account_identity import AccountIdentityError, resolve_platform_account
 from pipeline.config import PlatformAPI, PlatformPlaywright
 from pipeline.models import Content, Publication, PublicationStatus
 from pipeline.utils.ids import new_id
@@ -96,6 +97,7 @@ def plan(
     min_gap_hours: int,
     cross_platform_gap_minutes: int,
     tz_name: str = "Asia/Shanghai",
+    account_ids: dict[str, str] | None = None,
 ) -> PlanResult:
     """为 approved 内容 × 启用的平台 计算新排期。
 
@@ -156,7 +158,9 @@ def plan(
                 # 排不下（理论上不应发生，留扩展点）
                 continue
 
-            account_id = _first_account(plat_cfg)
+            account_id = _account_for_platform(
+                plat_cfg, requested=(account_ids or {}).get(plat_name),
+            )
             pub = Publication(
                 id=new_id("p"),
                 content_id=content.id,
@@ -281,12 +285,26 @@ def _parse_iso_utc(s: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _account_for_platform(plat, *, requested: str | None) -> str:
+    """需要明确账号。仅当配置里 0 或 1 个账号时才允许省略。"""
+    accounts = list(getattr(plat, "accounts", None) or [])
+    if requested:
+        if not accounts:
+            return requested
+        return resolve_platform_account(plat, account_id=requested).id
+    if not accounts:
+        return "_default_"
+    if len(accounts) == 1:
+        return accounts[0].id
+    raise AccountIdentityError(
+        "account_id required when multiple accounts exist",
+        code="account_id_required",
+    )
+
+
 def _first_account(plat) -> str:
-    """从 platform_cfg.accounts 取第一个账号 id；空则用 '_default_'。"""
-    accs = getattr(plat, "accounts", None) or []
-    if accs:
-        return getattr(accs[0], "id", None) or "_default_"
-    return "_default_"
+    """兼容旧测试名：多账号时必须失败，不得静默取 [0]。"""
+    return _account_for_platform(plat, requested=None)
 
 
 __all__ = [

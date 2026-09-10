@@ -32,6 +32,7 @@ from pipeline.webui.api import (
     delivery,
     autonomy,
     byok_settings,
+    account_profiles,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -58,5 +59,6 @@ api_router.include_router(capabilities.router)
 api_router.include_router(delivery.router)
 api_router.include_router(autonomy.router)
 api_router.include_router(byok_settings.router)
+api_router.include_router(account_profiles.router)
 
 __all__ = ["api_router"]

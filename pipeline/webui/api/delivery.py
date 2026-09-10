@@ -28,6 +28,11 @@ from pipeline.delivery.service import (
     preview_deliverable,
 )
 from pipeline.delivery.store import latest_attempts
+from pipeline.account_identity import (
+    AccountIdentityError,
+    account_credentials_path,
+    resolve_platform_account,
+)
 from pipeline.publishers import get_adapter
 from pipeline.publishers.base import AccountConfig
 from pipeline.webui import deps
@@ -202,7 +207,13 @@ def draft(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(defa
                 "message": "gallery/xiaohongshu Project path only allows preview/export",
             }})
         platform = deliverable.targets[0]
-        adapter, account = _adapter_for(cfg, platform)
+        account_id = body.get("account_id")
+        if not isinstance(account_id, str) or not account_id.strip():
+            raise HTTPException(status_code=400, detail={"error": {
+                "code": "account_id_required",
+                "message": "draft requires an explicit account_id",
+            }})
+        adapter, account = _adapter_for(cfg, platform, account_id=account_id.strip())
         with deps._db() as conn:
             result = create_draft(
                 conn, project_id=project_id, deliverable_id=deliverable_id, actor=actor,
@@ -211,17 +222,23 @@ def draft(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(defa
             )
     except DeliveryError as error:
         raise _raise(error) from error
+    except AccountIdentityError as error:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": error.code, "message": str(error),
+        }}) from error
     except (DeliverablesError, ValueError, FileNotFoundError) as error:
         raise HTTPException(status_code=400, detail={"error": {"code": "draft_unavailable", "message": str(error)}}) from error
     return attempt_to_dict(result)
 
 
-def _adapter_for(cfg: Any, platform: str) -> tuple[Any, AccountConfig]:
+def _adapter_for(
+    cfg: Any, platform: str, account_id: str | None = None,
+) -> tuple[Any, AccountConfig]:
     plat = getattr(cfg.platforms, platform, None)
-    if plat is None or not plat.accounts:
+    if plat is None:
         raise DeliveryError(f"no {platform} account configured", code="account_missing")
-    acc = plat.accounts[0]
-    creds = acc.credentials if hasattr(acc, "credentials") else acc.cookies
+    acc = resolve_platform_account(plat, account_id=account_id)
+    creds = account_credentials_path(acc)
     account = AccountConfig(id=acc.id, credentials_path=Path(creds))
     return get_adapter(platform, account=account, config=cfg), account
 
