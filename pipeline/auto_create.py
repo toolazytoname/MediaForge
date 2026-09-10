@@ -61,14 +61,13 @@ def run_auto_create(
 
     created_master = False
     revisions = 0
-    verdict, _score = "pass", 8.0
+    scorer = score_fn or (lambda title, body: score_manuscript(
+        title, body, sources=board.sources, interview=interview,
+    )[:2])
     master = master_documents.load_master(project_id, projects_root=projects_root)
     if master is None:
         _assert_not_duplicate_theme(project, projects_root=projects_root)
         writer = draft_fn or _default_draft
-        scorer = score_fn or (lambda title, body: score_manuscript(
-            title, body, sources=board.sources, interview=interview,
-        )[:2])
         title, body = writer(project, interview, board, None)
         verdict, _score = scorer(title, body)
         while verdict != "pass" and revisions < max_revisions:
@@ -89,6 +88,9 @@ def run_auto_create(
             project_id, title=title, body=body, now=now, projects_root=projects_root,
         )
         created_master = True
+    # Check persisted edits before spending on images; never rewrite them on resume.
+    _check_saved_quality(project_id, scorer=scorer, now=now, projects_root=projects_root,
+                         account_id=account_id, accounts_root=accounts_root)
     visuals_fn = visual_fn or (
         lambda pid: _default_visuals(
             pid, now=now, projects_root=projects_root,
@@ -113,31 +115,54 @@ def run_auto_create(
             body=adapted_body, now=now, projects_root=projects_root,
         )
         created_platforms.append(platform)
-    if account_id and accounts_root is not None:
-        from pipeline.account_authorization import (
-            load_authorization, quality_fingerprint, record_quality_result,
-        )
-        auth_version = 0
-        try:
-            auth_version = load_authorization(account_id, accounts_root=accounts_root).version
-        except Exception:
-            pass
-        record_quality_result(
-            account_id, project_id=project_id, score=float(_score),
-            verdict=verdict, now=now, accounts_root=accounts_root,
-            content_fingerprint=quality_fingerprint(project_id, projects_root=projects_root),
-            master_version=master.version, authorization_version=auth_version,
-        )
+    verdict, _score = _check_saved_quality(
+        project_id, scorer=scorer, now=now, projects_root=projects_root,
+        account_id=account_id, accounts_root=accounts_root,
+    )
     return AutoCreateResult(
         project_id=project.id,
-        title=title,
-        body=body,
+        title=master.title,
+        body=master.body,
         revision_count=revisions,
         gate_verdict=verdict,
         created_master=created_master,
         created_platforms=tuple(created_platforms),
         paused=False,
     )
+
+
+def _check_saved_quality(
+    project_id: str, *, scorer: ScoreFn, now: str, projects_root: str | Path,
+    account_id: str | None, accounts_root: str | Path | None,
+) -> tuple[str, float]:
+    from pipeline.account_authorization import (
+        AuthorizationError, load_authorization, quality_fingerprint, record_quality_result,
+    )
+    auth_version = 0
+    if account_id and accounts_root is not None:
+        try:
+            auth_version = load_authorization(account_id, accounts_root=accounts_root).version
+        except AuthorizationError:
+            # A quality check is useful before authorization, but cannot authorize delivery.
+            auth_version = 0
+    fingerprint = quality_fingerprint(project_id, projects_root=projects_root)
+    master = master_documents.load_master(project_id, projects_root=projects_root)
+    assert master is not None
+    documents = (master, *variants.load_variants(project_id, projects_root=projects_root).variants)
+    results = [scorer(item.title, item.body) for item in documents]
+    verdict = next((value for value, _ in results if value != "pass"), "pass")
+    score = min(float(value) for _, value in results)
+    if fingerprint != quality_fingerprint(project_id, projects_root=projects_root):
+        raise AutoCreateError("质量检查期间正文已修改，请重新检查", code="quality_stale")
+    if account_id and accounts_root is not None:
+        record_quality_result(
+            account_id, project_id=project_id, score=score, verdict=verdict, now=now,
+            accounts_root=accounts_root, content_fingerprint=fingerprint,
+            master_version=master.version, authorization_version=auth_version,
+        )
+    if verdict != "pass":
+        raise AutoCreateError("质量门禁不合格，正文已保留，请修改后重试", code="quality_paused")
+    return verdict, score
 
 
 def build_draft_prompt(project: Project, interview: ProjectInterview, board: ResearchBoard) -> str:
