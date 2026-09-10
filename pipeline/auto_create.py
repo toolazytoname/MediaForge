@@ -278,7 +278,8 @@ def _image_cost_usd(model: str) -> float:
     from pipeline.creators import llm as llm_mod
     prices = llm_mod.MODEL_PRICES.get(model, {}) or {}
     cost = float(prices.get("per_image_usd") or 0)
-    if cost <= 0:
+    import math
+    if not math.isfinite(cost) or cost <= 0:
         raise AutoCreateError("image generation is unpriced", code="unpriced_image")
     return cost
 
@@ -296,8 +297,7 @@ def _default_visuals(
     account_id: str | None = None, accounts_root: str | Path | None = None,
 ) -> None:
     from pipeline import visuals
-    from pipeline.creators.image_gen import generate_image
-    from pipeline.utils.ids import new_id
+    from pipeline.auto_images import generate_slot
     from pipeline.webui import deps
     plan = visuals.load_visuals(project_id, projects_root=projects_root)
     if not plan.slots:
@@ -318,29 +318,10 @@ def _default_visuals(
     conn = deps.get_conn()
     try:
         for slot in missing:
-            asset_id = new_id("vas")
-            path = visuals.asset_path(project_id, asset_id, projects_root=projects_root)
-            generated = generate_image(
-                slot.direction or slot.purpose,
-                out_path=path, aspect_ratio=slot.aspect_ratio,
-                stage="create_image", ref_id=project_id, conn=conn,
+            generate_slot(
+                project_id, slot, now=now, projects_root=projects_root, conn=conn,
+                account_id=account_id, accounts_root=accounts_root,
             )
-            cost = _image_cost_usd(generated.model)
-            if account_id and accounts_root is not None:
-                from pipeline.account_plans import load_spend, record_spend
-                from pipeline.account_profiles import load_profile
-                profile = load_profile(account_id, accounts_root=accounts_root)
-                spent = load_spend(account_id, accounts_root=accounts_root)
-                if spent + cost > profile.budget_usd:
-                    raise AutoCreateError("account image budget exceeded", code="budget_exceeded")
-                record_spend(account_id, amount=cost, now=now, accounts_root=accounts_root)
-            asset = visuals.record_asset(
-                project_id, slot_id=slot.id, prompt=slot.direction or slot.purpose,
-                model=generated.model, size=slot.aspect_ratio, cost_usd=cost, now=now,
-                file_path=f"assets/{asset_id}.png", status="candidate",
-                asset_id=asset_id, projects_root=projects_root,
-            )
-            visuals.select_asset(project_id, asset.id, reason="自动选中", rating=3, projects_root=projects_root)
     except AutoCreateError:
         raise
     except Exception as error:

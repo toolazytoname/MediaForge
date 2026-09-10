@@ -165,7 +165,7 @@ def test_default_visuals_calls_image_generation(tmp_path, monkeypatch):
     db.init_db(conn)
     calls: list[object] = []
 
-    def fake_generate(prompt, *, out_path, aspect_ratio="1:1", n=1, stage="create_image", ref_id=None, conn=None):
+    def fake_generate(prompt, *, out_path, aspect_ratio="1:1", n=1, stage="create_image", ref_id=None, conn=None, retry=True):
         assert conn is not None
         calls.append(conn)
         path = Path(out_path)
@@ -174,6 +174,7 @@ def test_default_visuals_calls_image_generation(tmp_path, monkeypatch):
         return MagicMock(model="image-01")
 
     monkeypatch.setattr("pipeline.webui.deps.get_conn", lambda: conn)
+    monkeypatch.setattr("pipeline.creators.image_gen._PROVIDER", MagicMock(_model="image-01"))
     monkeypatch.setattr("pipeline.creators.image_gen.generate_image", fake_generate)
     _default_visuals("prj_packimg", now=NOW, projects_root=root)
     plan = visuals.load_visuals("prj_packimg", projects_root=root)
@@ -216,13 +217,14 @@ def test_default_visuals_resumes_missing_slots(tmp_path, monkeypatch):
     visuals.select_asset("prj_packslot", asset.id, reason="先有一张", rating=3, projects_root=root)
     generated: list[str] = []
 
-    def fake_generate(prompt, *, out_path, aspect_ratio="1:1", n=1, stage="create_image", ref_id=None, conn=None):
+    def fake_generate(prompt, *, out_path, aspect_ratio="1:1", n=1, stage="create_image", ref_id=None, conn=None, retry=True):
         generated.append(str(prompt))
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         Path(out_path).write_bytes(_PNG)
         return MagicMock(model="image-01")
 
     monkeypatch.setattr("pipeline.webui.deps.get_conn", lambda: conn)
+    monkeypatch.setattr("pipeline.creators.image_gen._PROVIDER", MagicMock(_model="image-01"))
     monkeypatch.setattr("pipeline.creators.image_gen.generate_image", fake_generate)
     _default_visuals("prj_packslot", now=NOW, projects_root=root)
     plan = visuals.load_visuals("prj_packslot", projects_root=root)

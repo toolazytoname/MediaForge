@@ -378,17 +378,18 @@ def _call_with_retry(
     *,
     aspect_ratio: str,
     n: int,
+    max_attempts: int = _RETRY_MAX_ATTEMPTS,
 ) -> list[bytes]:
     """指数退避 ×3，RetryableError 重试，其他异常立即抛。"""
     last_exc: Exception | None = None
-    for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
+    for attempt in range(1, max_attempts + 1):
         try:
             return provider.call(
                 prompt, aspect_ratio=aspect_ratio, n=n, response_format="base64"
             )
         except RetryableError as e:
             last_exc = e
-            if attempt < _RETRY_MAX_ATTEMPTS:
+            if attempt < max_attempts:
                 sleep_s = _RETRY_BASE_SLEEP_S * (2 ** (attempt - 1))
                 time.sleep(sleep_s)
     assert last_exc is not None
@@ -418,6 +419,7 @@ def generate_image(
     stage: str = "create_image",
     ref_id: str | None = None,
     conn: sqlite3.Connection | None = None,
+    retry: bool = True,
 ) -> GeneratedImage:
     """生成单张图像并落盘到 out_path（已 tmp→rename 原子写）。
 
@@ -428,6 +430,7 @@ def generate_image(
         n: 生成数量（默认 1；当前 n>1 只取第一张）
         stage: 审计 stage 名（'create_cover' / 'create_image'）
         ref_id: 关联记录 id（content_id 等）
+        retry: 自动运营设为 False，结果未知时保留意图，不重复可能计费的请求
         conn: DB 连接；提供则写 llm_calls 审计 + 预算检查
 
     Returns:
@@ -458,7 +461,8 @@ def generate_image(
 
     # 调 provider（重试 3 次）
     images = _call_with_retry(
-        provider, prompt, aspect_ratio=aspect_ratio, n=n
+        provider, prompt, aspect_ratio=aspect_ratio, n=n,
+        max_attempts=_RETRY_MAX_ATTEMPTS if retry else 1,
     )
     if not images:
         raise ValueError("image_gen: provider returned empty images list")

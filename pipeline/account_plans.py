@@ -82,12 +82,8 @@ def record_spend(
 ) -> float:
     if not valid_sidecar_id(account_id, "acc_"):
         raise AccountPlanError(f"invalid account id: {account_id!r}")
-    path = Path(accounts_root) / account_id / _SPEND_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    current = _load_spend(account_id, accounts_root)
-    total = current + float(amount)
-    _write(path, {"account_id": account_id, "spent_usd": total, "updated_at": now})
-    return total
+    from pipeline.account_budget import add_spend
+    return add_spend(account_id, amount=amount, now=now, accounts_root=accounts_root)
 
 
 def schedule_account(
@@ -106,7 +102,8 @@ def schedule_account(
         )
         _save_plan(accounts_root, plan)
         return ScheduleResult(account_id, (), plan)
-    if spent >= profile.budget_usd:
+    from pipeline.account_budget import reserved_spend
+    if spent + reserved_spend(account_id, accounts_root=accounts_root) >= profile.budget_usd:
         plan = AccountPlan(
             account_id=account_id, timezone=profile.timezone, slots=(),
             paused=True, pause_reason="budget exceeded", spent_usd=spent, updated_at=now,
