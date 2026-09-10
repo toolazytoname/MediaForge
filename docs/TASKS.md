@@ -9,13 +9,15 @@
 
 ## 产品重启 R — 创作工作台黄金路径（2026-08-09 起）
 
-### 当前接手任务：BYOK 首次实用闭环（2026-09-07）
+### 当前接手任务：易用性改造与账号运营（2026-09-10）
 
-- [ ] 用户已批准“中转站 AI 写稿 + GPT Image 2 配图 + Markdown 编辑/预览 + 公众号草稿箱”。任务拆分与验收要求见 [BYOK_FIRST_USE_TASKS.md](./BYOK_FIRST_USE_TASKS.md)。BYOK-1–5 已提交；真实 AI 主稿建议与 GPT Image 2 配图已在 `prj_a63f79b2` 生成候选且未覆盖现稿。公众号草稿已送入，`media_id=T0wXMUxGNoEwkhzIN5QdEFUVn2YpxoR2v0avT8k5WaZcSVVU2xWPs1gXBBMpDmgA`（草稿箱，非公开发布）。首次送入后后台正文看起来没图：图已上微信 CDN，但 HTML 缺编辑器属性且封面只在 thumb 字段。已用 `draft/update` 原地补上封面+两张插图。访问 `http://127.0.0.1:8788/`。此条不是 R0 作者签字完成记录。
+- [ ] **本轮唯一任务入口**：[CREATOR_OPERATIONS_TASKS.md](./CREATOR_OPERATIONS_TASKS.md)。用户已批准建设个人创作闭环、账号档案、多账号、微信/头条交付（含草稿与在授权下的公开发布）以及按账号频率的 AI 运营。不要再按旧规划把多账号/定时运营当成禁止项，也不要机械认领下面未勾选的 R0 或遗留 M*。
+- BYOK 与公众号草稿箱路径已完成：见 [BYOK_FIRST_USE_TASKS.md](./BYOK_FIRST_USE_TASKS.md) 和 git `502b75c`。真实项目 `prj_a63f79b2` 保留。访问 `http://127.0.0.1:8788/`。R0 仍未勾选（作者是否署名未代答）。此条不是公开发布授权。
+- **部署不得自动开启现有账号运营或公开发布**；必须用户在账号设置中明确打开后再按授权规则执行。
 
-> **优先级**：本章节的 R0 → R9 是当前产品重启的正式执行顺序。它们优先于未完成的遗留 M* 任务；已完成的历史记录保持不动。完整产品方向见 [PRODUCT_RESET_PLAN.md](./PRODUCT_RESET_PLAN.md)。
+> **优先级**：本轮以 `CREATOR_OPERATIONS_TASKS.md` 为准，优先于未完成的遗留 M* 和未勾选 R0。R1–R9 历史记录保持不动。`PRODUCT_RESET_PLAN.md` 仍是产品背景，但其中“多账号/无人值守真发布后置”已被本轮用户授权覆盖。
 >
-> **共同红线**：不擅改 `TECH_SPEC.md` 冻结契约、SQLite schema、`models.py` 字段或 Adapter 签名；不进行真实发布；不静默覆盖用户正文；共享工作区的既有脏文件一律保留。
+> **共同红线**：不擅改 `TECH_SPEC.md` 冻结契约、SQLite schema、`models.py` 字段或 Adapter 签名；不静默覆盖用户正文；不伪造人工审批；共享工作区既有脏文件与未跟踪 `open-*.png` 一律保留。真实公开发布只允许用户明确授权的账号和内容。
 
 ### R0｜固定一条真实主题验收剧本（文档任务，先于 R1）
 

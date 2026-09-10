@@ -1,8 +1,8 @@
 # MediaForge 首次实用闭环：接手任务清单
 
-> 交接日期：2026-09-07。基线：`main` / `a99b1d4`。
+> 交接日期：2026-09-07。基线：`main` / `a99b1d4`。BYOK 已完成到草稿箱配图修复（`502b75c`）。
 > 用户已批准实施。BYOK-1 到 BYOK-5 已提交；写稿/配图入口已用真实中转验证。
-> **公众号真实发送仍等待用户凭据，不要伪造草稿回执。**
+> **公众号凭据已在设置页写入 `secrets/wechat_mp_main.json`；草稿已送入并完成正文配图。不要再把“缺凭据”当当前阻塞。** 后续易用性/账号运营见 [CREATOR_OPERATIONS_TASKS.md](./CREATOR_OPERATIONS_TASKS.md)。
 
 ## 1. 已确认的目标与边界
 
@@ -12,7 +12,7 @@
 - 文本默认沿用本机 `gpt-5.6-sol`、Responses 协议；图片模型 ID 是 `gpt-image-2`。
 - Markdown 是日常编辑和复制格式；ZIP 仅作可选备份，不是主要交付动作。
 - 公众号只送草稿箱，不公开发布、不群发。头条保留独立稿、预览、Markdown 复制，不伪称已送入平台草稿箱。
-- 公众号 AppID/AppSecret 由用户稍后提供或在本机设置页填写；缺凭据不阻塞写稿、配图和预览开发。
+- 公众号 AppID/AppSecret 已由用户提供并写入本机设置（`secrets/wechat_mp_main.json`）；写稿/配图/预览不依赖再要一次密钥。
 - 沿用真实项目 `prj_a63f79b2`；保留已有正文、来源、平台稿、图片与审批历史。新 AI 稿只提出建议，不自动覆盖。
 - 不新增 SQLite 迁移，不修改冻结模型字段或 Adapter 公共方法签名。
 
@@ -41,7 +41,7 @@
 | `e3e2dc1` | BYOK-4/5 图像闭环与 Markdown 交付入口 |
 | `b33820e` | BYOK-6/7 真实验收记录与生产构建 |
 
-密钥只在 `secrets/`（gitignore）。公众号凭据仍未提供，未送草稿箱。
+密钥只在 `secrets/`（gitignore）。公众号凭据已提供；草稿箱 `media_id` 见 TASKS / 本文件 BYOK-6 记录。未公开发布。
 
 ### 验证记录
 

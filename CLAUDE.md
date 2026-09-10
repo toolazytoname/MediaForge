@@ -8,37 +8,33 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 
 ## 产品重启指令（当前最高优先级）
 
-开始实现前，完整阅读 [docs/PRODUCT_RESET_PLAN.md](docs/PRODUCT_RESET_PLAN.md)。不要绕过它继续做遗留 M* 功能。
+开始实现前，完整阅读 [docs/PRODUCT_RESET_PLAN.md](docs/PRODUCT_RESET_PLAN.md) 与本轮入口 [docs/CREATOR_OPERATIONS_TASKS.md](docs/CREATOR_OPERATIONS_TASKS.md)。不要绕过它继续做遗留 M* 功能。
 
-- 第一条闭环：一个主题 → 主稿 → 微信公众号和头条两个独立可编辑草稿（含封面和插图），目标 30–60 分钟完成。
-- 图文优先；小红书、视频号、Bilibili、数字人、更多平台、多账号、无人值守真发布均后置。
-- 体验中心是统一的 Project 工作台；“手写 / AI 协作 / AI 起草”是一个自主程度控制，不是分离的产品入口。
-- 一级导航收敛为“今天 / 灵感 / 项目 / 资产 / 发布 / 复盘”；状态机页面归入开发者抽屉。
-- 冻结的 `topics → contents` 1:1 契约先不改；Project v0 使用 `output/projects/<project_id>/project.json` sidecar manifest。若需要 schema 迁移，先写 RFC 并等待用户确认。
+- 图文优先；本轮用户已批准微信公众号、头条、多账号与按账号频率的运营开发。小红书、视频号、Bilibili、数字人后置。
+- 体验中心是统一的作品工作台；主导航收敛为“今天 / 作品 / 账号”，设置单独入口。
+- 冻结的 `topics → contents` 1:1 契约先不改；Project v0 与账号档案使用 sidecar。若需要 schema 迁移，先写 RFC 并等待用户确认。
 
-### 当前交接基线（2026-08-09）
+### 当前交接基线（2026-09-10）
 
-- **R1–R9 已完成并提交；R0 代理黄金路径已走通**：真实项目 `prj_a63f79b2` 已完成 5 个来源 → AI 可审阅主稿 → 3 张真实图片 → 微信/头条独立 v3 → 可追责审批 → 本地 ZIP。证据见 `docs/product-validation/r0-real-theme-script.md`。
-- **当前人工关口**：R0 不勾选，直到用户阅读真实稿件并决定是否愿意署名。下一安全动作是打开项目完成作者审阅；**不得自行进入 R10**，平台草稿箱交付、真实发布、schema 迁移和删除/覆盖用户数据仍需单独确认。
-- GPT Image 2 provider 已实现生成与编辑，但本轮没有 `OPENAI_API_KEY`，实际走的是明确提示后的真实 PNG 本地导入；不得声称 GPT Image 2 API 已实测。
-- 当前交付基线：完整 Python 回归 **1700 passed、13 skipped**；前端生产构建通过（仅有既知的大 chunk 警告）。跨进程发布锁连续 10 次通过；`config.yaml` 的 `publish.enabled` 保持 `false`。
-- 对抗审查已补：sidecar 路径穿越、可审阅 AI 初稿、真实平台适配、本地视觉恢复、安全 Markdown/图文预览、主稿晚改确认、审批 stale 刷新、真实审批角色和审批版本化无覆盖导出。
-- `frontend/dist/` 是生成物；源码变化后用 `cd frontend && npm run build` 更新。不要把旧 hash 文件当业务源码维护。
+- **本轮唯一任务入口**：[docs/CREATOR_OPERATIONS_TASKS.md](docs/CREATOR_OPERATIONS_TASKS.md)。
+- R1–R9 已完成；R0 未勾选。`prj_a63f79b2` 公众号草稿已送入且正文有配图，未公开发布。
+- 部署不得自动开启现有账号运营或 direct。批准开发 ≠ 公开发布授权。
 
 ## 会话重启指引（READ THIS FIRST）
 
-每次会话开始，按顺序读这四个文件再开工，**不要通读整个 codebase**：
+每次会话开始，按顺序读下列文件再开工，**不要通读整个 codebase**：
 
-1. `docs/PRODUCT_RESET_PLAN.md` — 当前产品目标、边界和 R0–R14 顺序
-2. `docs/TASKS.md` — 已实现能力、旧任务和恢复记录；当前只等待 R0 作者最终审阅，不得机械认领遗留 `[ ]`
-3. `docs/TECH_SPEC.md` — 数据模型与接口契约（实现必须严格遵守，不得擅自改 schema）
-4. `docs/HARD_PARTS.md` — 你要做的任务如果在这里有对应条目，先读完再动手
+1. `docs/PRODUCT_RESET_PLAN.md` — 产品背景
+2. `docs/TASKS.md` — 指向本轮入口，不得机械认领 R0/M*
+3. `docs/CREATOR_OPERATIONS_TASKS.md` — 本轮唯一执行清单
+4. `docs/TECH_SPEC.md` — 数据模型与接口契约（实现必须严格遵守，不得擅自改 schema）
+5. `docs/HARD_PARTS.md` — 你要做的任务如果在这里有对应条目，先读完再动手
 
-> **记忆活在文件里，不活在上下文里。** 你做到哪、下一步做什么、不许碰什么，全部由上面四个文件 + git 历史决定，**不靠"记住"**。所以 `/clear`、换 subagent、换会话、换模型、进程崩溃——都不影响连续性：任何一个空白上下文读完这四个文件就能精确接续。要跑长程连续任务，见下方「自治连续执行」。
+> **记忆活在文件里，不活在上下文里。** 你做到哪、下一步做什么、不许碰什么，全部由上面这些文件 + git 历史决定，**不靠"记住"**。所以 `/clear`、换 subagent、换会话、换模型、进程崩溃——都不影响连续性：任何一个空白上下文读完它们就能精确接续。要跑长程连续任务，见下方「自治连续执行」。
 
 ## 工作约定（强制）
 
-1. **产品重启优先于遗留任务顺序**：R1–R9 已完成，R0 代理路径已通过，当前只等待作者最终审阅；不要机械领取旧 M* 清单中的未完成项，也不要未经确认进入 R10。完成任务后勾选并追加 `✅ 完成于 <日期>，commit <sha>，备注 <一句话>`。
+1. **本轮按 CREATOR_OPERATIONS_TASKS.md 执行**：不要机械领取旧 M* 或未勾选 R0。完成任务后勾选并追加 `✅ 完成于 <日期>，commit <sha>，备注 <一句话>`。真实公开发布仍需账号级明确授权。
 2. **接口契约不可变**：`pipeline/models.py` 的字段、`SourceAdapter`/`PublisherAdapter` 的方法签名、SQLite 表结构，都在 TECH_SPEC.md 里定死了。如果实现中发现契约有问题，**停下来在 TASKS.md 里记录问题**，不要擅自修改契约。
 3. **TDD**：每个任务先写测试（TASKS.md 里已给出测试要点），RED → GREEN → 重构
 4. **不可变数据**：函数返回新对象，不原地修改传入参数（遵守全局 coding-style 规则）
