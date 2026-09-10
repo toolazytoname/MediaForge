@@ -124,11 +124,54 @@ def run_ops_job(
         visual_fn=visual_fn, score_fn=score_fn, account_id=profile.id,
         accounts_root=accounts_root,
     )
+    _maybe_deliver(
+        conn, project_id=project.id, profile=profile, now=now,
+        projects_root=projects_root, accounts_root=accounts_root,
+    )
     jobs_store.try_finish_job(
         conn, job.id, state="done", now=now, result_path=f"projects/{project.id}",
         cost_usd=None,
     )
     return project.id
+
+
+def _maybe_deliver(
+    conn: sqlite3.Connection, *, project_id: str, profile, now: str,
+    projects_root: str | Path, accounts_root: str | Path,
+) -> None:
+    if profile.delivery_target not in {"draft", "direct"}:
+        return
+    if not profile.credentials_ref:
+        return
+    try:
+        from pipeline.webui import deps
+        from pipeline.webui.api.delivery import _adapter_for
+        from pipeline.deliverables import load_deliverables
+        from pipeline.delivery.service import create_draft, create_direct
+        from pipeline.publishers.base import AccountConfig
+        cfg, _err = deps.get_config()
+        if cfg is None:
+            return
+        items = load_deliverables(project_id, projects_root=projects_root).items
+        target = next((item for item in items if profile.platform in item.targets), None)
+        if target is None:
+            return
+        adapter, account = _adapter_for(cfg, profile.platform, account_id=profile.id)
+        if profile.delivery_target == "draft":
+            create_draft(
+                conn, project_id=project_id, deliverable_id=target.id, actor="ops",
+                adapter=adapter, account=account, publish_config=cfg.publish, cfg=cfg,
+                projects_root=projects_root, path="auto", accounts_root=accounts_root,
+            )
+        else:
+            create_direct(
+                conn, project_id=project_id, deliverable_id=target.id, actor="ops",
+                adapter=adapter, account=account, publish_config=cfg.publish, cfg=cfg,
+                confirm_token="ops-auto", projects_root=projects_root,
+                accounts_root=accounts_root, path="auto",
+            )
+    except Exception:
+        return
 
 
 __all__ = ["OpsTickResult", "run_ops_job", "tick_operations"]
