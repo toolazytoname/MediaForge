@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import axios from 'axios'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
@@ -70,6 +71,11 @@ const drafting = ref(false)
 const draftResult = ref<DeliveryAttemptResult | null>(null)
 const lastFailedDraftId = ref<string | null>(null)
 const boundWechatId = ref('')
+const bindingError = ref<string | null>(null)
+const bindingReady = ref(false)
+const bindingSaving = ref(false)
+let bindingEpoch = 0
+let pageEpoch = 0
 const wechatAccounts = ref<{ id: string; display_name: string }[]>([])
 const adaptPreviews = ref<Partial<Record<PlatformVariant['platform'], VariantAdaptationPreview>>>({})
 const previewAsset = ref<VisualAsset | null>(null)
@@ -116,6 +122,7 @@ const wechatLabel = computed(() => capabilitiesStore.forPlatform('wechat_mp')?.l
 const toutiaoLabel = computed(() => capabilitiesStore.forPlatform('toutiao')?.label ?? '今日头条')
 const wechatPreflight = computed(() => {
   const issues: string[] = []
+  if (!bindingReady.value || bindingSaving.value) issues.push('账号归属尚未核实，请等待或重试')
   if (!wechatSettings.value?.configured) issues.push('尚未保存公众号凭据')
   if (!wechatSettings.value?.delivery_enabled) issues.push('尚未启用草稿交付（需要发布开关和 wechat_mp 白名单）')
   if (!boundWechatId.value) issues.push('尚未绑定公众号账号')
@@ -127,24 +134,47 @@ const officialCapabilities = computed(() => capabilitiesStore.items.filter(item 
 const longtailCapabilities = computed(() => capabilitiesStore.items.filter(item => item.official_api === false && item.lane === 'export' && item.platform !== 'toutiao'))
 
 async function loadPage(): Promise<void> {
+  const epoch = ++pageEpoch
+  ++bindingEpoch
+  boundWechatId.value = ''
+  bindingReady.value = false
+  bindingSaving.value = false
+  bindingError.value = null
+  wechatAccounts.value = []
+  masterForm.value = { title: '', body: '' }
+  variantForms.value = {}
+  draftResult.value = null
+  lastFailedDraftId.value = null
   detailError.value = null
   project.value = null
   if (!projectId.value) {
     await store.load()
+    if (epoch !== pageEpoch) return
     return
   }
   try {
-    project.value = await store.getDetail(projectId.value)
+    const loaded = await store.getDetail(projectId.value)
+    if (epoch !== pageEpoch) return
+    project.value = loaded
     await researchStore.load(projectId.value)
+    if (epoch !== pageEpoch) return
     await masterStore.load(projectId.value)
+    if (epoch !== pageEpoch) return
     await loadInterview()
+    if (epoch !== pageEpoch) return
     await visualsStore.load(projectId.value)
+    if (epoch !== pageEpoch) return
     await variantsStore.load(projectId.value)
+    if (epoch !== pageEpoch) return
     await approvalsStore.load(projectId.value)
+    if (epoch !== pageEpoch) return
     await galleriesStore.load(projectId.value)
+    if (epoch !== pageEpoch) return
     galleryForms.value = Object.fromEntries(galleries.value.map(item => [item.id, galleryForm(item)]))
     await capabilitiesStore.load()
+    if (epoch !== pageEpoch) return
     await workspaceStore.load(projectId.value)
+    if (epoch !== pageEpoch) return
     if (master.value) masterForm.value = { title: master.value.title, body: master.value.body }
     visualBible.value = Object.entries(visualPlan.value?.bible ?? {}).map(([key, value]) => `${key}: ${value}`).join('\n')
     visualSlots.value = visualPlan.value?.slots.map(slot => ({ ...slot })) ?? []
@@ -152,12 +182,14 @@ async function loadPage(): Promise<void> {
       if (!visualPrompts.value[slot.id]) visualPrompts.value[slot.id] = slot.direction
     }
     await settingsStore.loadWechat()
+    if (epoch !== pageEpoch) return
     await loadAccountBinding()
+    if (epoch !== pageEpoch) return
     variantForms.value = Object.fromEntries(variants.value.map(item => [item.platform, { title: item.title, summary: item.summary, body: item.body }]))
     activeWorkbench.value = 'master'
     extraPanels.value = []
   } catch (e) {
-    detailError.value = unwrapError(e)
+    if (epoch === pageEpoch) detailError.value = unwrapError(e)
   }
 }
 
@@ -463,30 +495,47 @@ async function recheckApproval(): Promise<void> { if (!projectId.value) return; 
 async function decideApproval(check: ApprovalCheck, approved: boolean): Promise<void> { if (!projectId.value) return; const actor = approvalActor.value.trim(); if (!actor) { detailError.value = '请填写真实审批人或角色。'; return } try { await approvalsStore.decide(projectId.value, check.id, approved, actor, approvalNotes.value[check.id]?.trim() || undefined); approvalNotes.value[check.id] = '' } catch (e) { detailError.value = unwrapError(e) } }
 async function exportPackage(): Promise<void> { if (!projectId.value) return; exporting.value = true; try { exportResult.value = await approvalsStore.exportPackage(projectId.value) } catch (e) { detailError.value = unwrapError(e) } finally { exporting.value = false } }
 async function loadAccountBinding(): Promise<void> {
-  if (!projectId.value) return
-  const profiles = await api.get<{ items: { id: string; display_name: string; platform: string }[] }>('/account-profiles')
-  wechatAccounts.value = (profiles.data.items || []).filter(item => item.platform === 'wechat_mp')
+  const id = projectId.value
+  if (!id) return
+  const epoch = ++bindingEpoch
+  bindingReady.value = false
+  bindingError.value = null
   try {
-    const bindings = await api.get<{ items: { platform: string; account_id: string }[] }>(`/projects/${projectId.value}/account-binding`)
-    boundWechatId.value = (bindings.data.items || []).find(item => item.platform === 'wechat_mp')?.account_id || ''
+    const profiles = await api.get<{ items: { id: string; display_name: string; platform: string }[] }>('/account-profiles')
+    if (epoch !== bindingEpoch || id !== projectId.value) return
+    wechatAccounts.value = profiles.data.items.filter(item => item.platform === 'wechat_mp')
+    try {
+      const result = await api.get<{ items: { platform: string; account_id: string }[] }>(`/projects/${id}/account-binding`)
+      if (epoch !== bindingEpoch || id !== projectId.value) return
+      boundWechatId.value = result.data.items.find(item => item.platform === 'wechat_mp')?.account_id || ''
+    } catch (e) {
+      if (epoch !== bindingEpoch || id !== projectId.value) return
+      const code = axios.isAxiosError(e) ? (e.response?.data?.detail?.error ?? e.response?.data?.error)?.code : null
+      if (!axios.isAxiosError(e) || e.response?.status !== 404 || code !== 'account_not_bound') throw e
+      boundWechatId.value = ''
+    }
+    bindingReady.value = true
   } catch (e) {
-    boundWechatId.value = ''
-    detailError.value = unwrapError(e)
+    if (epoch === bindingEpoch && id === projectId.value) bindingError.value = `读取账号失败：${unwrapError(e)}`
   }
 }
 
 async function bindWechatAccount(accountId: string): Promise<void> {
-  if (!projectId.value || !accountId) return
-  const previous = boundWechatId.value
-  boundWechatId.value = accountId
+  const id = projectId.value
+  if (!id || !accountId || bindingSaving.value || !bindingReady.value) return
+  const epoch = bindingEpoch
+  bindingSaving.value = true
+  bindingError.value = null
   try {
-    await api.put(`/projects/${projectId.value}/account-binding`, {
-      platform: 'wechat_mp', account_id: accountId,
-    })
+    await api.put(`/projects/${id}/account-binding`, { platform: 'wechat_mp', account_id: accountId })
+    if (epoch === bindingEpoch && id === projectId.value) boundWechatId.value = accountId
   } catch (e) {
-    boundWechatId.value = previous
-    detailError.value = unwrapError(e)
-    throw e
+    if (epoch === bindingEpoch && id === projectId.value) {
+      bindingReady.value = false
+      bindingError.value = `绑定未确认，原选择已保留，请重新核对：${unwrapError(e)}`
+    }
+  } finally {
+    if (epoch === bindingEpoch) bindingSaving.value = false
   }
 }
 
@@ -543,12 +592,22 @@ watch(projectId, loadPage)
     <template v-if="projectId">
       <a-button type="link" class="back" @click="router.push('/projects')"><ArrowLeftOutlined /> 全部项目</a-button>
       <a-alert v-if="detailError" type="error" :message="detailError" show-icon />
-      <article v-else-if="project" class="project-workspace">
+      <article v-if="project" class="project-workspace">
         <header>
           <p class="eyebrow">主题项目</p>
           <h1>{{ project.title }}</h1>
           <p class="idea">{{ project.idea }}</p>
         </header>
+        <section class="account-binding-panel" aria-label="公众号账号归属">
+          <p>公众号账号（交付前选择）</p>
+          <a-alert v-if="bindingError" type="warning" :message="bindingError" show-icon />
+          <a-button v-if="!bindingReady" :disabled="bindingSaving" @click="loadAccountBinding">重试读取账号</a-button>
+          <a-select :value="boundWechatId || undefined" :disabled="!bindingReady || bindingSaving" :loading="bindingSaving" placeholder="选择公众号账号" style="width: 100%; max-width: 360px" @change="bindWechatAccount">
+            <a-select-option v-for="item in wechatAccounts" :key="item.id" :value="item.id">{{ item.display_name }}</a-select-option>
+          </a-select>
+          <p v-if="bindingReady && !boundWechatId">请选择公众号账号，绑定前仍可写稿和配图。</p>
+          <a-button v-if="bindingReady && !wechatAccounts.length" @click="router.push('/accounts')">前往账号页添加或导入账号</a-button>
+        </section>
         <div class="project-grid">
           <a-card title="创作意图" :bordered="false"><dl><dt>写给谁</dt><dd>{{ project.audience }}</dd><dt>这次要完成什么</dt><dd>{{ project.goal }}</dd><dt>声音</dt><dd>{{ project.voice }}</dd><dt>自主程度</dt><dd>{{ policyLabel(project.autonomy) }} · {{ workspaceStore.nextAction?.policy.help || llmForbiddenHint(project.autonomy) }}</dd></dl></a-card>
           <a-card title="目前的材料" :bordered="false"><p>已关联 {{ project.content_ids.length }} 篇内容，{{ project.asset_paths.length }} 项资产。</p><p class="muted">来源、判断和待确认项均由你明确录入，不会自动抓取或改写。</p></a-card>
@@ -689,7 +748,7 @@ watch(projectId, loadPage)
           <a-alert v-if="approvalsError" type="error" :message="approvalsError" show-icon class="notice" />
           <div class="approval-actor"><label for="approval-actor">真实审批人或角色</label><a-input id="approval-actor" v-model:value="approvalActor" placeholder="例如：张三 / Codex 自测（受用户委托）" /></div>
           <a-spin :spinning="approvalsLoading"><a-card :bordered="false" class="approval-card"><a-alert v-if="approvalStatus?.blockers.length" type="warning" show-icon :message="`尚不可审批：${approvalStatus?.blockers.join('；')}`" class="notice"/><a-alert v-else-if="approvalStatus?.stale" type="warning" show-icon message="上游内容已改变，请重新检查。历史批准不会被静默沿用；所有批准与撤回动作已暂停。" class="notice"/><div class="approval-actions"><a-button type="primary" @click="recheckApproval">重新检查内容包</a-button></div><div v-if="approvalStatus?.approval.checks.length" class="approval-list"><article v-for="check in approvalStatus.approval.checks" :key="check.id"><div><strong>{{ approvalLabel(check.id) }}</strong><p>{{ check.status === 'approved' ? `已由 ${check.approved_by} 批准` : '待人工检查' }}</p><small v-if="check.note">当前备注：{{ check.note }}</small></div><div class="approval-decision"><a-input v-model:value="approvalNotes[check.id]" :disabled="!approvalStatus.ready || approvalStatus.stale" placeholder="可选审批备注" size="small"/><a-button v-if="check.status !== 'approved'" type="primary" size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, true)">批准</a-button><a-button v-else size="small" :disabled="!approvalStatus.ready || approvalStatus.stale" @click="decideApproval(check, false)">撤回批准</a-button></div></article></div><a-empty v-else description="先重新检查，生成当前内容包的审批清单。" :image-style="{ height: '40px' }"/><p v-if="approvalStatus?.complete" class="approval-complete">所有项目已批准。下一步仅可进入草稿箱或安全导出，仍不等于真实发布。</p><div v-if="approvalStatus?.approval.history.length" class="approval-history"><strong>审批历史</strong><p v-for="event in approvalStatus.approval.history.slice().reverse().slice(0, 8)" :key="`${event.at}-${event.action}-${event.check_id}`">{{ event.at }} · {{ event.actor }} · {{ event.action }}{{ event.check_id ? ` (${approvalLabel(event.check_id)})` : '' }}{{ event.note ? ` · ${event.note}` : '' }}</p></div></a-card></a-spin>
-          <div v-if="approvalStatus?.complete && project.autonomy !== 'pack' && variants.some(item => item.platform === 'wechat_mp')" class="export-panel"><div><strong>送到{{ wechatLabel }}草稿箱</strong><p>{{ wechatCopy }} 成功只表示获得 media_id，不是公开发布。不确定时请到公众号后台核实，不要自动重发。</p><p class="muted">凭据：{{ wechatSettings?.configured ? '已保存' : '未保存' }} · 交付开关：{{ wechatSettings?.delivery_enabled ? '已启用' : '未启用' }} · 审批：{{ approvalStatus?.stale ? '已过期' : '有效' }}</p><a-select v-if="wechatAccounts.length" v-model:value="boundWechatId" style="min-width: 220px; margin: 8px 0;" placeholder="选择公众号账号" @change="bindWechatAccount"><a-select-option v-for="item in wechatAccounts" :key="item.id" :value="item.id">{{ item.display_name }}</a-select-option></a-select><a-alert v-for="issue in wechatPreflight" :key="issue" type="warning" show-icon :message="issue" class="notice" /></div><a-button type="primary" :loading="drafting" :disabled="wechatPreflight.length > 0" @click="createWechatDraft">{{ lastFailedDraftId ? '按失败记录恢复，不自动重发' : '送到草稿箱' }}</a-button><p v-if="draftResult" class="muted">{{ draftResult.label }}{{ draftResult.media_id ? ` · media_id=${draftResult.media_id}` : '' }}{{ draftResult.error ? ` · ${draftResult.error}` : '' }}</p></div>
+          <div v-if="approvalStatus?.complete && project.autonomy !== 'pack' && variants.some(item => item.platform === 'wechat_mp')" class="export-panel"><div><strong>送到{{ wechatLabel }}草稿箱</strong><p>{{ wechatCopy }} 成功只表示获得 media_id，不是公开发布。不确定时请到公众号后台核实，不要自动重发。</p><p class="muted">凭据：{{ wechatSettings?.configured ? '已保存' : '未保存' }} · 交付开关：{{ wechatSettings?.delivery_enabled ? '已启用' : '未启用' }} · 审批：{{ approvalStatus?.stale ? '已过期' : '有效' }}</p><a-alert v-for="issue in wechatPreflight" :key="issue" type="warning" show-icon :message="issue" class="notice" /></div><a-button type="primary" :loading="drafting" :disabled="wechatPreflight.length > 0" @click="createWechatDraft">{{ lastFailedDraftId ? '按失败记录恢复，不自动重发' : '送到草稿箱' }}</a-button><p v-if="draftResult" class="muted">{{ draftResult.label }}{{ draftResult.media_id ? ` · media_id=${draftResult.media_id}` : '' }}{{ draftResult.error ? ` · ${draftResult.error}` : '' }}</p></div>
           <div v-if="approvalStatus?.complete && variants.some(item => item.platform === 'toutiao')" class="export-panel"><div><strong>{{ toutiaoLabel }}可选备份</strong><p>{{ toutiaoCopy }} 头条只支持预览、Markdown 复制和本地 ZIP，不伪称已送入平台草稿箱。</p></div><a-button :loading="exporting" @click="exportPackage">下载 ZIP 备份</a-button><a v-if="exportResult" :href="exportResult.url" target="_blank" rel="noreferrer">下载 {{ exportResult.file_name }}</a></div>
           <div v-for="item in galleries" :key="`export-${item.id}`" v-show="approvalStatus?.complete" class="export-panel"><div><strong>{{ platformName(item.targets[0]) }}组图导出</strong><p>{{ xhsCapability?.ui.confirm_copy }}</p></div><a-button :loading="galleryExporting === item.id" @click="exportGallery(item)">导出组图 ZIP</a-button><a v-if="galleryExport?.export" :href="galleryExport.export.url" target="_blank" rel="noreferrer">下载 {{ galleryExport.export.file_name }}</a></div>
           <div v-if="officialCapabilities.length" class="export-panel official-caps"><div><strong>官方平台能力</strong><p>按 CapabilityRegistry 渲染。无用户授权时直发关闭。Project 不提供一键公开直发。</p></div><ul class="capability-list"><li v-for="item in officialCapabilities" :key="item.platform"><strong>{{ item.label }}</strong> · {{ item.formats.join(' / ') }} · 授权 {{ item.auth?.kind ?? 'oauth' }} · {{ item.review?.requires_app_review ? '需应用审核' : '无需应用审核' }} · 默认可视性 {{ item.review?.default_visibility ?? 'unknown' }} · 有效直发 {{ item.can_claim_direct ? '开' : '关' }}<p>{{ item.ui.confirm_copy }}</p></li></ul></div>

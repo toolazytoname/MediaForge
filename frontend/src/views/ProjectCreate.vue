@@ -11,9 +11,10 @@ const projects = useProjectsStore()
 const ideas = useIdeasStore()
 const saving = ref(false)
 const pageError = ref<string | null>(null)
+const ideaError = ref('')
 const ideaId = computed(() => typeof route.query.ideaId === 'string' ? route.query.ideaId : null)
 const sourceIdea = computed(() => ideaId.value ? ideas.items.find((item) => item.id === ideaId.value) ?? null : null)
-const form = reactive<ProjectInput>({ title: '', idea: '', audience: '', goal: '', voice: '', autonomy: 'collaborate' })
+const form = reactive<ProjectInput>({ title: '', idea: '', audience: '待确认', goal: '完成一篇有依据的主稿', voice: '清楚、克制', autonomy: 'collaborate' })
 
 onMounted(async () => {
   if (ideaId.value) {
@@ -28,12 +29,17 @@ onMounted(async () => {
 })
 
 async function createProject(): Promise<void> {
+  if (saving.value) return
+  ideaError.value = ''
+  if (!form.idea.trim()) { ideaError.value = '请先写下一句想法或材料。'; return }
+  const input = { ...form, idea: form.idea.trim(), title: form.title.trim() || form.idea.trim().slice(0, 30),
+    audience: form.audience.trim() || '待确认', goal: form.goal.trim() || '完成一篇有依据的主稿', voice: form.voice.trim() || '清楚、克制' }
   pageError.value = null
   saving.value = true
   try {
     const project = sourceIdea.value
-      ? (await ideas.promote(sourceIdea.value.id, { title: form.title, audience: form.audience, goal: form.goal, voice: form.voice, autonomy: form.autonomy })).project
-      : await projects.create(form)
+      ? (await ideas.promote(sourceIdea.value.id, { title: input.title, audience: input.audience, goal: input.goal, voice: input.voice, autonomy: input.autonomy })).project
+      : await projects.create(input)
     router.push(`/projects/${project.id}`)
   } catch (error) {
     pageError.value = unwrapError(error)
@@ -46,12 +52,14 @@ async function createProject(): Promise<void> {
 <template>
   <section class="create-page">
     <a-button type="link" class="back" @click="router.push(ideaId ? '/ideas' : '/projects')"><ArrowLeftOutlined /> 返回</a-button>
-    <header><p class="eyebrow">新建项目</p><h1>{{ sourceIdea ? '让这条灵感成为一个主题项目。' : '从一个你愿意持续思考的主题开始。' }}</h1><p>项目不绑定平台。现在只确定这次表达的对象、目的和你希望 AI 参与到什么程度。</p></header>
+    <header><p class="eyebrow">新建项目</p><h1>{{ sourceIdea ? '让这条灵感成为一个主题项目。' : '从一个你愿意持续思考的主题开始。' }}</h1><p>先写下一句想法就能开始。默认设置可修改，写稿前再确认你的观点与动机。</p></header>
     <a-card :bordered="false" class="form-card"><a-form layout="vertical" @finish="createProject">
-      <a-form-item label="项目标题" required><a-input v-model:value="form.title" placeholder="给这次创作一个清晰的名字" /></a-form-item>
-      <a-form-item label="核心想法或材料" required><a-textarea v-model:value="form.idea" :auto-size="{ minRows: 3, maxRows: 8 }" placeholder="一句想法、链接，或一段你已经写下来的材料" /></a-form-item>
-      <div class="form-grid"><a-form-item label="写给谁" required><a-input v-model:value="form.audience" placeholder="例如：正在建立个人品牌的独立创作者" /></a-form-item><a-form-item label="这次想完成什么" required><a-input v-model:value="form.goal" placeholder="例如：完成一篇有依据的主稿" /></a-form-item></div>
-      <a-form-item label="声音" required><a-input v-model:value="form.voice" placeholder="例如：清楚、克制、有个人判断" /></a-form-item>
+      <a-form-item label="核心想法或材料" required :validate-status="ideaError ? 'error' : undefined" :help="ideaError || undefined"><a-textarea v-model:value="form.idea" :auto-size="{ minRows: 3, maxRows: 8 }" placeholder="一句想法、链接，或一段你已经写下来的材料" /></a-form-item>
+      <p class="muted">标题默认取想法前 30 字；读者待确认；目标为完成一篇有依据的主稿；声音清楚、克制；默认协作。</p>
+      <a-collapse ghost><a-collapse-panel key="options" header="可选设置（之后可继续确认）">
+      <a-form-item label="项目标题"><a-input v-model:value="form.title" :placeholder="form.idea.trim().slice(0, 30) || '默认使用想法前 30 字'" /></a-form-item>
+      <div class="form-grid"><a-form-item label="写给谁"><a-input v-model:value="form.audience" placeholder="例如：正在建立个人品牌的独立创作者" /></a-form-item><a-form-item label="这次想完成什么"><a-input v-model:value="form.goal" placeholder="例如：完成一篇有依据的主稿" /></a-form-item></div>
+      <a-form-item label="声音"><a-input v-model:value="form.voice" placeholder="例如：清楚、克制、有个人判断" /></a-form-item>
       <a-form-item label="这次 AI 参与到什么程度？" required>
         <a-radio-group v-model:value="form.autonomy">
           <a-radio value="assist">手工（零 LLM）</a-radio>
@@ -61,6 +69,7 @@ async function createProject(): Promise<void> {
         </a-radio-group>
         <p class="muted">手工模式不会调用语言模型或生图 API。</p>
       </a-form-item>
+      </a-collapse-panel></a-collapse>
       <a-alert v-if="pageError" type="error" :message="pageError" show-icon class="form-error" />
       <a-button type="primary" html-type="button" :loading="saving" @click="createProject">创建项目并进入工作台</a-button>
     </a-form></a-card>

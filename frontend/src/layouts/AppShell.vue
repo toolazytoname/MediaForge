@@ -3,6 +3,8 @@
 import { ref } from 'vue'
 import type { Component } from 'vue'
 import {
+  PlusOutlined,
+  SettingOutlined,
   BarChartOutlined,
   BulbOutlined,
   CodeOutlined,
@@ -50,8 +52,8 @@ const developerOpen = ref(false)
         <SidebarNavItem v-for="item in primaryItems" :key="item.path" v-bind="item" :exact="item.exact === true" />
       </nav>
       <div class="sidebar-actions">
-        <a-button type="primary" block @click="$router.push('/projects/new')">开始创作</a-button>
-        <a-button block @click="$router.push('/settings')">设置</a-button>
+        <a-button type="primary" block aria-label="开始创作" title="开始创作" @click="$router.push('/projects/new')"><PlusOutlined /><span class="action-label">开始创作</span></a-button>
+        <a-button block aria-label="设置" title="设置" @click="$router.push('/settings')"><SettingOutlined /><span class="action-label">设置</span></a-button>
       </div>
       <div class="sidebar-footer">
         <a-button type="text" class="developer-trigger" @click="developerOpen = true"><CodeOutlined /> 开发者 / 运行状态</a-button>
@@ -77,6 +79,6 @@ const developerOpen = ref(false)
 .sidebar-footer { padding: 12px; border-top: 1px solid #e7e0d7; }.developer-trigger { width: 100%; justify-content: flex-start; color: #6f6962; font-size: 12px; }.profile { display: flex; align-items: center; gap: 9px; padding: 8px; color: #59534d; font-size: 13px; }
 .app-content { min-height: 100vh; margin-left: 224px; padding: 0 32px; background: #f6f4ef; box-sizing: border-box; }.content-inner { min-width: 0; max-width: 1280px; margin: 0 auto; }.drawer-note { margin: 0 0 14px; color: #706b65; font-size: 13px; line-height: 1.65; }
 :deep(.ant-card-head-title), :deep(.ant-card-body) { word-break: break-word; white-space: normal; }
-@media (max-width: 1024px) { .app-sider { width: 64px; }.logo-text, .nav-caption, .developer-trigger :deep(span:not(.anticon)), .profile span { display: none; }.sidebar-logo { justify-content: center; padding: 0; }.developer-trigger, .profile { justify-content: center; padding-inline: 0; }.app-content { margin-left: 64px; padding: 0 16px; } }
+@media (max-width: 1024px) { .sidebar-actions { padding: 0 8px 12px; } .sidebar-actions .action-label { display: none; } .sidebar-actions :deep(button) { width: 48px; min-width: 0; padding-inline: 0; display: flex; align-items: center; justify-content: center; } .app-sider { width: 64px; }.logo-text, .nav-caption, .developer-trigger :deep(span:not(.anticon)), .profile span { display: none; }.sidebar-logo { justify-content: center; padding: 0; }.developer-trigger, .profile { justify-content: center; padding-inline: 0; }.app-content { margin-left: 64px; padding: 0 16px; } }
 @media (max-width: 640px) { .app-content { padding: 0 12px; } }
 </style>
