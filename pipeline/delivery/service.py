@@ -671,15 +671,41 @@ def _create_direct_locked(
 def _open_unknown_direct(
     conn: sqlite3.Connection, *, project_id: str, deliverable_id: str, account_id: str,
 ) -> DeliveryAttempt | None:
-    if _latest_attempt(
-        conn, project_id=project_id, deliverable_id=deliverable_id,
-        account_id=account_id, mode="direct", outcome="success",
-    ) is not None:
+    attempts = [a for a in latest_attempts(conn, project_id)
+                if a.deliverable_id == deliverable_id and a.account_id == account_id
+                and a.mode == "direct"]
+    if any(a.outcome == "success" for a in attempts):
         return None
-    return _latest_attempt(
-        conn, project_id=project_id, deliverable_id=deliverable_id,
-        account_id=account_id, mode="direct", outcome="unknown",
-    )
+    by_id = {a.id: a for a in attempts}
+
+    def verification_root(attempt: DeliveryAttempt) -> str:
+        seen = set()
+        while (attempt.retry_of_id in by_id
+               and attempt.approval_fingerprint == f"verify:{attempt.retry_of_id}"
+               and attempt.id not in seen):
+            seen.add(attempt.id)
+            attempt = by_id[attempt.retry_of_id]
+        return attempt.id
+
+    resolved = {verification_root(a) for a in attempts
+                if a.outcome in {"success", "failure"}}
+    for attempt in attempts:
+        if attempt.outcome != "unknown" or verification_root(attempt) in resolved:
+            continue
+        if attempt.approval_fingerprint.startswith("intent:"):
+            # The final receipt uses the original request key. This also resolves
+            # intents written by older versions without altering append-only history.
+            key = make_idempotency_key(
+                project_id=attempt.project_id, deliverable_id=attempt.deliverable_id,
+                deliverable_version=attempt.deliverable_version, platform=attempt.platform,
+                account_id=attempt.account_id, mode="direct",
+                approval_fingerprint=attempt.approval_fingerprint.removeprefix("intent:"),
+                retry_of_id=attempt.retry_of_id,
+            )
+            if get_attempt_by_key(conn, key) is not None:
+                continue
+        return attempt
+    return None
 
 
 def _direct_intent_key(
@@ -740,9 +766,9 @@ def _resume_incomplete_direct(
             success, replayed=True, publication_id=success.publication_id,
             media_id=success.platform_post_id,
         )
-    unknown = _latest_attempt(
+    unknown = _open_unknown_direct(
         conn, project_id=project_id, deliverable_id=deliverable_id,
-        account_id=account_id, mode="direct", outcome="unknown",
+        account_id=account_id,
     )
     if unknown is None:
         return None
@@ -837,9 +863,17 @@ def verify_direct_receipt(
     elif publish_status in (0, 4) and isinstance(article_id, str) and article_id:
         outcome, error, post_id = "success", None, article_id
         key = terminal_key
-    else:
+    elif publish_status in (2, 3, 5, 6):
         outcome, error, post_id = "failure", f"freepublish status={publish_status!r}", None
         key = terminal_key
+    else:
+        outcome, error, post_id = "unknown", f"unknown receipt: invalid status publish_id={publish_id}", publish_id
+        key = make_idempotency_key(
+            project_id=prior.project_id, deliverable_id=prior.deliverable_id,
+            deliverable_version=prior.deliverable_version, platform=prior.platform,
+            account_id=prior.account_id, mode="direct",
+            approval_fingerprint=f"verify:{prior.id}:{stamp}:{uuid4().hex}",
+        )
     attempt = insert_attempt(
         conn, project_id=prior.project_id, deliverable_id=prior.deliverable_id,
         deliverable_version=prior.deliverable_version,

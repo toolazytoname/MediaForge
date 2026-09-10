@@ -442,11 +442,24 @@ class WechatMpPublisher(PublisherAdapter):
         )
 
     def _freepublish(self, *, media_id: str, account_id: str) -> PublishResult:
-        submit = self._freepublish_submit(media_id)
-        publish_id = submit.get("publish_id")
+        try:
+            submit = self._freepublish_submit(media_id)
+        except PublishError as error:
+            # Official rejection is definitive; transport/HTTP/parse failures are not.
+            if any(marker in str(error) for marker in (
+                "auth/permission error", "API error", "quota error", "rate_limit error",
+            )):
+                raise
+            raise PublishError(f"unknown receipt: freepublish submit: {error}") from error
+        publish_id = submit.get("publish_id") if isinstance(submit, dict) else None
         if not isinstance(publish_id, str) or not publish_id:
-            raise PublishError(f"wechat_mp freepublish/submit missing publish_id: {submit!r}")
-        status = self._freepublish_get(publish_id)
+            raise PublishError(f"unknown receipt: wechat_mp freepublish/submit missing publish_id: {submit!r}")
+        try:
+            status = self._freepublish_get(publish_id)
+        except Exception as error:
+            raise PublishError(f"unknown receipt: query failed publish_id={publish_id}: {error}") from error
+        if not isinstance(status, dict):
+            raise PublishError(f"unknown receipt: invalid status publish_id={publish_id}")
         publish_status = status.get("publish_status")
         payload = {
             "platform": "wechat_mp",
@@ -462,14 +475,14 @@ class WechatMpPublisher(PublisherAdapter):
                 "unknown receipt: freepublish still publishing; do not retry "
                 f"publish_id={publish_id}"
             )
+        if publish_status in (2, 3, 5, 6):
+            raise PublishError(f"wechat_mp freepublish failed status={publish_status!r}: {status!r}")
         if publish_status not in (0, 4):
-            raise PublishError(
-                f"wechat_mp freepublish failed status={publish_status!r}: {status!r}"
-            )
+            raise PublishError(f"unknown receipt: status={publish_status!r} publish_id={publish_id}")
         article_id = status.get("article_id")
         if not isinstance(article_id, str) or not article_id:
             raise PublishError(
-                f"wechat_mp freepublish missing article_id: {status!r}"
+                f"unknown receipt: wechat_mp freepublish missing article_id publish_id={publish_id}: {status!r}"
             )
         url = payload["article_url"]
         if not isinstance(url, str) or not url:

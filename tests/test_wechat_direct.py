@@ -588,3 +588,71 @@ def test_direct_interrupt_after_accept_does_not_republish(tmp_path) -> None:
     assert adapter.calls == 1
     assert second.attempt.outcome == "unknown"
     assert second.replayed is True
+
+
+def test_known_draft_to_direct_failure_can_retry_after_permission_fix(tmp_path, monkeypatch):
+    from pipeline.publishers.base import PublishError
+    from pipeline.delivery.store import latest_attempts
+    pid, profile, root, accounts, conn = _bind_ready(tmp_path)
+    adapter = _CountingWechat()
+    common = dict(project_id=pid, deliverable_id='dlv_article_wechat_mp', actor='lazy',
+                  adapter=adapter, account=AccountConfig(profile.id, tmp_path / 'x.json'),
+                  publish_config=PublishConfig(enabled=True, allowed_platforms=['wechat_mp']),
+                  projects_root=root)
+    create_draft(conn, **common)
+    original = adapter.publish
+    def rejected(*args, **kwargs):
+        raise PublishError('permission denied')
+    monkeypatch.setattr(adapter, 'publish', rejected)
+    failed = create_direct(conn, confirm_token='test', accounts_root=accounts, **common)
+    assert failed.attempt.outcome == 'failure'
+    monkeypatch.setattr(adapter, 'publish', original)
+    result = create_direct(conn, confirm_token='test', accounts_root=accounts,
+                           retry_of_id=failed.attempt.id, **common)
+    assert result.attempt.outcome == 'success'
+    assert adapter.modes == ['draft', 'direct']
+    replay = create_direct(conn, confirm_token='test', accounts_root=accounts,
+                           retry_of_id=failed.attempt.id, **common)
+    assert replay.replayed
+    assert adapter.modes == ['draft', 'direct']
+    assert any(a.outcome == 'unknown' for a in latest_attempts(conn, pid))  # history not rewritten
+
+
+def test_verified_failure_resolves_all_pending_receipts_before_retry(tmp_path, monkeypatch):
+    pid, profile, root, accounts, conn = _bind_ready(tmp_path)
+    adapter = _CountingWechat()
+    common = dict(project_id=pid, deliverable_id='dlv_article_wechat_mp', actor='lazy',
+                  adapter=adapter, account=AccountConfig(profile.id, tmp_path / 'x.json'),
+                  publish_config=PublishConfig(enabled=True, allowed_platforms=['wechat_mp']),
+                  projects_root=root)
+    create_draft(conn, **common)
+    adapter.unknown = True
+    unknown = create_direct(conn, confirm_token='test', accounts_root=accounts, **common)
+    assert unknown.attempt.outcome == 'unknown'
+    monkeypatch.setattr(adapter, 'query_freepublish', lambda pid: {'publish_status': 1})
+    pending = verify_direct_receipt(conn, attempt_id=unknown.attempt.id, adapter=adapter, actor='lazy')
+    monkeypatch.setattr(adapter, 'query_freepublish', lambda pid: {'publish_status': 2})
+    failed = verify_direct_receipt(conn, attempt_id=pending.attempt.id, adapter=adapter, actor='lazy')
+    assert failed.attempt.outcome == 'failure'
+    adapter.unknown = False
+    result = create_direct(conn, confirm_token='test', accounts_root=accounts,
+                           retry_of_id=failed.attempt.id, **common)
+    assert result.attempt.outcome == 'success'
+
+
+@pytest.mark.parametrize('failure_stage', ['submit', 'query', 'missing_id'])
+def test_wechat_ambiguous_freepublish_keeps_unknown_and_query_id(failure_stage):
+    from pipeline.publishers.base import PublishError
+    def post(url, **kwargs):
+        if url.endswith('/freepublish/submit'):
+            if failure_stage == 'submit':
+                raise PublishError('wechat_mp network error (POST): timeout')
+            return {} if failure_stage == 'missing_id' else {'publish_id': 'p_safequery'}
+        raise PublishError('wechat_mp auth/permission error 48001: permission denied')
+    adapter = WechatMpPublisher(app_id='fake', app_secret='fake',
+                                http_get=lambda *a, **k: {'access_token': 'fake', 'expires_in': 7200},
+                                http_post=post)
+    with pytest.raises(PublishError, match='unknown') as caught:
+        adapter._freepublish(media_id='draft', account_id='test')
+    if failure_stage == 'query':
+        assert 'publish_id=p_safequery' in str(caught.value)
