@@ -156,25 +156,80 @@ def test_score_rejects_repeated_filler():
 
 
 def test_default_visuals_calls_image_generation(tmp_path, monkeypatch):
+    from pipeline import db, visuals
     from pipeline.auto_create import _default_visuals
-    from pipeline import visuals
     from tests.test_autonomy_policy import _project
     root = tmp_path / "projects"
     _project(root, autonomy="pack", project_id="prj_packimg")
-    calls: list[str] = []
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+    calls: list[object] = []
 
     def fake_generate(prompt, *, out_path, aspect_ratio="1:1", n=1, stage="create_image", ref_id=None, conn=None):
-        calls.append(str(prompt))
+        assert conn is not None
+        calls.append(conn)
         path = Path(out_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(_PNG)
-        return MagicMock()
+        return MagicMock(model="image-01")
 
+    monkeypatch.setattr("pipeline.webui.deps.get_conn", lambda: conn)
     monkeypatch.setattr("pipeline.creators.image_gen.generate_image", fake_generate)
     _default_visuals("prj_packimg", now=NOW, projects_root=root)
     plan = visuals.load_visuals("prj_packimg", projects_root=root)
-    assert calls
-    assert any(item.status == "selected" and item.file_path for item in plan.assets)
+    assert len(calls) == 3
+    assert all(item.status == "selected" and item.file_path for item in plan.assets)
+    assert all(item.cost_usd > 0 for item in plan.assets)
+    assert not _slots_missing(plan)
+
+
+def _slots_missing(plan):
+    from pipeline.auto_create import _slots_missing_selected
+    return _slots_missing_selected(plan)
+
+
+def test_default_visuals_resumes_missing_slots(tmp_path, monkeypatch):
+    from pipeline import db, visuals
+    from pipeline.auto_create import _default_visuals
+    from tests.test_autonomy_policy import _project
+    root = tmp_path / "projects"
+    _project(root, autonomy="pack", project_id="prj_packslot")
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+    visuals.save_plan(
+        "prj_packslot", bible={"style": "plain"},
+        slots=[
+            {"id": "vsl_cover", "purpose": "封面", "paragraph_anchor": None, "direction": "封面", "aspect_ratio": "16:9"},
+            {"id": "vsl_one", "purpose": "正文插图一", "paragraph_anchor": "正文", "direction": "插图", "aspect_ratio": "16:9"},
+            {"id": "vsl_two", "purpose": "正文插图二", "paragraph_anchor": "正文", "direction": "插图", "aspect_ratio": "16:9"},
+        ],
+        projects_root=root,
+    )
+    png = root / "prj_packslot" / "assets" / "vas_only.png"
+    png.parent.mkdir(parents=True, exist_ok=True)
+    png.write_bytes(_PNG)
+    asset = visuals.record_asset(
+        "prj_packslot", slot_id="vsl_cover", prompt="封面", model="fake", size="16:9",
+        cost_usd=0.003, now=NOW, file_path="assets/vas_only.png", status="candidate",
+        asset_id="vas_onlycover01", projects_root=root,
+    )
+    visuals.select_asset("prj_packslot", asset.id, reason="先有一张", rating=3, projects_root=root)
+    generated: list[str] = []
+
+    def fake_generate(prompt, *, out_path, aspect_ratio="1:1", n=1, stage="create_image", ref_id=None, conn=None):
+        generated.append(str(prompt))
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(_PNG)
+        return MagicMock(model="image-01")
+
+    monkeypatch.setattr("pipeline.webui.deps.get_conn", lambda: conn)
+    monkeypatch.setattr("pipeline.creators.image_gen.generate_image", fake_generate)
+    _default_visuals("prj_packslot", now=NOW, projects_root=root)
+    plan = visuals.load_visuals("prj_packslot", projects_root=root)
+    assert len(generated) == 2
+    assert len(_slots_missing(plan)) == 0
+    selected = [item for item in plan.assets if item.status == "selected"]
+    assert len(selected) == 3
 
 
 def test_book_without_excerpt_is_marked_unread(tmp_path):

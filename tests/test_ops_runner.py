@@ -152,3 +152,73 @@ def test_run_ops_job_before_due_leaves_queued(tmp_path):
     stored = jobs_store.get_job(conn, job.id)
     assert stored is not None
     assert stored.state == "queued"
+
+
+def test_second_ops_slot_uses_a_distinct_theme(tmp_path, monkeypatch):
+    monkeypatch.setattr("pipeline.ops_runner.fetch_text", lambda url: "摘录")
+    accounts = tmp_path / "accounts"
+    projects = tmp_path / "projects"
+    profile = _profile(accounts, enabled=True, target="export")
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+    scheduled = schedule_account(conn, profile.id, now=NOW, accounts_root=accounts)
+    assert len(scheduled.jobs) >= 2
+    first_id = run_ops_job(
+        conn, scheduled.jobs[0].id, now=_due(scheduled.jobs[0]),
+        accounts_root=accounts, projects_root=projects,
+        draft_fn=_draft_fn, visual_fn=lambda pid: _visual_fn(pid, projects),
+        score_fn=lambda title, body: ("pass", 8.0),
+    )
+    second_id = run_ops_job(
+        conn, scheduled.jobs[1].id, now=_due(scheduled.jobs[1]),
+        accounts_root=accounts, projects_root=projects,
+        draft_fn=_draft_fn, visual_fn=lambda pid: _visual_fn(pid, projects),
+        score_fn=lambda title, body: ("pass", 8.0),
+    )
+    items = {item.id: item for item in list_projects(projects_root=projects)}
+    assert first_id in items and second_id in items
+    assert items[first_id].idea != items[second_id].idea
+    assert jobs_store.get_job(conn, scheduled.jobs[1].id).state == "done"
+
+
+def test_running_ops_job_resumes_from_created_project(tmp_path, monkeypatch):
+    monkeypatch.setattr("pipeline.ops_runner.fetch_text", lambda url: "摘录")
+    from pipeline.projects import create_project
+    accounts = tmp_path / "accounts"
+    projects = tmp_path / "projects"
+    profile = _profile(accounts, enabled=True, target="export")
+    conn = db.connect(tmp_path / "state.db")
+    db.init_db(conn)
+    scheduled = schedule_account(conn, profile.id, now=NOW, accounts_root=accounts)
+    job = scheduled.jobs[0]
+    project = create_project(
+        title="已开始的运营稿", idea="恢复用的不同主题", audience="读者",
+        goal="文章", voice="清晰", autonomy="draft", now=NOW,
+        projects_root=projects,
+    )
+    jobs_store.update_job_progress(conn, job.id, state="running", now=NOW, progress=0.2)
+    jobs_store.bind_job_project(conn, job.id, project_id=project.id, now=NOW)
+    result = tick_operations(
+        conn, now=_due(job), accounts_root=accounts, projects_root=projects,
+        draft_fn=_draft_fn, visual_fn=lambda pid: _visual_fn(pid, projects),
+        score_fn=lambda title, body: ("pass", 8.0),
+    )
+    assert result.ran == 1
+    assert result.failed == 0
+    finished = jobs_store.get_job(conn, job.id)
+    assert finished is not None
+    assert finished.state == "done"
+    assert finished.result_path == f"projects/{project.id}"
+    assert len(list_projects(projects_root=projects)) == 1
+
+
+def test_ops_tick_interval_is_disabled_in_pytest():
+    from pipeline.ops_runner import ops_tick_interval_sec
+    assert ops_tick_interval_sec() == 0
+
+
+def test_ops_cli_accepts_loop_flag():
+    from pipeline.run import build_parser
+    args = build_parser().parse_args(["ops", "--loop", "--interval", "30"])
+    assert args.loop is True
+    assert args.interval == 30

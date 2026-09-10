@@ -551,3 +551,40 @@ def test_create_draft_still_works_for_bound_account(tmp_path) -> None:
     assert result.attempt.outcome == "success"
     assert result.media_id == "media_ok"
     assert adapter.modes == ["draft"]
+
+
+def test_direct_interrupt_after_accept_does_not_republish(tmp_path) -> None:
+    project_id, profile, root, accounts, conn = _bind_ready(tmp_path, target="direct")
+    adapter = _CountingWechat()
+    original = adapter.publish
+
+    def drop_after_accept(bundle, account, dry_run=False):
+        result = original(bundle, account, dry_run=dry_run)
+        raise RuntimeError("connection dropped after platform accept")
+
+    account = AccountConfig(id=profile.id, credentials_path=tmp_path / "x.json")
+    cfg = PublishConfig(enabled=True, allowed_platforms=["wechat_mp"])
+    create_draft(
+        conn, project_id=project_id, deliverable_id="dlv_article_wechat_mp",
+        actor="lazy", adapter=adapter, account=account, publish_config=cfg,
+        projects_root=root,
+    )
+    adapter.publish = drop_after_accept  # type: ignore[method-assign]
+    adapter.calls = 0
+    adapter.modes = []
+    first = create_direct(
+        conn, project_id=project_id, deliverable_id="dlv_article_wechat_mp",
+        actor="lazy", adapter=adapter, account=account, publish_config=cfg,
+        confirm_token="yes-publish", projects_root=root, accounts_root=accounts,
+    )
+    assert first.attempt.outcome == "unknown"
+    assert adapter.calls == 1
+    adapter.publish = original  # type: ignore[method-assign]
+    second = create_direct(
+        conn, project_id=project_id, deliverable_id="dlv_article_wechat_mp",
+        actor="lazy", adapter=adapter, account=account, publish_config=cfg,
+        confirm_token="yes-publish", projects_root=root, accounts_root=accounts,
+    )
+    assert adapter.calls == 1
+    assert second.attempt.outcome == "unknown"
+    assert second.replayed is True

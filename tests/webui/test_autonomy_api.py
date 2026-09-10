@@ -140,7 +140,7 @@ def test_next_action_and_visual_library_and_pack_prepare(tmp_path, monkeypatch):
     monkeypatch.setattr("pipeline.auto_create._default_draft", _draft_fn)
     monkeypatch.setattr(
         "pipeline.auto_create._default_visuals",
-        lambda project_id, now=None, projects_root=None: _visual_fn(project_id, root),
+        lambda project_id, now=None, projects_root=None, **_kwargs: _visual_fn(project_id, root),
     )
     prepared = client.post("/api/v1/projects/prj_pack_api/pack/prepare")
     assert prepared.status_code == 201

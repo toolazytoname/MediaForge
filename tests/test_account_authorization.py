@@ -184,3 +184,35 @@ def test_quality_result_is_machine_only(tmp_path):
     )
     assert result.human_verified is False
     assert result.verdict == "pass"
+
+
+def test_platform_variant_edit_invalidates_quality_fingerprint(tmp_path):
+    from pipeline import variants
+    project, profile, projects, accounts = _setup(tmp_path)
+    save_authorization(
+        profile.id, actor="lazy", now=NOW, accounts_root=accounts,
+        operations_enabled=True, allow_draft=True, allow_direct=True,
+        quality_floor=6.0,
+    )
+    variants.create_from_master(project.id, "wechat_mp", now=NOW, projects_root=projects)
+    variants.create_from_master(project.id, "toutiao", now=NOW, projects_root=projects)
+    _record_quality(profile, project, projects, accounts, score=8.0, verdict="pass")
+    assert_account_may_deliver(
+        project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
+        path="auto", projects_root=projects, accounts_root=accounts,
+    )
+    current = next(
+        item for item in variants.load_variants(project.id, projects_root=projects).variants
+        if item.platform == "wechat_mp"
+    )
+    variants.save_manual(
+        project.id, "wechat_mp", title="改过的公众号标题",
+        summary="改过的摘要足够长。", body="这是单独改写后的公众号正文。" * 40,
+        asset_ids=list(current.asset_ids), now="2026-09-10T11:00:00+00:00",
+        projects_root=projects,
+    )
+    with pytest.raises(AuthorizationError, match="content"):
+        assert_account_may_deliver(
+            project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
+            path="auto", projects_root=projects, accounts_root=accounts,
+        )

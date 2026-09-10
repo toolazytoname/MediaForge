@@ -423,14 +423,12 @@ def create_direct(
                 prior, replayed=True,
                 publication_id=prior.publication_id, media_id=prior.platform_post_id,
             )
-    unknown_open = _open_unknown_direct(
-        conn, project_id=project_id, deliverable_id=deliverable.id, account_id=account.id,
+    resumed = _resume_incomplete_direct(
+        conn, project_id=project_id, deliverable_id=deliverable.id,
+        account_id=account.id, adapter=adapter, actor=actor,
     )
-    if unknown_open is not None:
-        return DeliveryResult(
-            unknown_open, replayed=True,
-            publication_id=unknown_open.publication_id, media_id=unknown_open.platform_post_id,
-        )
+    if resumed is not None:
+        return resumed
     key = make_idempotency_key(
         project_id=project_id, deliverable_id=deliverable.id,
         deliverable_version=deliverable.version, platform=platform,
@@ -485,14 +483,12 @@ def create_direct(
                 existing, replayed=True,
                 publication_id=existing.publication_id, media_id=existing.platform_post_id,
             )
-        unknown_open = _open_unknown_direct(
-            conn, project_id=project_id, deliverable_id=deliverable.id, account_id=account.id,
+        resumed = _resume_incomplete_direct(
+            conn, project_id=project_id, deliverable_id=deliverable.id,
+            account_id=account.id, adapter=adapter, actor=actor,
         )
-        if unknown_open is not None:
-            return DeliveryResult(
-                unknown_open, replayed=True,
-                publication_id=unknown_open.publication_id, media_id=unknown_open.platform_post_id,
-            )
+        if resumed is not None:
+            return resumed
         return _create_direct_locked(
             conn, project_id=project_id, deliverable=deliverable, platform=platform,
             actor=actor, adapter=adapter, account=account, publish_config=publish_config,
@@ -597,6 +593,12 @@ def _create_direct_locked(
             tags=(),
             extra={"delivery_mode": "direct", "draft_media_id": draft_ok.platform_post_id},
         )
+        _record_direct_intent(
+            conn, project_id=project_id, deliverable=deliverable, fingerprint=fingerprint,
+            platform=platform, account_id=account.id, actor=actor, publication_id=publication.id,
+            content_id=content_id, retry_of_id=retry_of_id, confirm_token=confirm_token,
+            draft_media_id=draft_ok.platform_post_id,
+        )
         try:
             published = adapter.publish(directed, account, dry_run=False)
             result = SafePublishResult(
@@ -609,6 +611,17 @@ def _create_direct_locked(
         except PublishError as error:
             result = SafePublishResult(published=False, reason=f"publish error: {error}")
             raw = json_dumps({"error": str(error), "draft_media_id": draft_ok.platform_post_id})
+        except Exception:
+            intent = _latest_attempt(
+                conn, project_id=project_id, deliverable_id=deliverable.id,
+                account_id=account.id, mode="direct", outcome="unknown",
+            )
+            if intent is not None:
+                return DeliveryResult(
+                    intent, publication_id=intent.publication_id,
+                    media_id=intent.platform_post_id,
+                )
+            raise
         outcome, error, post_id, url = _direct_outcome(result, publication)
         attempt = insert_attempt(
             conn, project_id=project_id, deliverable_id=deliverable.id,
@@ -658,9 +671,95 @@ def _create_direct_locked(
 def _open_unknown_direct(
     conn: sqlite3.Connection, *, project_id: str, deliverable_id: str, account_id: str,
 ) -> DeliveryAttempt | None:
+    if _latest_attempt(
+        conn, project_id=project_id, deliverable_id=deliverable_id,
+        account_id=account_id, mode="direct", outcome="success",
+    ) is not None:
+        return None
     return _latest_attempt(
         conn, project_id=project_id, deliverable_id=deliverable_id,
         account_id=account_id, mode="direct", outcome="unknown",
+    )
+
+
+def _direct_intent_key(
+    *, project_id: str, deliverable_id: str, deliverable_version: int, platform: str,
+    account_id: str, fingerprint: str, retry_of_id: str | None,
+) -> str:
+    return make_idempotency_key(
+        project_id=project_id, deliverable_id=deliverable_id,
+        deliverable_version=deliverable_version, platform=platform,
+        account_id=account_id, mode="direct",
+        approval_fingerprint=f"intent:{fingerprint}", retry_of_id=retry_of_id,
+    )
+
+
+def _record_direct_intent(
+    conn: sqlite3.Connection, *, project_id: str, deliverable: Deliverable,
+    fingerprint: str, platform: str, account_id: str, actor: str,
+    publication_id: str, content_id: str, retry_of_id: str | None,
+    confirm_token: str, draft_media_id: str,
+) -> DeliveryAttempt:
+    key = _direct_intent_key(
+        project_id=project_id, deliverable_id=deliverable.id,
+        deliverable_version=deliverable.version, platform=platform,
+        account_id=account_id, fingerprint=fingerprint, retry_of_id=retry_of_id,
+    )
+    existing = get_attempt_by_key(conn, key)
+    if existing is not None:
+        return existing
+    return insert_attempt(
+        conn, project_id=project_id, deliverable_id=deliverable.id,
+        deliverable_version=deliverable.version,
+        approval_fingerprint=f"intent:{fingerprint}", platform=platform,
+        account_id=account_id, mode="direct", outcome="unknown",
+        idempotency_key=key, request_hash_value=request_hash({
+            "intent": True, "draft_media_id": draft_media_id,
+            "publication_id": publication_id,
+        }),
+        actor=actor, publication_id=publication_id, content_id=content_id,
+        retry_of_id=retry_of_id, platform_post_id=draft_media_id,
+        raw_receipt=json_dumps({
+            "intent": True, "draft_media_id": draft_media_id,
+        }),
+        error=f"unknown receipt: send intent recorded; do not retry publish draft_media_id={draft_media_id}",
+        confirm_token_hash=_hash_confirm(confirm_token),
+    )
+
+
+def _resume_incomplete_direct(
+    conn: sqlite3.Connection, *, project_id: str, deliverable_id: str,
+    account_id: str, adapter: PublisherAdapter, actor: str,
+) -> DeliveryResult | None:
+    success = _latest_attempt(
+        conn, project_id=project_id, deliverable_id=deliverable_id,
+        account_id=account_id, mode="direct", outcome="success",
+    )
+    if success is not None:
+        return DeliveryResult(
+            success, replayed=True, publication_id=success.publication_id,
+            media_id=success.platform_post_id,
+        )
+    unknown = _latest_attempt(
+        conn, project_id=project_id, deliverable_id=deliverable_id,
+        account_id=account_id, mode="direct", outcome="unknown",
+    )
+    if unknown is None:
+        return None
+    publish_id = _publish_id_from_text(unknown.error or "") or _publish_id_from_text(unknown.raw_receipt or "")
+    if publish_id and callable(getattr(adapter, "query_freepublish", None)):
+        if unknown.approval_fingerprint.startswith("intent:") or "send intent recorded" in (unknown.error or ""):
+            return verify_direct_receipt(
+                conn, attempt_id=unknown.id, adapter=adapter, actor=actor,
+            )
+    if unknown.approval_fingerprint.startswith("intent:") or "send intent recorded" in (unknown.error or ""):
+        return DeliveryResult(
+            unknown, replayed=True, publication_id=unknown.publication_id,
+            media_id=unknown.platform_post_id,
+        )
+    return DeliveryResult(
+        unknown, replayed=True, publication_id=unknown.publication_id,
+        media_id=unknown.platform_post_id,
     )
 
 

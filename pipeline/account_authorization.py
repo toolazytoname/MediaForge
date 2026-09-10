@@ -251,11 +251,21 @@ def quality_fingerprint(
 ) -> str:
     import hashlib
     from pipeline.master_documents import load_master
+    from pipeline.variants import load_variants
+    parts: list[str] = []
     master = load_master(project_id, projects_root=projects_root)
-    if master is None:
+    if master is not None:
+        parts.append(f"master:{master.version}:{master.title}:{master.body}")
+    try:
+        for item in load_variants(project_id, projects_root=projects_root).variants:
+            parts.append(
+                f"variant:{item.platform}:{item.version}:{item.title}:{item.body}"
+            )
+    except Exception:
+        pass
+    if not parts:
         return ""
-    payload = f"{master.version}\n{master.title}\n{master.body}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 def _auth_path(root: str | Path, account_id: str) -> Path:

@@ -58,56 +58,46 @@ def run_auto_create(
     board = research.load_research(project_id, projects_root=projects_root)
     if not board.sources:
         raise AutoCreateError("自动写稿需要至少一条来源", code="sources_required")
-    _assert_not_duplicate_theme(project, projects_root=projects_root)
-
-    writer = draft_fn or _default_draft
-    scorer = score_fn or (lambda title, body: score_manuscript(
-        title, body, sources=board.sources, interview=interview,
-    )[:2])
-    title, body = writer(project, interview, board, None)
-    verdict, _score = scorer(title, body)
-    revisions = 0
-    while verdict != "pass" and revisions < max_revisions:
-        revisions += 1
-        title, body = writer(project, interview, board, f"质量不合格：{verdict}")
-        verdict, _score = scorer(title, body)
-    if verdict != "pass":
-        if account_id and accounts_root is not None:
-            from pipeline.account_authorization import record_quality_result
-            record_quality_result(
-                account_id, project_id=project_id, score=float(_score),
-                verdict=verdict, now=now, accounts_root=accounts_root,
-            )
-        raise AutoCreateError("质量门禁不合格，已暂停，不进入交付", code="quality_paused")
-    if _is_theme_loop(project, body):
-        raise AutoCreateError("自动写稿不得用主题循环粘贴凑字", code="placeholder_body")
 
     created_master = False
+    revisions = 0
+    verdict, _score = "pass", 8.0
     master = master_documents.load_master(project_id, projects_root=projects_root)
     if master is None:
+        _assert_not_duplicate_theme(project, projects_root=projects_root)
+        writer = draft_fn or _default_draft
+        scorer = score_fn or (lambda title, body: score_manuscript(
+            title, body, sources=board.sources, interview=interview,
+        )[:2])
+        title, body = writer(project, interview, board, None)
+        verdict, _score = scorer(title, body)
+        while verdict != "pass" and revisions < max_revisions:
+            revisions += 1
+            title, body = writer(project, interview, board, f"质量不合格：{verdict}")
+            verdict, _score = scorer(title, body)
+        if verdict != "pass":
+            if account_id and accounts_root is not None:
+                from pipeline.account_authorization import record_quality_result
+                record_quality_result(
+                    account_id, project_id=project_id, score=float(_score),
+                    verdict=verdict, now=now, accounts_root=accounts_root,
+                )
+            raise AutoCreateError("质量门禁不合格，已暂停，不进入交付", code="quality_paused")
+        if _is_theme_loop(project, body):
+            raise AutoCreateError("自动写稿不得用主题循环粘贴凑字", code="placeholder_body")
         master = master_documents.save_manual(
             project_id, title=title, body=body, now=now, projects_root=projects_root,
         )
         created_master = True
-    visuals_fn = visual_fn or (lambda pid: _default_visuals(pid, now=now, projects_root=projects_root))
+    visuals_fn = visual_fn or (
+        lambda pid: _default_visuals(
+            pid, now=now, projects_root=projects_root,
+            account_id=account_id, accounts_root=accounts_root,
+        )
+    )
     visuals_fn(project_id)
     master = master_documents.load_master(project_id, projects_root=projects_root)
     assert master is not None
-    if account_id and accounts_root is not None:
-        from pipeline.account_authorization import (
-            load_authorization, quality_fingerprint, record_quality_result,
-        )
-        auth_version = 0
-        try:
-            auth_version = load_authorization(account_id, accounts_root=accounts_root).version
-        except Exception:
-            pass
-        record_quality_result(
-            account_id, project_id=project_id, score=float(_score),
-            verdict=verdict, now=now, accounts_root=accounts_root,
-            content_fingerprint=quality_fingerprint(project_id, projects_root=projects_root),
-            master_version=master.version, authorization_version=auth_version,
-        )
 
     created_platforms: list[str] = []
     existing = {
@@ -123,6 +113,21 @@ def run_auto_create(
             body=adapted_body, now=now, projects_root=projects_root,
         )
         created_platforms.append(platform)
+    if account_id and accounts_root is not None:
+        from pipeline.account_authorization import (
+            load_authorization, quality_fingerprint, record_quality_result,
+        )
+        auth_version = 0
+        try:
+            auth_version = load_authorization(account_id, accounts_root=accounts_root).version
+        except Exception:
+            pass
+        record_quality_result(
+            account_id, project_id=project_id, score=float(_score),
+            verdict=verdict, now=now, accounts_root=accounts_root,
+            content_fingerprint=quality_fingerprint(project_id, projects_root=projects_root),
+            master_version=master.version, authorization_version=auth_version,
+        )
     return AutoCreateResult(
         project_id=project.id,
         title=title,
@@ -244,10 +249,31 @@ def _adapt_for_platform(master: Any, platform: str) -> tuple[str, str, str]:
     return title, summary, body
 
 
-def _default_visuals(project_id: str, *, now: str, projects_root: str | Path) -> None:
+def _image_cost_usd(model: str) -> float:
+    from pipeline.creators import llm as llm_mod
+    prices = llm_mod.MODEL_PRICES.get(model, {}) or {}
+    cost = float(prices.get("per_image_usd") or 0)
+    if cost <= 0:
+        raise AutoCreateError("image generation is unpriced", code="unpriced_image")
+    return cost
+
+
+def _slots_missing_selected(plan) -> tuple:
+    selected = {
+        item.slot_id for item in plan.assets
+        if item.status == "selected" and item.file_path
+    }
+    return tuple(slot for slot in plan.slots if slot.id not in selected)
+
+
+def _default_visuals(
+    project_id: str, *, now: str, projects_root: str | Path,
+    account_id: str | None = None, accounts_root: str | Path | None = None,
+) -> None:
     from pipeline import visuals
     from pipeline.creators.image_gen import generate_image
     from pipeline.utils.ids import new_id
+    from pipeline.webui import deps
     plan = visuals.load_visuals(project_id, projects_root=projects_root)
     if not plan.slots:
         visuals.save_plan(
@@ -261,28 +287,43 @@ def _default_visuals(project_id: str, *, now: str, projects_root: str | Path) ->
             projects_root=projects_root,
         )
         plan = visuals.load_visuals(project_id, projects_root=projects_root)
-    if any(item.status == "selected" and item.file_path for item in plan.assets):
+    missing = _slots_missing_selected(plan)
+    if not missing:
         return
+    conn = deps.get_conn()
     try:
-        for slot in plan.slots:
+        for slot in missing:
             asset_id = new_id("vas")
             path = visuals.asset_path(project_id, asset_id, projects_root=projects_root)
-            generate_image(
+            generated = generate_image(
                 slot.direction or slot.purpose,
                 out_path=path, aspect_ratio=slot.aspect_ratio,
-                stage="create_image", ref_id=project_id,
+                stage="create_image", ref_id=project_id, conn=conn,
             )
+            cost = _image_cost_usd(generated.model)
+            if account_id and accounts_root is not None:
+                from pipeline.account_plans import load_spend, record_spend
+                from pipeline.account_profiles import load_profile
+                profile = load_profile(account_id, accounts_root=accounts_root)
+                spent = load_spend(account_id, accounts_root=accounts_root)
+                if spent + cost > profile.budget_usd:
+                    raise AutoCreateError("account image budget exceeded", code="budget_exceeded")
+                record_spend(account_id, amount=cost, now=now, accounts_root=accounts_root)
             asset = visuals.record_asset(
-                project_id, slot_id=slot.id, prompt=slot.direction, model="image-gen",
-                size=slot.aspect_ratio, cost_usd=0, now=now,
+                project_id, slot_id=slot.id, prompt=slot.direction or slot.purpose,
+                model=generated.model, size=slot.aspect_ratio, cost_usd=cost, now=now,
                 file_path=f"assets/{asset_id}.png", status="candidate",
                 asset_id=asset_id, projects_root=projects_root,
             )
             visuals.select_asset(project_id, asset.id, reason="自动选中", rating=3, projects_root=projects_root)
+    except AutoCreateError:
+        raise
     except Exception as error:
         raise AutoCreateError(f"自动配图失败，已暂停: {error}", code="visuals_required") from error
+    finally:
+        conn.close()
     plan = visuals.load_visuals(project_id, projects_root=projects_root)
-    if not any(item.status == "selected" and item.file_path for item in plan.assets):
+    if _slots_missing_selected(plan):
         raise AutoCreateError("自动配图尚未完成，已暂停", code="visuals_required")
 
 

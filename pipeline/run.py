@@ -946,12 +946,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_ops(args: argparse.Namespace) -> int:
     """Run due account operation jobs. Does not enable accounts."""
+    import time
     from pipeline.ops_runner import tick_operations
-    conn = db.connect(_DB_PATH)
-    db.init_db(conn)
-    result = tick_operations(conn, now=db.now_utc())
-    print(f"ops tick scheduled={result.scheduled} ran={result.ran} failed={result.failed}")
-    return 1 if result.failed else 0
+    loop = bool(getattr(args, "loop", False))
+    interval = max(5, int(getattr(args, "interval", 60) or 60))
+    while True:
+        conn = db.connect(_DB_PATH)
+        db.init_db(conn)
+        try:
+            result = tick_operations(conn, now=db.now_utc())
+        finally:
+            conn.close()
+        print(f"ops tick scheduled={result.scheduled} ran={result.ran} failed={result.failed}")
+        if not loop:
+            return 1 if result.failed else 0
+        time.sleep(interval)
 
 
 def cmd_webui(args: argparse.Namespace) -> int:
@@ -1076,9 +1085,11 @@ def build_parser() -> argparse.ArgumentParser:
     reset_p.add_argument("id", help="记录 id")
     reset_p.add_argument("status", help="目标状态")
 
-    sub.add_parser(
+    ops_p = sub.add_parser(
         "ops", help="执行到期的账号运营任务（不会自动开启账号）",
     )
+    ops_p.add_argument("--loop", action="store_true", help="持续按间隔执行到期任务")
+    ops_p.add_argument("--interval", type=int, default=60, help="循环间隔秒数，默认 60")
     sub.add_parser(
         "webui", help="启动本地 Web 控制台（默认 127.0.0.1:8787）"
     )

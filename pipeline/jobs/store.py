@@ -137,6 +137,27 @@ def update_job_progress(
     return get_job(conn, job_id)
 
 
+def bind_job_project(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    project_id: str,
+    now: str,
+) -> DurableJob | None:
+    """Persist the created project on result_path. Identity columns stay frozen."""
+    conn.execute(
+        """
+        UPDATE durable_jobs
+        SET result_path = COALESCE(result_path, ?),
+            updated_at = ?
+        WHERE id = ? AND state NOT IN ('done', 'failed', 'cancelled')
+        """,
+        (f"projects/{project_id}", now, job_id),
+    )
+    conn.commit()
+    return get_job(conn, job_id)
+
+
 def try_finish_job(
     conn: sqlite3.Connection,
     job_id: str,
@@ -184,6 +205,7 @@ __all__ = [
     "DurableJob",
     "get_job",
     "get_job_by_key",
+    "bind_job_project",
     "insert_job",
     "try_finish_job",
     "update_job_progress",

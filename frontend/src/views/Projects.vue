@@ -466,24 +466,9 @@ async function loadAccountBinding(): Promise<void> {
   if (!projectId.value) return
   const profiles = await api.get<{ items: { id: string; display_name: string; platform: string }[] }>('/account-profiles')
   wechatAccounts.value = (profiles.data.items || []).filter(item => item.platform === 'wechat_mp')
-  let saved = ''
   try {
     const bindings = await api.get<{ items: { platform: string; account_id: string }[] }>(`/projects/${projectId.value}/account-binding`)
-    saved = (bindings.data.items || []).find(item => item.platform === 'wechat_mp')?.account_id || ''
-  } catch {
-    saved = ''
-  }
-  if (saved) {
-    boundWechatId.value = saved
-    return
-  }
-  const fallback = wechatAccounts.value[0]?.id || ''
-  if (!fallback) {
-    boundWechatId.value = ''
-    return
-  }
-  try {
-    await bindWechatAccount(fallback)
+    boundWechatId.value = (bindings.data.items || []).find(item => item.platform === 'wechat_mp')?.account_id || ''
   } catch (e) {
     boundWechatId.value = ''
     detailError.value = unwrapError(e)

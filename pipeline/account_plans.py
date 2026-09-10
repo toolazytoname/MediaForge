@@ -70,6 +70,12 @@ def load_plan(account_id: str, *, accounts_root: str | Path = DEFAULT_ACCOUNTS_R
     )
 
 
+def load_spend(
+    account_id: str, *, accounts_root: str | Path = DEFAULT_ACCOUNTS_ROOT,
+) -> float:
+    return _load_spend(account_id, accounts_root)
+
+
 def record_spend(
     account_id: str, *, amount: float, now: str,
     accounts_root: str | Path = DEFAULT_ACCOUNTS_ROOT,
@@ -240,6 +246,7 @@ __all__ = [
     "ScheduleResult",
     "list_upcoming_plans",
     "load_plan",
+    "load_spend",
     "record_spend",
     "schedule_account",
 ]

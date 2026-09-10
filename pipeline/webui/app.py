@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -71,8 +72,19 @@ def _ok(html: str) -> HTMLResponse:
 # ── app factory ─────────────────────────────────────────────
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    from pipeline.ops_runner import start_ops_ticker
+    stop = start_ops_ticker()
+    app.state.stop_ops = stop
+    try:
+        yield
+    finally:
+        stop()
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="MediaForge Console", version="0.3.0")
+    app = FastAPI(title="MediaForge Console", version="0.3.0", lifespan=_lifespan)
 
     # 启动时一次性建表（每请求跑 DDL 是浪费）
     _init_c = db.connect(deps._DB_PATH)
