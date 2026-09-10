@@ -35,7 +35,7 @@ const developerItems: ReadonlyArray<NavItem> = [
   { path: '/contents', label: '内容记录', icon: DatabaseOutlined },
   { path: '/review', label: '审核状态', icon: AuditOutlined },
   { path: '/runs', label: '运行状态', icon: CodeOutlined },
-  { path: '/accounts', label: '账号状态', icon: FileTextOutlined },
+  { path: '/accounts/health', label: '账号登录状态', icon: FileTextOutlined },
   { path: '/settings', label: '设置', icon: SettingOutlined },
 ]
 

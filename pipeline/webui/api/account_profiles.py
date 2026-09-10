@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 
 from pipeline.account_bindings import AccountBindingError, bind_project_account, load_bindings
+from pipeline.account_onboarding import OnboardingError, confirm_onboarding, propose_onboarding
 from pipeline.account_profiles import (
     AccountProfileError,
     DEFAULT_ACCOUNTS_ROOT,
@@ -87,3 +88,37 @@ def put_binding(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, 
             "code": "invalid_account_binding", "message": str(error),
         }}) from error
     return asdict(bindings)
+
+
+@router.post("/account-profiles/{account_id}/onboarding")
+def post_onboarding(account_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        draft = propose_onboarding(
+            account_id,
+            interview=body.get("interview") or {},
+            sources=body.get("sources") or (),
+            now=_now(),
+            accounts_root=DEFAULT_ACCOUNTS_ROOT,
+        )
+    except OnboardingError as error:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_onboarding", "message": str(error),
+        }}) from error
+    except AccountProfileError as error:
+        raise _raise_profile(error) from error
+    return asdict(draft)
+
+
+@router.post("/account-profiles/{account_id}/onboarding/confirm")
+def post_onboarding_confirm(account_id: str) -> dict[str, Any]:
+    try:
+        profile = confirm_onboarding(
+            account_id, now=_now(), accounts_root=DEFAULT_ACCOUNTS_ROOT,
+        )
+    except OnboardingError as error:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_onboarding", "message": str(error),
+        }}) from error
+    except AccountProfileError as error:
+        raise _raise_profile(error) from error
+    return asdict(profile)
