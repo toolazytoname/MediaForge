@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from pipeline.account_plans import list_upcoming_plans
+from pipeline.account_profiles import DEFAULT_ACCOUNTS_ROOT
 from pipeline.delivery.store import latest_attempts
 from pipeline.jobs import store as jobs_store
 from pipeline.projects import DEFAULT_PROJECTS_ROOT, list_projects
@@ -42,6 +44,7 @@ def load_today(
     conn: sqlite3.Connection,
     *,
     projects_root: str | Path = DEFAULT_PROJECTS_ROOT,
+    accounts_root: str | Path = DEFAULT_ACCOUNTS_ROOT,
 ) -> TodaySnapshot:
     projects = list_projects(projects_root=projects_root)
     todos: list[TodayItem] = []
@@ -80,7 +83,17 @@ def load_today(
             href=f"/projects/{job.project_id}" if job.project_id else "/runs",
             project_id=job.project_id,
         ))
-    return TodaySnapshot(tuple(todos), tuple(exceptions), ())
+    next_plans: list[TodayItem] = []
+    for plan in list_upcoming_plans(accounts_root=accounts_root):
+        for slot in plan.slots:
+            next_plans.append(TodayItem(
+                kind="next_plan",
+                title=f"{plan.account_id} 下次 {slot.slot}",
+                detail=f"{slot.local_date} {slot.scheduled_at}",
+                href="/accounts",
+                project_id=None,
+            ))
+    return TodaySnapshot(tuple(todos), tuple(exceptions), tuple(next_plans))
 
 
 __all__ = ["TodayItem", "TodaySnapshot", "load_today"]

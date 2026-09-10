@@ -190,11 +190,13 @@
 
 ## AUTO-02 账号频率、持久任务与去重
 
-- [ ] **目标**：按账号固定频率、时区、预算启停；持久任务、阶段恢复、暂停取消；重启不重复创建计划。
+- [x] **目标**：按账号固定频率、时区、预算启停；持久任务、阶段恢复、暂停取消；重启不重复创建计划。
 - **步骤**：计划 sidecar；`durable_jobs` kind 扩展需评估是否改 SQLite（能不加列就用 request_json；加列先 RFC）。幂等键含 account_id+slot+date。
 - **测试**：重启不插入第二份同一 slot；预算超限暂停；operations_enabled=false 不调度。
 - **声明改动文件**：计划模块、jobs、测试、本文件。
 - **红线**：不改 publications UNIQUE 语义；结果未知不重试发送。
+
+  ✅ 完成于 2026-09-10。计划 sidecar + durable_jobs request_json（未加列）；幂等键 account+date+slot；预算超限暂停；未开启运营不调度。
 
 ---
 
