@@ -15,7 +15,9 @@ from fastapi import APIRouter, HTTPException
 
 from pipeline import db, db_reads
 from pipeline.report import weekly as weekly_report
+from pipeline.today_queue import load_today
 from pipeline.webui import deps
+from pipeline.webui.api import projects as projects_api
 
 router = APIRouter(tags=["dashboard"])
 
@@ -65,3 +67,9 @@ def get_dashboard() -> dict[str, Any]:
         "gate_correlation": correlation,
         "config_error": err,
     }
+
+
+@router.get("/today")
+def get_today() -> dict[str, Any]:
+    with deps._db() as conn:
+        return load_today(conn, projects_root=projects_api._PROJECTS_ROOT).to_dict()
