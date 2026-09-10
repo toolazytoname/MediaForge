@@ -5,7 +5,7 @@ import { storeToRefs } from 'pinia'
 import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
 import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useCapabilitiesStore, useWorkspaceStore, useGalleriesStore, useSettingsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult, type DeliveryAttemptResult, type VariantAdaptationPreview, type GalleryDeliverable, type GallerySlide } from '../stores'
 import { llmForbiddenHint, policyLabel } from '../autonomy'
-import { unwrapError } from '../api/client'
+import { api, apiPost, unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
 import { renderMarkdown } from '../utils/markdown'
 
@@ -57,6 +57,10 @@ const galleryDraft = ref({ title: '', caption: '', tags: '' })
 const galleryForms = ref<Record<string, { title: string; caption: string; tags: string; cover_asset_id: string; slides: GallerySlide[] }>>({})
 const draftGenerating = ref(false)
 const draftProposal = ref<MasterDraftProposal | null>(null)
+const interviewForm = ref({ viewpoint: '', motive: '', experience: '', bookTitle: '' })
+const interviewConfirmed = ref(false)
+const interviewUnread = ref<string[]>([])
+const interviewSaving = ref(false)
 const importingSlot = ref<string | null>(null)
 const variantGenerating = ref<string | null>(null)
 const exporting = ref(false)
@@ -129,6 +133,7 @@ async function loadPage(): Promise<void> {
     project.value = await store.getDetail(projectId.value)
     await researchStore.load(projectId.value)
     await masterStore.load(projectId.value)
+    await loadInterview()
     await visualsStore.load(projectId.value)
     await variantsStore.load(projectId.value)
     await approvalsStore.load(projectId.value)
@@ -168,6 +173,44 @@ function goPrimaryCta(): void {
   else if (key === 'gallery') activeWorkbench.value = 'gallery'
   else activeWorkbench.value = 'approval'
 }
+async function loadInterview(): Promise<void> {
+  if (!projectId.value) return
+  const response = await api.get<{
+    viewpoint: string; motive: string; experience: string; confirmed: boolean; unread_books: string[]
+  }>(`/projects/${projectId.value}/interview`)
+  interviewForm.value = {
+    viewpoint: response.data.viewpoint || '',
+    motive: response.data.motive || '',
+    experience: response.data.experience || '',
+    bookTitle: '',
+  }
+  interviewConfirmed.value = Boolean(response.data.confirmed)
+  interviewUnread.value = response.data.unread_books || []
+}
+
+async function saveAndConfirmInterview(): Promise<void> {
+  if (!projectId.value) return
+  interviewSaving.value = true
+  detailError.value = null
+  try {
+    const sources = interviewForm.value.bookTitle.trim()
+      ? [{ kind: 'book', title: interviewForm.value.bookTitle.trim(), reference: `book:${interviewForm.value.bookTitle.trim()}`, excerpt: '' }]
+      : []
+    await api.put(`/projects/${projectId.value}/interview`, {
+      viewpoint: interviewForm.value.viewpoint,
+      motive: interviewForm.value.motive,
+      experience: interviewForm.value.experience,
+      sources,
+    })
+    await apiPost(`/projects/${projectId.value}/interview/confirm`)
+    await loadInterview()
+  } catch (e) {
+    detailError.value = unwrapError(e)
+  } finally {
+    interviewSaving.value = false
+  }
+}
+
 async function proposeDraft(): Promise<void> {
   if (!projectId.value) return
   if (!llmAllowed.value) { detailError.value = llmForbiddenHint(project.value?.autonomy); return }
@@ -512,9 +555,21 @@ watch(projectId, loadPage)
         <section v-show="activeWorkbench === 'master'" class="master-workbench">
           <header class="section-heading"><div><p class="eyebrow">主稿</p><h2>在这里写作，AI 只提出可审阅的修改。</h2><p>保存会创建新版本。AI 只有在你点击后才会生成建议，接受前不会改动正文。</p></div><a-tag v-if="master" color="blue">版本 {{ master.version }}</a-tag></header>
           <a-alert v-if="masterError" type="error" :message="masterError" show-icon class="notice" />
+          <a-card title="写稿前访谈" :bordered="false" class="draft-proposal">
+            <p class="muted">先写下观点、动机和真实经历。只有书名、没有摘录时，会标成未读原书，AI 不得假装读过。</p>
+            <a-form layout="vertical">
+              <a-form-item label="观点"><a-textarea v-model:value="interviewForm.viewpoint" :rows="2" /></a-form-item>
+              <a-form-item label="为什么现在写"><a-input v-model:value="interviewForm.motive" /></a-form-item>
+              <a-form-item label="你的经历（没有就写「暂无，待补」）"><a-textarea v-model:value="interviewForm.experience" :rows="2" /></a-form-item>
+              <a-form-item label="只知道书名时（可选）"><a-input v-model:value="interviewForm.bookTitle" placeholder="例如：深度工作" /></a-form-item>
+              <a-button type="primary" :loading="interviewSaving" @click="saveAndConfirmInterview">确认访谈</a-button>
+              <a-tag v-if="interviewConfirmed" color="green">已确认，可以起草</a-tag>
+              <p v-if="interviewUnread.length" class="muted">未读原书：{{ interviewUnread.join('、') }}</p>
+            </a-form>
+          </a-card>
           <div class="draft-actions">
-            <div><strong>从研究板生成第一稿</strong><p class="muted">AI 会区分已核查事实、个人判断和限制；结果先进入审阅区，不会自动覆盖主稿。</p></div>
-            <a-button type="primary" :loading="draftGenerating" :disabled="!researchReady || !llmAllowed" @click="proposeDraft">AI 提出主稿初稿</a-button>
+            <div><strong>从研究板生成第一稿</strong><p class="muted">AI 会区分已核查事实、个人判断和限制；结果先进入审阅区，不会自动覆盖主稿。未确认访谈时不能起草。</p></div>
+            <a-button type="primary" :loading="draftGenerating" :disabled="!researchReady || !llmAllowed || !interviewConfirmed" @click="proposeDraft">AI 提出主稿初稿</a-button>
           </div>
           <a-card v-if="draftProposal" title="待审阅的 AI 初稿" :bordered="false" class="draft-proposal"><h3>{{ draftProposal.title }}</h3><p class="proposal-copy">{{ draftProposal.body }}</p><div class="proposal-actions"><a-button type="primary" @click="useDraftProposal">放入编辑器继续修改</a-button><a-button @click="draftProposal = null">丢弃</a-button></div></a-card>
           <p class="master-count">当前编辑器 {{ masterForm.body.trim().length }} 字；进入审批前至少需要 800 字。</p>

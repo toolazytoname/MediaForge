@@ -10,6 +10,13 @@ from fastapi import APIRouter, Body, HTTPException
 from pipeline import master_documents as master_store
 from pipeline import research as research_store
 from pipeline.autonomy import AutonomyError, require_llm
+from pipeline.interviews import (
+    InterviewError,
+    confirm_interview,
+    load_interview,
+    require_confirmed_interview,
+    save_interview,
+)
 from pipeline.creators import llm
 from pipeline.webui import deps
 from pipeline.webui.api import projects as projects_api
@@ -88,9 +95,17 @@ def _parse_article(text: str) -> dict[str, str]:
     return {key: payload[key].strip() for key in ("title", "body")}
 
 
-def _draft_prompt(project_id: str) -> str:
-    project = projects_api.project_store.load_project(project_id, projects_root=_root())
-    board = research_store.load_research(project_id, projects_root=_root())
+def _draft_prompt(project_id: str, *, projects_root: Any | None = None) -> str:
+    root = projects_root if projects_root is not None else _root()
+    project = projects_api.project_store.load_project(project_id, projects_root=root)
+    board = research_store.load_research(project_id, projects_root=root)
+    interview = require_confirmed_interview(project_id, projects_root=root)
+    unread = "、".join(interview.unread_books) if interview.unread_books else "无"
+    interview_block = (
+        f"作者已确认访谈：\n观点：{interview.viewpoint}\n动机：{interview.motive}\n"
+        f"经历：{interview.experience}\n"
+        f"未读原书（不得假装读过，不得编造书中情节或作者没写过的经历）：{unread}\n"
+    )
     sources = "\n".join(
         f"[{item.id}] {item.title} | {item.reference} | {item.summary}"
         for item in board.sources
@@ -106,6 +121,7 @@ def _draft_prompt(project_id: str) -> str:
 发布目的：{project.goal}
 声音：{project.voice}
 自主程度：{project.autonomy}
+{interview_block}
 
 来源：
 {sources}
@@ -121,6 +137,49 @@ def _draft_prompt(project_id: str) -> str:
 5. 只返回严格 JSON：{{"title":"...","body":"..."}}，不要代码围栏或额外文字。"""
 
 
+def _interview_dict(interview: Any) -> dict[str, Any]:
+    from dataclasses import asdict
+    payload = asdict(interview)
+    payload["sources"] = [asdict(item) for item in interview.sources]
+    payload["unread_books"] = list(interview.unread_books)
+    return payload
+
+
+@router.get("/projects/{project_id}/interview")
+def get_interview(project_id: str) -> dict[str, Any]:
+    try:
+        return _interview_dict(load_interview(project_id, projects_root=_root()))
+    except InterviewError as error:
+        if "not confirmed" in str(error) or "interview not confirmed" in str(error):
+            return {"project_id": project_id, "confirmed": False, "viewpoint": "", "motive": "", "experience": "", "sources": [], "unread_books": []}
+        raise _error(400, "invalid_interview", error) from error
+
+
+@router.put("/projects/{project_id}/interview")
+def put_interview(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        interview = save_interview(
+            project_id,
+            viewpoint=str(body.get("viewpoint") or ""),
+            motive=str(body.get("motive") or ""),
+            experience=str(body.get("experience") or ""),
+            sources=body.get("sources") or (),
+            now=_now(),
+            projects_root=_root(),
+        )
+    except InterviewError as error:
+        raise _error(400, "invalid_interview", error) from error
+    return _interview_dict(interview)
+
+
+@router.post("/projects/{project_id}/interview/confirm")
+def post_interview_confirm(project_id: str) -> dict[str, Any]:
+    try:
+        return _interview_dict(confirm_interview(project_id, now=_now(), projects_root=_root()))
+    except InterviewError as error:
+        raise _error(409, "interview_required", error) from error
+
+
 @router.post("/projects/{project_id}/master/draft")
 def propose_draft(project_id: str) -> dict[str, str]:
     """Generate a review-only first draft; never persist or overwrite the master."""
@@ -129,6 +188,8 @@ def propose_draft(project_id: str) -> dict[str, str]:
         prompt = _draft_prompt(project_id)
     except AutonomyError as error:
         raise _error(error.http_status, error.code, error) from error
+    except InterviewError as error:
+        raise _error(409, "interview_required", error) from error
     except (master_store.MasterDocumentError, research_store.ResearchManifestError,
             projects_api.project_store.ProjectManifestError) as error:
         if str(error) == f"project not found: {project_id}":

@@ -87,6 +87,13 @@ def test_ai_draft_is_a_reviewable_proposal_and_does_not_write_master(
 ):
     root = tmp_path / "projects"
     _project(root)
+    from pipeline.interviews import confirm_interview, save_interview
+    save_interview(
+        "prj_master", viewpoint="工程绿不等于能用", motive="改验证顺序",
+        experience="我跑过全量测试", sources=(), now="2026-09-10T08:00:00+00:00",
+        projects_root=root,
+    )
+    confirm_interview("prj_master", now="2026-09-10T08:01:00+00:00", projects_root=root)
     monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
     seen = {}
     def fake_complete(prompt, **kwargs):
@@ -105,6 +112,16 @@ def test_ai_draft_is_a_reviewable_proposal_and_does_not_write_master(
     assert "[来源标题](URL)" in seen["prompt"]
     assert "不要为 local:" in seen["prompt"]
     assert client.get("/api/v1/projects/prj_master/master").json() == {"master": None}
+
+
+def test_ai_draft_requires_confirmed_interview(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    monkeypatch.setattr(master_api.llm, "complete_json", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not call llm")))
+    response = client.post("/api/v1/projects/prj_master/master/draft")
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "interview_required"
 
 
 import pytest
