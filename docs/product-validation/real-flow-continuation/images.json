@@ -1,0 +1,62 @@
+[
+  {
+    "slot": 0,
+    "status": 201,
+    "data": {
+      "id": "vas_0438ebae",
+      "slot_id": "vsl_cover_mtvjcl4y",
+      "prompt": "Visual style: 风格: 克制的编辑插画; 色彩: 暖白与墨蓝; 限制: 无文字、无logo\nSlot purpose: 封面\nDirection: 横幅封面：克制的编辑插画，一张写满草稿的纸和放大镜，左边快速书写的笔，右边正在核对来源的清晰勾选标记，暖白与墨蓝，少量橙色，无文字，无logo。表达起草之后还要核对。\nUser instruction: 横幅封面：克制的编辑插画，一张写满草稿的纸和放大镜，左边快速书写的笔，右边正在核对来源的清晰勾选标记，暖白与墨蓝，少量橙色，无文字，无logo。表达起草之后还要核对。",
+      "model": "gpt-image-2",
+      "size": "16:9",
+      "version": 1,
+      "reference_asset_id": null,
+      "cost_usd": 0.12,
+      "file_path": "assets/vas_0438ebae.png",
+      "status": "candidate",
+      "failure": null,
+      "selection_reason": null,
+      "user_rating": null,
+      "created_at": "2026-09-10T13:01:26.519941+00:00"
+    }
+  },
+  {
+    "slot": 1,
+    "status": 201,
+    "data": {
+      "id": "vas_3e776177",
+      "slot_id": "vsl_open_mtvjcl4y",
+      "prompt": "Visual style: 风格: 克制的编辑插画; 色彩: 暖白与墨蓝; 限制: 无文字、无logo\nSlot purpose: 正文插图一\nRelated passage: 问题\nDirection: 正文插图：左侧整齐绿色检查格，右侧一座仍有缺口的人行桥，桥上没有人，强调局部测试通过不等于完整流程可达。简洁编辑插画，暖白墨蓝，无文字。\nUser instruction: 正文插图：左侧整齐绿色检查格，右侧一座仍有缺口的人行桥，桥上没有人，强调局部测试通过不等于完整流程可达。简洁编辑插画，暖白墨蓝，无文字。",
+      "model": "gpt-image-2",
+      "size": "16:9",
+      "version": 1,
+      "reference_asset_id": null,
+      "cost_usd": 0.12,
+      "file_path": "assets/vas_3e776177.png",
+      "status": "candidate",
+      "failure": null,
+      "selection_reason": null,
+      "user_rating": null,
+      "created_at": "2026-09-10T13:03:37.587392+00:00"
+    }
+  },
+  {
+    "slot": 2,
+    "status": 201,
+    "data": {
+      "id": "vas_e563f745",
+      "slot_id": "vsl_thesis_mtvjcl4y",
+      "prompt": "Visual style: 风格: 克制的编辑插画; 色彩: 暖白与墨蓝; 限制: 无文字、无logo\nSlot purpose: 正文插图二\nRelated passage: 主张\nDirection: 正文插图：桌面上三张不同形状的资料卡，一张带引用符号，一张带灯泡，一张带问号，分别表达事实、判断、待确认，放大镜位于资料卡旁。简洁编辑插画，暖白墨蓝，无文字。\nUser instruction: 正文插图：桌面上三张不同形状的资料卡，一张带引用符号，一张带灯泡，一张带问号，分别表达事实、判断、待确认，放大镜位于资料卡旁。简洁编辑插画，暖白墨蓝，无文字。",
+      "model": "gpt-image-2",
+      "size": "16:9",
+      "version": 1,
+      "reference_asset_id": null,
+      "cost_usd": 0.12,
+      "file_path": "assets/vas_e563f745.png",
+      "status": "candidate",
+      "failure": null,
+      "selection_reason": null,
+      "user_rating": null,
+      "created_at": "2026-09-10T13:04:18.604110+00:00"
+    }
+  }
+]
