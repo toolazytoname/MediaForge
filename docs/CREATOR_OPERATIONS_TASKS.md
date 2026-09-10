@@ -166,11 +166,13 @@
 
 ## DEL-03 头条真实草稿与公开发布
 
-- [ ] **目标**：项目交付接通头条保存草稿及公开发布；会话隔离；登录恢复；回执核对。导出不算发送成功。
+- [x] **目标**：项目交付接通头条保存草稿及公开发布；会话隔离；登录恢复；回执核对。导出不算发送成功。
 - **步骤**：把现有 toutiao publisher 接到 project delivery；每账号独立 cookie/profile；login_expired 停止并进待办。
 - **测试**：无 cookie 不宣称成功；账号 A 的 storage 不读账号 B；回执字段进入 attempt。
 - **声明改动文件**：`pipeline/publishers/toutiao.py`、delivery、login、测试、本文件。
 - **红线**：同 DEL-02；登录失效不反复撞。
+
+  ✅ 完成于 2026-09-10。create_draft/direct 接通头条；cookie 按账号隔离；缺 cookie/登录过期不记发送成功且同 key 不重试；export 仍无 platform_post_id。未对真实头条账号做公开发布实测。
 
 ---
 

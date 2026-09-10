@@ -147,14 +147,19 @@ _REGISTRY: dict[str, Capability] = {
         platform="toutiao",
         label="今日头条",
         formats=(KIND_ARTICLE,),
-        delivery=_flags(draft=False, direct=False),
+        delivery=_flags(draft=True, direct=True),
         auth=AuthSpec("cookie", (), False, "secrets/cookies/toutiao_<account>.json"),
         review=ReviewSpec(False, True, "private"),
         limits=CapabilityLimits(title_max=30, body_min=600),
         receipts=ReceiptSpec(("platform_post_id",), True),
-        ui=UiSpec("html_article", "仅本地安全导出，供人工导入头条。不会直发。", ("title", "body")),
+        ui=UiSpec(
+            "html_article",
+            "按绑定账号保存头条草稿或公开发布。每账号独立 cookie；登录过期立即停止。"
+            "无 cookie/回执不得记成功。本地导出不是发送成功。",
+            ("title", "body"),
+        ),
         official_api=False,
-        lane=LANE_EXPORT,
+        lane=LANE_ASSISTED,
         adapter="toutiao",
     ),
     "xiaohongshu": Capability(

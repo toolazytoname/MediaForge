@@ -254,10 +254,10 @@ def create_draft(
     assert snapshot is not None
     deliverable = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
     platform = _single_platform(deliverable)
-    if deliverable.kind != KIND_ARTICLE or platform != "wechat_mp":
-        raise DeliveryError("draft is only implemented for wechat_mp articles", code="mode_not_allowed")
+    if deliverable.kind != KIND_ARTICLE or platform not in {"wechat_mp", "toutiao"}:
+        raise DeliveryError("draft is only implemented for wechat_mp/toutiao articles", code="mode_not_allowed")
     if not mode_allowed(platform, "draft", adapter):
-        raise DeliveryError("wechat draft is not available", code="mode_not_allowed")
+        raise DeliveryError(f"{platform} draft is not available", code="mode_not_allowed")
     try:
         assert_account_may_deliver(
             project_id, platform=platform, account_id=account.id, mode="draft",
@@ -336,8 +336,9 @@ def create_draft(
         account.id, str(materialized.materialize_dir), now,
     ))
 
+    wrapped = _DraftMode(adapter) if platform == "toutiao" else _RequireMediaId(adapter)
     result = safe_publish(
-        conn, publication, _RequireMediaId(adapter), config=publish_config, account=account,
+        conn, publication, wrapped, config=publish_config, account=account,
         dry_run=False, now_iso=now,
     )
     refreshed = db.get_publication(conn, publication.id)
@@ -852,7 +853,7 @@ def _draft_outcome(
 
 
 class _RequireMediaId:
-    """Adapter wrapper: a wechat draft without media_id must fail, not publish."""
+    """Adapter wrapper: a draft without platform_post_id must fail, not publish."""
 
     def __init__(self, inner: PublisherAdapter):
         self._inner = inner
@@ -867,8 +868,25 @@ class _RequireMediaId:
     def publish(self, bundle, account, dry_run=False) -> PublishResult:
         result = self._inner.publish(bundle, account, dry_run)
         if not dry_run and not result.platform_post_id:
-            raise PublishError("wechat draft succeeded without media_id")
+            raise PublishError(f"{self.platform} draft succeeded without media_id")
         return result
+
+
+class _DraftMode(_RequireMediaId):
+    """Force extra.delivery_mode=draft for Playwright adapters that share publish()."""
+
+    def publish(self, bundle, account, dry_run=False) -> PublishResult:
+        extra = dict(bundle.extra or {})
+        extra["delivery_mode"] = "draft"
+        drafted = PostBundle(
+            content_id=bundle.content_id,
+            title=bundle.title,
+            body_path=bundle.body_path,
+            media_paths=bundle.media_paths,
+            tags=bundle.tags,
+            extra=extra,
+        )
+        return super().publish(drafted, account, dry_run)
 
 
 def _single_platform(deliverable: Deliverable) -> str:

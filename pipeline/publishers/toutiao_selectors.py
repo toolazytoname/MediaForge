@@ -75,12 +75,28 @@ SUBMIT_BUTTON: tuple[str, ...] = (
     ".submit-publish button",
 )
 
+# 保存草稿（不会公开可见）
+DRAFT_BUTTON: tuple[str, ...] = (
+    "button:has-text('保存草稿')",
+    "button:has-text('存草稿')",
+    "button:has-text('保存')",
+    "button.draft-btn",
+)
+
 # 发布成功标志 URL 模式（成功后会跳到发布管理页）
 SUCCESS_URL_PATTERN: tuple[str, ...] = (
     "/publish/success",
     "/content/manage",
     "/article/manage",
     "/publish/article",
+)
+
+DRAFT_SUCCESS_URL_PATTERN: tuple[str, ...] = (
+    "/publish/draft",
+    "/content/draft",
+    "/article/draft",
+    "/content/manage",
+    "/article/manage",
 )
 
 
@@ -102,6 +118,8 @@ __all__ = [
     "BODY_SELECTORS",
     "COVER_MODE_RADIO",
     "SUBMIT_BUTTON",
+    "DRAFT_BUTTON",
     "SUCCESS_URL_PATTERN",
+    "DRAFT_SUCCESS_URL_PATTERN",
     "IMAGE_FILE_INPUT",
 ]

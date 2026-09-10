@@ -64,6 +64,7 @@ def materialize_wechat_article(
         json.dumps({"title": deliverable.title, "digest": digest}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    (dest / "toutiao.md").write_text(f"# {deliverable.title}\n\n{payload.body.strip()}\n", encoding="utf-8")
     (dest / "canonical.md").write_text(f"# {master.title}\n\n{master.body}\n", encoding="utf-8")
     return MaterializedArticle(assigned_id, dest / "canonical.md", dest, deliverable.title, digest)
 

@@ -85,6 +85,12 @@ def capabilities_for_platform(
             direct=True,
             detail="WeChat MP draft/add plus gated freepublish/submit; unknown receipts must not auto-retry",
         )
+    if platform == "toutiao":
+        return default_capabilities(
+            draft=True,
+            direct=True,
+            detail="Toutiao Playwright draft/direct; missing cookies must not claim success",
+        )
     if platform == "x":
         direct = bool(x_has_user_context)
         detail = (

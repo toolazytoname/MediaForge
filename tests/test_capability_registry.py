@@ -28,9 +28,9 @@ def test_registry_covers_five_adapters_and_wechat_hides_direct():
     assert wechat.delivery.direct is True
     assert wechat.delivery.draft is True
     toutiao = get_capability("toutiao")
-    assert toutiao.delivery.direct is False
+    assert toutiao.delivery.direct is True
     assert toutiao.delivery.export is True
-    assert toutiao.delivery.draft is False
+    assert toutiao.delivery.draft is True
     xhs = get_capability("xiaohongshu")
     assert xhs.delivery.direct is False
     assert xhs.delivery.draft is False
@@ -60,7 +60,7 @@ def test_registry_covers_five_adapters_and_wechat_hides_direct():
     assert "tiktok" in platforms_for(kind="video")
     assert wechat.official_api is True
     assert toutiao.official_api is False
-    assert toutiao.lane == "export"
+    assert toutiao.lane == "assisted"
     assert xhs.official_api is False
     assert xhs.lane == "assisted"
 

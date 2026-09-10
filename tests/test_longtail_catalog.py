@@ -48,8 +48,9 @@ def test_assisted_and_export_lanes_stay_honest() -> None:
         )
     toutiao = get_capability("toutiao")
     assert toutiao.official_api is False
-    assert toutiao.lane == "export"
-    assert toutiao.delivery.direct is False
+    assert toutiao.lane == "assisted"
+    assert toutiao.delivery.direct is True
+    assert toutiao.delivery.draft is True
     assert toutiao.receipts.unknown_is_failure is True
 
 

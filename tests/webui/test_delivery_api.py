@@ -21,7 +21,8 @@ def test_capabilities_hide_wechat_direct_and_unapproved_draft_is_409(tmp_path, m
     toutiao = next(item for item in caps.json()["items"] if item["platform"] == "toutiao")
     assert wechat["delivery"]["direct"] is True
     assert wechat["delivery"]["draft"] is True
-    assert toutiao["delivery"]["direct"] is False
+    assert toutiao["delivery"]["direct"] is True
+    assert toutiao["delivery"]["draft"] is True
     assert toutiao["delivery"]["export"] is True
     denied = client.post(
         "/api/v1/projects/prj_delivery_api/deliverables/dlv_article_wechat_mp/draft",

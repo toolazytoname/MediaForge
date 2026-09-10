@@ -122,6 +122,14 @@ class ToutiaoPublisher(PublisherAdapter):
 
     platform = PLATFORM
 
+    def capabilities(self):
+        from pipeline.publishers.capabilities import default_capabilities
+        return default_capabilities(
+            draft=True,
+            direct=True,
+            detail="Toutiao Playwright draft/direct; missing cookies and unknown receipts must not claim success",
+        )
+
     def __init__(
         self,
         *,
@@ -208,6 +216,9 @@ class ToutiaoPublisher(PublisherAdapter):
     ) -> PublishResult:
         body_path = _resolve_toutiao_body(bundle)
 
+        extra = dict(bundle.extra or {})
+        delivery_mode = extra.get("delivery_mode") or "direct"
+
         # dry-run：不调浏览器，返回模拟结果
         if dry_run:
             return PublishResult(
@@ -219,13 +230,21 @@ class ToutiaoPublisher(PublisherAdapter):
                     "account": account.id,
                     "title": bundle.title,
                     "body_chars": len(body_path.read_text(encoding="utf-8")),
+                    "delivery_mode": delivery_mode,
+                    "cookies_path": str(self._cookies),
                 }, ensure_ascii=False),
+            )
+
+        if not self._cookies.exists():
+            raise PublishError(
+                f"cookies file missing: {self._cookies} "
+                "(run `python -m pipeline.run login toutiao <account>`)"
             )
 
         # cookie 健康检测先行（HARD_PARTS §2 决策 2）
         self._ensure_cookie_health(account)
 
-        # 真实发布（走注入的 publish_fn）
+        # 真实发布（走注入的 publish_fn）；cookies_path 始终是本账号自己的文件
         result = self._publish_fn(
             cookies_path=self._cookies,
             body_path=body_path,
@@ -234,7 +253,10 @@ class ToutiaoPublisher(PublisherAdapter):
             screenshot_dir=self._screenshots,
             selectors=sel,
             account_id=account.id,
+            delivery_mode=delivery_mode,
         )
+        if not result.platform_post_id and not result.url:
+            raise PublishError("toutiao returned no platform_post_id or url; unknown is failure")
         return result
 
     # ── 私有：cookie 健康检测 ──
@@ -345,6 +367,7 @@ def _real_publish_fn(
     screenshot_dir: Path,
     selectors,
     account_id: str,
+    delivery_mode: str = "direct",
 ) -> PublishResult:
     """Playwright 真实发布头条（HARD_PARTS §2 全部要点）。
 
@@ -461,38 +484,50 @@ def _real_publish_fn(
                     except Exception:
                         continue
 
-            # 5. 点发布
-            submit_locator = _find_visible_locator(page, selectors.SUBMIT_BUTTON)
+            # 5. 点保存草稿或发布
+            buttons = selectors.DRAFT_BUTTON if delivery_mode == "draft" else selectors.SUBMIT_BUTTON
+            submit_locator = _find_visible_locator(page, buttons)
             if submit_locator is None:
                 raise PublishError(
-                    "toutiao submit button not found "
-                    f"(selectors={selectors.SUBMIT_BUTTON})"
+                    f"toutiao {delivery_mode} button not found "
+                    f"(selectors={buttons})"
                 )
             submit_locator.click()
             _shot_local(page, "04_submit_clicked")
 
             # 6. 等成功 URL（最多 60s）
+            patterns = (
+                selectors.DRAFT_SUCCESS_URL_PATTERN
+                if delivery_mode == "draft"
+                else selectors.SUCCESS_URL_PATTERN
+            )
             try:
                 page.wait_for_url(
-                    re.compile("|".join(selectors.SUCCESS_URL_PATTERN)),
+                    re.compile("|".join(patterns)),
                     timeout=60000,
                 )
             except PWTimeout as e:
                 raise PublishError(
-                    f"toutiao publish timeout waiting for success URL: {e}"
+                    f"toutiao {delivery_mode} timeout waiting for success URL: {e}"
                 ) from e
             _shot_local(page, "05_success")
 
             final_url = page.url
             # post_id 从 URL 末段提取（mp 平台惯例是 query 参数 ?mid=... 或 path segment）
             post_id = _extract_post_id(final_url)
+            if not post_id:
+                raise PublishError(
+                    f"toutiao {delivery_mode} succeeded without platform_post_id at {final_url}"
+                )
 
             return PublishResult(
                 platform_post_id=post_id,
-                url=final_url,
+                url=None if delivery_mode == "draft" else final_url,
                 raw_response=json.dumps({
                     "platform": PLATFORM,
                     "account": account_id,
+                    "cookies_path": str(cookies_path),
+                    "delivery_mode": delivery_mode,
                     "final_url": final_url,
                     "post_id": post_id,
                     "image_upload": image_upload_result,
