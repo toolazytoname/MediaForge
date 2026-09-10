@@ -10,6 +10,16 @@ interface TodayItem {
   detail: string
   href: string
   project_id: string | null
+  actions?: string[]
+  ref_id?: string | null
+}
+
+const actionLabel: Record<string, string> = {
+  supplement: '补资料',
+  edit: '编辑',
+  retry: '重试',
+  skip: '跳过',
+  verify: '核对结果',
 }
 
 const router = useRouter()
@@ -19,7 +29,7 @@ const nextPlans = ref<TodayItem[]>([])
 const loading = ref(false)
 const error = ref('')
 
-onMounted(async () => {
+async function refresh() {
   loading.value = true
   try {
     const response = await api.get<{ todos: TodayItem[]; exceptions: TodayItem[]; next_plans: TodayItem[] }>('/today')
@@ -31,7 +41,24 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
+}
+
+async function runAction(item: TodayItem, action: string, event: Event) {
+  event.stopPropagation()
+  if (action === 'edit' || action === 'supplement' || action === 'retry') {
+    router.push(item.href)
+    return
+  }
+  if (!item.ref_id) return
+  try {
+    await api.post(`/today/items/${encodeURIComponent(item.ref_id)}/resolve`, { action })
+    await refresh()
+  } catch (err) {
+    error.value = unwrapError(err)
+  }
+}
+
+onMounted(refresh)
 </script>
 
 <template>
@@ -43,11 +70,22 @@ onMounted(async () => {
     <a-alert v-if="error" type="error" :message="error" show-icon class="notice" />
     <a-card v-if="exceptions.length" :bordered="false" class="block">
       <p class="eyebrow">异常</p>
-      <button v-for="item in exceptions" :key="item.title + item.href" class="row" type="button" @click="router.push(item.href)">
-        <WarningOutlined />
-        <div><h2>{{ item.title }}</h2><p>{{ item.detail }}</p></div>
-        <ArrowRightOutlined />
-      </button>
+      <div v-for="item in exceptions" :key="(item.ref_id || item.title) + item.href" class="exception">
+        <button class="row" type="button" @click="router.push(item.href)">
+          <WarningOutlined />
+          <div><h2>{{ item.title }}</h2><p>{{ item.detail }}</p></div>
+          <ArrowRightOutlined />
+        </button>
+        <div v-if="item.actions?.length" class="actions">
+          <a-button
+            v-for="action in item.actions"
+            :key="action"
+            size="small"
+            :data-testid="`today-action-${action}`"
+            @click="runAction(item, action, $event)"
+          >{{ actionLabel[action] || action }}</a-button>
+        </div>
+      </div>
     </a-card>
     <a-card :bordered="false" class="block">
       <p class="eyebrow">待办</p>
@@ -82,4 +120,6 @@ h1 { font-family: Georgia, 'Songti SC', serif; font-size: clamp(28px, 4vw, 40px)
 h2 { margin: 0; font-size: 18px; }
 .row p, .muted, .empty p { color: #706b65; }
 .empty { padding: 12px 0 8px; }
+.exception { border-top: 1px solid #efe8dc; padding-top: 8px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 0 10px 28px; }
 </style>

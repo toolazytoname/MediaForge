@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
 from pipeline import db, db_reads
 from pipeline.report import weekly as weekly_report
-from pipeline.today_queue import load_today
+from pipeline.today_queue import load_today, resolve_today_item
 from pipeline.webui import deps
 from pipeline.webui.api import projects as projects_api
 
@@ -73,3 +73,21 @@ def get_dashboard() -> dict[str, Any]:
 def get_today() -> dict[str, Any]:
     with deps._db() as conn:
         return load_today(conn, projects_root=projects_api._PROJECTS_ROOT).to_dict()
+
+
+@router.post("/today/items/{ref_id}/resolve")
+def post_today_resolve(ref_id: str, body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    payload = body or {}
+    action = str(payload.get("action") or "")
+    if action not in {"skip", "verify", "retry"}:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": "invalid_today_action", "message": "action must be skip, verify, or retry",
+        }})
+    from datetime import datetime, timezone
+    with deps._db() as conn:
+        resolved = resolve_today_item(
+            conn, ref_id=ref_id, action=action,
+            now=datetime.now(timezone.utc).isoformat(),
+            projects_root=projects_api._PROJECTS_ROOT,
+        )
+    return {"ref_id": resolved.ref_id, "action": resolved.action, "at": resolved.at}

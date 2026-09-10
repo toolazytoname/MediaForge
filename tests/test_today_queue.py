@@ -38,7 +38,7 @@ def test_failed_delivery_becomes_exception(tmp_path):
     )
     snap = load_today(conn, projects_root=tmp_path / "projects")
     assert any(item.kind == "continue_project" for item in snap.todos)
-    assert any(item.kind == "delivery_failure" and "login expired" in item.detail for item in snap.exceptions)
+    assert any(item.kind == "login_expired" and "login expired" in item.detail for item in snap.exceptions)
 
 
 def test_today_api_returns_queue(tmp_path, monkeypatch):
