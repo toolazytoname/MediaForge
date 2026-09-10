@@ -97,11 +97,30 @@ def test_unapproved_export_draft_direct_are_409_for_every_strategy(tmp_path):
 
 
 def test_pack_prepare_stops_at_ready_for_approval_and_never_calls_live_publish(tmp_path, monkeypatch):
+    from pipeline.interviews import confirm_interview, save_interview
+    from pipeline import research as research_store
     root = tmp_path / "projects"
     _project(root, autonomy="pack", project_id="prj_pack")
+    save_interview(
+        "prj_pack", viewpoint="边界比速度重要", motive="写给同行",
+        experience="改过一次排期", sources=[{
+            "kind": "url", "title": "来源", "reference": "https://example.com/x", "excerpt": "摘",
+        }], now="2026-08-09T00:01:00+00:00", projects_root=root,
+    )
+    confirm_interview("prj_pack", now="2026-08-09T00:01:30+00:00", projects_root=root)
+    research_store.add_source(
+        "prj_pack", title="来源", reference="https://example.com/x",
+        summary="已核实公开事实", now="2026-08-09T00:01:40+00:00", projects_root=root,
+    )
     spy = MagicMock(wraps=delivery_service.safe_publish)
     monkeypatch.setattr(delivery_service, "safe_publish", spy)
-    result = prepare_pack("prj_pack", now="2026-08-09T00:02:00+00:00", projects_root=root)
+
+    def draft_fn(project, interview, board, critique=None):
+        return "有依据的主稿", (interview.viewpoint + "\n\n已核实公开事实。这段话足够支撑质量门禁的字数要求。\n\n") * 30
+
+    result = prepare_pack(
+        "prj_pack", now="2026-08-09T00:02:00+00:00", projects_root=root, draft_fn=draft_fn,
+    )
     assert result.terminal_status in {"drafting", "ready_for_approval"}
     assert all(status in {"drafting", "ready_for_approval"} for status in result.deliverable_statuses)
     assert result.created_master is True

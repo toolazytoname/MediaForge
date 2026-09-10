@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from pipeline import deliverables, master_documents, projects as project_store, variants
+from pipeline import deliverables, master_documents, projects as project_store
+from pipeline.auto_create import AutoCreateResult, run_auto_create
 from pipeline.autonomy import AutonomyError, get_policy, highest_status, load_policy
 
 
@@ -24,6 +25,7 @@ class PackPrepareResult:
     terminal_status: str
     created_master: bool
     created_platforms: tuple[str, ...]
+    revision_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -37,6 +39,9 @@ def prepare_pack(
     *,
     now: str,
     projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+    draft_fn: Callable[..., tuple[str, str]] | None = None,
+    score_fn: Callable[[str, str], tuple[str, float]] | None = None,
+    visual_fn: Callable[[str], None] | None = None,
 ) -> PackPrepareResult:
     """Fill Master + unlocked article candidates. Stop before approval/delivery."""
     project, policy = load_policy(project_id, projects_root=projects_root)
@@ -47,29 +52,19 @@ def prepare_pack(
             http_status=400,
         )
     created_master = False
+    created_platforms: tuple[str, ...] = ()
+    revision_count = 0
     master = master_documents.load_master(project_id, projects_root=projects_root)
     if master is None:
-        master = master_documents.save_manual(
-            project_id,
-            title=project.title,
-            body=_candidate_body(project),
-            now=now,
-            projects_root=projects_root,
+        created: AutoCreateResult = run_auto_create(
+            project_id, now=now, projects_root=projects_root,
+            draft_fn=draft_fn, score_fn=score_fn, visual_fn=visual_fn,
         )
-        created_master = True
-
-    existing = {
-        item.platform
-        for item in variants.load_variants(project_id, projects_root=projects_root).variants
-    }
-    created_platforms: list[str] = []
-    for platform in ("wechat_mp", "toutiao"):
-        if platform in existing:
-            continue
-        variants.create_from_master(
-            project_id, platform, now=now, projects_root=projects_root,
-        )
-        created_platforms.append(platform)
+        master = master_documents.load_master(project_id, projects_root=projects_root)
+        created_master = created.created_master
+        created_platforms = created.created_platforms
+        revision_count = created.revision_count
+    assert master is not None
 
     items = deliverables.load_deliverables(project_id, projects_root=projects_root).items
     statuses = tuple(item.status for item in items) or ("drafting",)
@@ -90,21 +85,9 @@ def prepare_pack(
         deliverable_statuses=statuses,
         terminal_status=terminal,
         created_master=created_master,
-        created_platforms=tuple(created_platforms),
+        created_platforms=created_platforms,
+        revision_count=revision_count,
     )
-
-
-def _candidate_body(project: project_store.Project) -> str:
-    seed = project.idea.strip() or project.title.strip()
-    block = (
-        f"{seed}\n\n"
-        "这是自动内容包生成的主稿候选，尚未审批，也不是平台草稿或直发。\n"
-        "作者需要核对事实边界、锁定平台版本，并亲自完成审批。"
-    )
-    parts = [block]
-    while sum(len(part) for part in parts) < 800:
-        parts.append(block)
-    return "\n\n".join(parts)
 
 
 # Imported by tests that assert the policy table stays aligned.
