@@ -47,6 +47,9 @@ class QualityResult:
     verdict: str
     human_verified: bool
     recorded_at: str
+    content_fingerprint: str = ""
+    master_version: int = 0
+    authorization_version: int = 0
 
 
 def save_authorization(
@@ -127,6 +130,9 @@ def load_quality_results(
             verdict=str(item.get("verdict") or ""),
             human_verified=bool(item.get("human_verified")),
             recorded_at=str(item.get("recorded_at") or ""),
+            content_fingerprint=str(item.get("content_fingerprint") or ""),
+            master_version=int(item.get("master_version") or 0),
+            authorization_version=int(item.get("authorization_version") or 0),
         ))
     return tuple(items)
 
@@ -139,6 +145,9 @@ def record_quality_result(
     verdict: str,
     now: str,
     accounts_root: str | Path = DEFAULT_ACCOUNTS_ROOT,
+    content_fingerprint: str = "",
+    master_version: int = 0,
+    authorization_version: int = 0,
 ) -> QualityResult:
     result = QualityResult(
         project_id=project_id,
@@ -146,6 +155,9 @@ def record_quality_result(
         verdict=verdict,
         human_verified=False,
         recorded_at=_timestamp(now),
+        content_fingerprint=str(content_fingerprint or ""),
+        master_version=int(master_version or 0),
+        authorization_version=int(authorization_version or 0),
     )
     path = Path(accounts_root) / account_id / _QUALITY_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -170,6 +182,7 @@ def assert_account_may_deliver(
     path: Literal["human", "auto"],
     projects_root: str | Path = DEFAULT_PROJECTS_ROOT,
     accounts_root: str | Path = DEFAULT_ACCOUNTS_ROOT,
+    content_fingerprint: str | None = None,
 ) -> None:
     _project, policy = load_policy(project_id, projects_root=projects_root)
     if mode == "direct" and "direct" not in policy.delivery_modes:
@@ -206,8 +219,6 @@ def assert_account_may_deliver(
         raise AuthorizationError(
             f"operations disabled for {account_id}", code="operations_disabled",
         )
-    if auth.version < 1:
-        raise AuthorizationError("authorization version is invalid", code="auth_version_invalid")
     if mode == "draft" and not auth.allow_draft:
         raise AuthorizationError("account is not authorized for draft", code="draft_not_allowed")
     if mode == "direct" and not auth.allow_direct:
@@ -219,11 +230,32 @@ def assert_account_may_deliver(
     if not results:
         raise AuthorizationError("no quality result for automatic delivery", code="quality_missing")
     latest = results[-1]
+    if latest.verdict != "pass":
+        raise AuthorizationError("quality verdict is not pass", code="quality_failed")
     if latest.score < auth.quality_floor:
         raise AuthorizationError(
             f"quality {latest.score} below floor {auth.quality_floor}",
             code="quality_below_floor",
         )
+    expected_fp = content_fingerprint if content_fingerprint is not None else quality_fingerprint(
+        project_id, projects_root=projects_root,
+    )
+    if not latest.content_fingerprint or not expected_fp or latest.content_fingerprint != expected_fp:
+        raise AuthorizationError("quality result does not match current content", code="quality_stale")
+    if latest.authorization_version != auth.version:
+        raise AuthorizationError("quality result is not for the current authorization", code="auth_version_mismatch")
+
+
+def quality_fingerprint(
+    project_id: str, *, projects_root: str | Path = DEFAULT_PROJECTS_ROOT,
+) -> str:
+    import hashlib
+    from pipeline.master_documents import load_master
+    master = load_master(project_id, projects_root=projects_root)
+    if master is None:
+        return ""
+    payload = f"{master.version}\n{master.title}\n{master.body}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _auth_path(root: str | Path, account_id: str) -> Path:
@@ -251,6 +283,7 @@ __all__ = [
     "assert_account_may_deliver",
     "load_authorization",
     "load_quality_results",
+    "quality_fingerprint",
     "record_quality_result",
     "save_authorization",
 ]

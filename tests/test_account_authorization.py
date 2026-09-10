@@ -5,11 +5,14 @@ import pytest
 from pipeline.account_authorization import (
     AuthorizationError,
     assert_account_may_deliver,
+    load_authorization,
+    quality_fingerprint,
     record_quality_result,
     save_authorization,
 )
 from pipeline.account_bindings import bind_project_account
 from pipeline.account_profiles import create_profile
+from pipeline.master_documents import load_master, save_manual
 from pipeline.projects import create_project
 
 
@@ -36,7 +39,23 @@ def _setup(tmp_path, *, autonomy="collaborate"):
         project.id, platform="wechat_mp", account_id=profile.id, now=NOW,
         projects_root=projects, accounts_root=accounts,
     )
+    save_manual(
+        project.id, title="主题", body="正文足够支撑质量指纹。" * 20,
+        now=NOW, projects_root=projects,
+    )
     return project, profile, projects, accounts
+
+
+def _record_quality(profile, project, projects, accounts, *, score=8.0, verdict="pass"):
+    auth = load_authorization(profile.id, accounts_root=accounts)
+    master = load_master(project.id, projects_root=projects)
+    return record_quality_result(
+        profile.id, project_id=project.id, score=score, verdict=verdict,
+        now=NOW, accounts_root=accounts,
+        content_fingerprint=quality_fingerprint(project.id, projects_root=projects),
+        master_version=0 if master is None else master.version,
+        authorization_version=auth.version,
+    )
 
 
 def test_pack_autonomy_cannot_authorize_direct(tmp_path):
@@ -96,10 +115,61 @@ def test_auto_delivery_requires_quality_floor(tmp_path):
             project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
             path="auto", projects_root=projects, accounts_root=accounts,
         )
+    _record_quality(profile, project, projects, accounts, score=8.0, verdict="pass")
+    assert_account_may_deliver(
+        project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
+        path="auto", projects_root=projects, accounts_root=accounts,
+    )
+
+
+def test_fail_verdict_blocks_auto_delivery_even_with_high_score(tmp_path):
+    project, profile, projects, accounts = _setup(tmp_path)
+    save_authorization(
+        profile.id, actor="lazy", now=NOW, accounts_root=accounts,
+        operations_enabled=True, allow_draft=True, allow_direct=True,
+        quality_floor=6.0,
+    )
+    _record_quality(profile, project, projects, accounts, score=8.0, verdict="fail")
+    with pytest.raises(AuthorizationError, match="verdict"):
+        assert_account_may_deliver(
+            project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
+            path="auto", projects_root=projects, accounts_root=accounts,
+        )
+
+
+def test_quality_result_must_match_current_content_and_auth_version(tmp_path):
+    project, profile, projects, accounts = _setup(tmp_path)
+    save_authorization(
+        profile.id, actor="lazy", now=NOW, accounts_root=accounts,
+        operations_enabled=True, allow_draft=True, allow_direct=True,
+        quality_floor=6.0,
+    )
     record_quality_result(
         profile.id, project_id=project.id, score=8.0, verdict="pass",
-        now=NOW, accounts_root=accounts,
+        now=NOW, accounts_root=accounts, content_fingerprint="old-fp",
+        master_version=1, authorization_version=1,
     )
+    with pytest.raises(AuthorizationError, match="content"):
+        assert_account_may_deliver(
+            project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
+            path="auto", projects_root=projects, accounts_root=accounts,
+        )
+    current = quality_fingerprint(project.id, projects_root=projects)
+    record_quality_result(
+        profile.id, project_id=project.id, score=8.0, verdict="pass",
+        now=NOW, accounts_root=accounts, content_fingerprint=current,
+        master_version=1, authorization_version=0,
+    )
+    with pytest.raises(AuthorizationError, match="authorization"):
+        assert_account_may_deliver(
+            project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
+            path="auto", projects_root=projects, accounts_root=accounts,
+        )
+    save_manual(
+        project.id, title="改过的主题", body="改过的正文足够支撑新指纹。" * 20,
+        now="2026-09-10T11:00:00+00:00", projects_root=projects,
+    )
+    _record_quality(profile, project, projects, accounts, score=8.0, verdict="pass")
     assert_account_may_deliver(
         project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
         path="auto", projects_root=projects, accounts_root=accounts,

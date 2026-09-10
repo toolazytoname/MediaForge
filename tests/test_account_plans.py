@@ -44,6 +44,7 @@ def test_restart_does_not_insert_second_job_for_same_slot(tmp_path):
     db.init_db(conn)
     first = schedule_account(conn, profile.id, now=NOW, accounts_root=accounts)
     assert len(first.jobs) >= 1
+    assert all(job.request().get("scheduled_at") for job in first.jobs)
     keys = {job.idempotency_key for job in first.jobs}
     second = schedule_account(conn, profile.id, now=NOW, accounts_root=accounts)
     assert {job.idempotency_key for job in second.jobs} == keys

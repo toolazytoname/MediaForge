@@ -127,6 +127,7 @@ def schedule_account(
                 "account_id": account_id,
                 "slot": slot.slot,
                 "local_date": slot.local_date,
+                "scheduled_at": slot.scheduled_at,
                 "stage": "research",
             },
             engine="ops",

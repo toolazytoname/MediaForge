@@ -466,21 +466,43 @@ async function loadAccountBinding(): Promise<void> {
   if (!projectId.value) return
   const profiles = await api.get<{ items: { id: string; display_name: string; platform: string }[] }>('/account-profiles')
   wechatAccounts.value = (profiles.data.items || []).filter(item => item.platform === 'wechat_mp')
+  let saved = ''
   try {
     const bindings = await api.get<{ items: { platform: string; account_id: string }[] }>(`/projects/${projectId.value}/account-binding`)
-    const wechat = (bindings.data.items || []).find(item => item.platform === 'wechat_mp')
-    boundWechatId.value = wechat?.account_id || wechatAccounts.value[0]?.id || ''
+    saved = (bindings.data.items || []).find(item => item.platform === 'wechat_mp')?.account_id || ''
   } catch {
-    boundWechatId.value = wechatAccounts.value[0]?.id || ''
+    saved = ''
+  }
+  if (saved) {
+    boundWechatId.value = saved
+    return
+  }
+  const fallback = wechatAccounts.value[0]?.id || ''
+  if (!fallback) {
+    boundWechatId.value = ''
+    return
+  }
+  try {
+    await bindWechatAccount(fallback)
+  } catch (e) {
+    boundWechatId.value = ''
+    detailError.value = unwrapError(e)
   }
 }
 
 async function bindWechatAccount(accountId: string): Promise<void> {
   if (!projectId.value || !accountId) return
+  const previous = boundWechatId.value
   boundWechatId.value = accountId
-  await api.put(`/projects/${projectId.value}/account-binding`, {
-    platform: 'wechat_mp', account_id: accountId,
-  })
+  try {
+    await api.put(`/projects/${projectId.value}/account-binding`, {
+      platform: 'wechat_mp', account_id: accountId,
+    })
+  } catch (e) {
+    boundWechatId.value = previous
+    detailError.value = unwrapError(e)
+    throw e
+  }
 }
 
 async function createWechatDraft(): Promise<void> {

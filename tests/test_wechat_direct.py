@@ -12,7 +12,7 @@ from pipeline.account_authorization import record_quality_result, save_authoriza
 from pipeline.account_bindings import bind_project_account
 from pipeline.account_profiles import create_profile
 from pipeline.config import AccountAPI, PlatformAPI, PublishConfig
-from pipeline.delivery.service import create_direct, create_draft, verify_direct_receipt
+from pipeline.delivery.service import DeliveryError, create_direct, create_draft, verify_direct_receipt
 from pipeline.publishers.base import AccountConfig, PostBundle, PublishResult, PublisherAdapter
 from pipeline.publishers.wechat_mp import WechatMpPublisher
 from pipeline.webui.api import delivery as delivery_api
@@ -271,9 +271,16 @@ def test_auto_direct_skips_per_article_approval(tmp_path) -> None:
         profile.id, actor="lazy", now=NOW, accounts_root=accounts,
         operations_enabled=True, allow_draft=True, allow_direct=True, quality_floor=6.0,
     )
+    from pipeline.account_authorization import load_authorization, quality_fingerprint
+    from pipeline.master_documents import load_master
+    auth = load_authorization(profile.id, accounts_root=accounts)
+    master = load_master(project_id, projects_root=root)
     record_quality_result(
         profile.id, project_id=project_id, score=8.0, verdict="pass",
         now=NOW, accounts_root=accounts,
+        content_fingerprint=quality_fingerprint(project_id, projects_root=root),
+        master_version=0 if master is None else master.version,
+        authorization_version=auth.version,
     )
     conn = db.connect(tmp_path / "state.db")
     db.init_db(conn)
@@ -377,6 +384,133 @@ def test_wechat_draft_still_skips_freepublish(tmp_path: Path) -> None:
     result = adapter.publish(bundle, AccountConfig("main", tmp_path / "x.json"), dry_run=False)
     assert result.platform_post_id == "draft1"
     assert all("/freepublish/" not in url for url in calls)
+
+
+def test_stale_draft_media_is_not_used_for_new_approval(tmp_path) -> None:
+    from pipeline import approvals, variants
+    project_id, profile, root, accounts, conn = _bind_ready(tmp_path, target="direct")
+    adapter = _CountingWechat()
+    account = AccountConfig(id=profile.id, credentials_path=tmp_path / "x.json")
+    cfg = PublishConfig(enabled=True, allowed_platforms=["wechat_mp"])
+    drafted = create_draft(
+        conn, project_id=project_id, deliverable_id="dlv_article_wechat_mp",
+        actor="lazy", adapter=adapter, account=account, publish_config=cfg,
+        projects_root=root,
+    )
+    assert drafted.attempt.deliverable_version == 1
+    current = next(
+        item for item in variants.load_variants(project_id, projects_root=root).variants
+        if item.platform == "wechat_mp"
+    )
+    variants.set_locked(
+        project_id, "wechat_mp", locked=False, now="2026-09-10T12:59:00+00:00",
+        projects_root=root,
+    )
+    variants.save_manual(
+        project_id, "wechat_mp", title="新版标题", summary="新版摘要足够长。",
+        body="这是重新审批后的第二版正文。" * 50,
+        asset_ids=list(current.asset_ids), now="2026-09-10T13:00:00+00:00",
+        projects_root=root,
+    )
+    variants.set_locked(
+        project_id, "wechat_mp", locked=True, now="2026-09-10T13:00:30+00:00",
+        projects_root=root,
+    )
+    approvals.recheck(project_id, actor="lazy", now="2026-09-10T13:01:00+00:00", projects_root=root)
+    for check in ("master", "visuals", "wechat_mp", "toutiao"):
+        approvals.decide(
+            project_id, check, approved=True, note=None, actor="lazy",
+            now="2026-09-10T13:02:00+00:00", projects_root=root,
+        )
+    adapter.calls = 0
+    with pytest.raises(DeliveryError) as err:
+        create_direct(
+            conn, project_id=project_id, deliverable_id="dlv_article_wechat_mp",
+            actor="lazy", adapter=adapter, account=account, publish_config=cfg,
+            confirm_token="yes-publish", projects_root=root, accounts_root=accounts,
+        )
+    assert adapter.calls == 0
+    assert err.value.code == "draft_stale"
+
+
+def test_concurrent_draft_to_direct_only_publishes_once(tmp_path) -> None:
+    import threading
+    import time
+    project_id, profile, root, accounts, conn = _bind_ready(tmp_path, target="direct")
+    adapter = _CountingWechat()
+    original = adapter.publish
+
+    def slow_publish(bundle, account, dry_run=False):
+        time.sleep(0.15)
+        return original(bundle, account, dry_run=dry_run)
+
+    adapter.publish = slow_publish  # type: ignore[method-assign]
+    account = AccountConfig(id=profile.id, credentials_path=tmp_path / "x.json")
+    cfg = PublishConfig(enabled=True, allowed_platforms=["wechat_mp"])
+    create_draft(
+        conn, project_id=project_id, deliverable_id="dlv_article_wechat_mp",
+        actor="lazy", adapter=adapter, account=account, publish_config=cfg,
+        projects_root=root,
+    )
+    adapter.calls = 0
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(2)
+    db_path = tmp_path / "state.db"
+
+    def worker() -> None:
+        local = db.connect(db_path)
+        try:
+            barrier.wait(timeout=5)
+            create_direct(
+                local, project_id=project_id, deliverable_id="dlv_article_wechat_mp",
+                actor="lazy", adapter=adapter, account=account, publish_config=cfg,
+                confirm_token="yes-publish", projects_root=root, accounts_root=accounts,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            local.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert adapter.calls == 1
+    assert any(getattr(item, "code", "") == "direct_locked" for item in errors) or len(errors) <= 1
+
+
+def test_verify_unknown_requeries_until_terminal(tmp_path) -> None:
+    project_id, profile, root, accounts, conn = _bind_ready(tmp_path, target="direct")
+    adapter = _CountingWechat(unknown=True)
+    adapter.query_status = 1
+    account = AccountConfig(id=profile.id, credentials_path=tmp_path / "x.json")
+    cfg = PublishConfig(enabled=True, allowed_platforms=["wechat_mp"])
+    first = create_direct(
+        conn, project_id=project_id, deliverable_id="dlv_article_wechat_mp",
+        actor="lazy", adapter=adapter, account=account, publish_config=cfg,
+        confirm_token="yes-publish", projects_root=root, accounts_root=accounts,
+    )
+    adapter.unknown = False
+
+    def query(publish_id: str) -> dict:
+        adapter.calls += 1
+        if adapter.query_status == 1:
+            return {"publish_id": publish_id, "publish_status": 1}
+        return {"publish_id": publish_id, "publish_status": 0, "article_id": "article_ok"}
+
+    adapter.query_freepublish = query
+    still = verify_direct_receipt(
+        conn, attempt_id=first.attempt.id, adapter=adapter, actor="lazy",
+    )
+    assert still.attempt.outcome == "unknown"
+    queries = adapter.calls
+    adapter.query_status = 0
+    done = verify_direct_receipt(
+        conn, attempt_id=first.attempt.id, adapter=adapter, actor="lazy",
+    )
+    assert done.attempt.outcome == "success"
+    assert adapter.calls > queries
 
 
 def test_direct_after_draft_does_not_require_queued_publication(tmp_path) -> None:

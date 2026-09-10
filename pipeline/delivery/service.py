@@ -37,6 +37,7 @@ from pipeline.publishers.capability_registry import (
     official_publish_platforms,
 )
 from pipeline.publishers.safe_publish import SafePublishResult, safe_publish
+from pipeline.utils.flock import LockHeld, acquire, release
 from pipeline.utils.ids import new_id
 from pipeline.utils.redact import token_last4
 
@@ -272,6 +273,7 @@ def create_draft(
         assert_account_may_deliver(
             project_id, platform=platform, account_id=account.id, mode="draft",
             path=path, projects_root=projects_root, accounts_root=accounts_root,
+            content_fingerprint=_content_fp(project_id, projects_root),
         )
     except AuthorizationError as error:
         raise DeliveryError(str(error), http_status=409, code=error.code) from error
@@ -466,6 +468,57 @@ def create_direct(
         )
         return DeliveryResult(attempt)
 
+    lock_path = Path(projects_root) / project_id / "locks" / (
+        f"direct-{deliverable.id}-{account.id}.lock"
+    )
+    try:
+        acquire(lock_path)
+    except LockHeld as error:
+        raise DeliveryError(
+            "another direct publish is already in flight",
+            code="direct_locked", http_status=409,
+        ) from error
+    try:
+        existing = get_attempt_by_key(conn, key)
+        if existing is not None:
+            return DeliveryResult(
+                existing, replayed=True,
+                publication_id=existing.publication_id, media_id=existing.platform_post_id,
+            )
+        unknown_open = _open_unknown_direct(
+            conn, project_id=project_id, deliverable_id=deliverable.id, account_id=account.id,
+        )
+        if unknown_open is not None:
+            return DeliveryResult(
+                unknown_open, replayed=True,
+                publication_id=unknown_open.publication_id, media_id=unknown_open.platform_post_id,
+            )
+        return _create_direct_locked(
+            conn, project_id=project_id, deliverable=deliverable, platform=platform,
+            actor=actor, adapter=adapter, account=account, publish_config=publish_config,
+            confirm_token=confirm_token, projects_root=projects_root, fingerprint=fingerprint,
+            key=key, retry_of_id=retry_of_id,
+        )
+    finally:
+        release(lock_path)
+
+
+def _create_direct_locked(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    deliverable: Deliverable,
+    platform: str,
+    actor: str,
+    adapter: PublisherAdapter,
+    account: AccountConfig,
+    publish_config: PublishConfig,
+    confirm_token: str,
+    projects_root: str | Path,
+    fingerprint: str,
+    key: str,
+    retry_of_id: str | None,
+) -> DeliveryResult:
     project = project_store.load_project(project_id, projects_root=projects_root)
     binding = get_binding(conn, deliverable_id=deliverable.id, platform=platform, account_id=account.id)
     digest = project_content_hash(project_id, deliverable.id)
@@ -511,20 +564,30 @@ def create_direct(
         project_id, deliverable.id, content_id, publication.id, platform,
         account.id, str(materialized.materialize_dir), now,
     ))
+    if _latest_attempt(
+        conn, project_id=project_id, deliverable_id=deliverable.id,
+        account_id=account.id, mode="direct", outcome="success",
+    ) is not None:
+        raise DeliveryError("already publicly published", code="already_published")
     draft_ok = _latest_attempt(
         conn, project_id=project_id, deliverable_id=deliverable.id,
         account_id=account.id, mode="draft", outcome="success",
     )
     if publication.status == PublicationStatus.PUBLISHED.value:
-        if _latest_attempt(
-            conn, project_id=project_id, deliverable_id=deliverable.id,
-            account_id=account.id, mode="direct", outcome="success",
-        ) is not None:
-            raise DeliveryError("already publicly published", code="already_published")
         if draft_ok is None or not draft_ok.platform_post_id:
             raise DeliveryError(
                 "publication is not queued for direct; send a draft first or use a queued item",
                 code="not_queued",
+            )
+        if draft_ok.deliverable_version != deliverable.version:
+            raise DeliveryError(
+                "remote draft media_id is not the approved deliverable version",
+                code="draft_stale",
+            )
+        if draft_ok.approval_fingerprint != fingerprint:
+            raise DeliveryError(
+                "remote draft was not created from the current approval",
+                code="draft_stale",
             )
         directed = PostBundle(
             content_id=content_id,
@@ -616,6 +679,11 @@ def _latest_attempt(
     return None
 
 
+def _content_fp(project_id: str, projects_root: str | Path) -> str:
+    from pipeline.account_authorization import quality_fingerprint
+    return quality_fingerprint(project_id, projects_root=projects_root)
+
+
 def _publish_id_from_text(text: str) -> str | None:
     import re
     match = re.search(r"publish_id=([A-Za-z0-9_-]+)", text)
@@ -643,14 +711,14 @@ def verify_direct_receipt(
     if not callable(query):
         raise DeliveryError(f"{prior.platform} cannot query publish receipts", code="verify_unsupported")
     stamp = now or db.now_utc()
-    key = make_idempotency_key(
+    terminal_key = make_idempotency_key(
         project_id=prior.project_id, deliverable_id=prior.deliverable_id,
         deliverable_version=prior.deliverable_version, platform=prior.platform,
         account_id=prior.account_id, mode="direct",
-        approval_fingerprint=f"verify:{prior.id}",
+        approval_fingerprint=f"verify:{prior.id}:terminal",
     )
-    existing = get_attempt_by_key(conn, key)
-    if existing is not None:
+    existing = get_attempt_by_key(conn, terminal_key)
+    if existing is not None and existing.outcome in {"success", "failure"}:
         return DeliveryResult(existing, replayed=True, publication_id=existing.publication_id, media_id=existing.platform_post_id)
     status = query(publish_id)
     publish_status = status.get("publish_status") if isinstance(status, dict) else None
@@ -661,17 +729,25 @@ def verify_direct_receipt(
         url = raw_url if isinstance(raw_url, str) else None
     if publish_status == 1:
         outcome, error, post_id = "unknown", f"unknown receipt: still publishing publish_id={publish_id}", publish_id
+        key = make_idempotency_key(
+            project_id=prior.project_id, deliverable_id=prior.deliverable_id,
+            deliverable_version=prior.deliverable_version, platform=prior.platform,
+            account_id=prior.account_id, mode="direct",
+            approval_fingerprint=f"verify:{prior.id}:{stamp}:{uuid4().hex}",
+        )
     elif publish_status in (0, 4) and isinstance(article_id, str) and article_id:
         outcome, error, post_id = "success", None, article_id
+        key = terminal_key
     else:
         outcome, error, post_id = "failure", f"freepublish status={publish_status!r}", None
+        key = terminal_key
     attempt = insert_attempt(
         conn, project_id=prior.project_id, deliverable_id=prior.deliverable_id,
         deliverable_version=prior.deliverable_version,
         approval_fingerprint=f"verify:{prior.id}", platform=prior.platform,
         account_id=prior.account_id, mode="direct", outcome=outcome,
         idempotency_key=key, request_hash_value=request_hash({
-            "verify": prior.id, "publish_id": publish_id,
+            "verify": prior.id, "publish_id": publish_id, "at": stamp,
         }),
         actor=actor, publication_id=prior.publication_id, content_id=prior.content_id,
         retry_of_id=prior.id, platform_post_id=post_id, platform_url=url,
@@ -705,6 +781,7 @@ def _direct_permission_error(
         assert_account_may_deliver(
             project_id, platform=platform, account_id=account.id, mode="direct",
             path=path, projects_root=projects_root, accounts_root=accounts_root,
+            content_fingerprint=_content_fp(project_id, projects_root),
         )
     except AuthorizationError as error:
         return str(error)

@@ -1,6 +1,7 @@
 """AUTO-01: real pack create pipeline, not theme-loop placeholder."""
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -152,6 +153,28 @@ def test_score_rejects_repeated_filler():
     )
     assert verdict == "fail"
     assert reasons
+
+
+def test_default_visuals_calls_image_generation(tmp_path, monkeypatch):
+    from pipeline.auto_create import _default_visuals
+    from pipeline import visuals
+    from tests.test_autonomy_policy import _project
+    root = tmp_path / "projects"
+    _project(root, autonomy="pack", project_id="prj_packimg")
+    calls: list[str] = []
+
+    def fake_generate(prompt, *, out_path, aspect_ratio="1:1", n=1, stage="create_image", ref_id=None, conn=None):
+        calls.append(str(prompt))
+        path = Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_PNG)
+        return MagicMock()
+
+    monkeypatch.setattr("pipeline.creators.image_gen.generate_image", fake_generate)
+    _default_visuals("prj_packimg", now=NOW, projects_root=root)
+    plan = visuals.load_visuals("prj_packimg", projects_root=root)
+    assert calls
+    assert any(item.status == "selected" and item.file_path for item in plan.assets)
 
 
 def test_book_without_excerpt_is_marked_unread(tmp_path):

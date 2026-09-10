@@ -71,13 +71,13 @@ def run_auto_create(
         revisions += 1
         title, body = writer(project, interview, board, f"质量不合格：{verdict}")
         verdict, _score = scorer(title, body)
-    if account_id and accounts_root is not None:
-        from pipeline.account_authorization import record_quality_result
-        record_quality_result(
-            account_id, project_id=project_id, score=float(_score),
-            verdict=verdict, now=now, accounts_root=accounts_root,
-        )
     if verdict != "pass":
+        if account_id and accounts_root is not None:
+            from pipeline.account_authorization import record_quality_result
+            record_quality_result(
+                account_id, project_id=project_id, score=float(_score),
+                verdict=verdict, now=now, accounts_root=accounts_root,
+            )
         raise AutoCreateError("质量门禁不合格，已暂停，不进入交付", code="quality_paused")
     if _is_theme_loop(project, body):
         raise AutoCreateError("自动写稿不得用主题循环粘贴凑字", code="placeholder_body")
@@ -93,6 +93,21 @@ def run_auto_create(
     visuals_fn(project_id)
     master = master_documents.load_master(project_id, projects_root=projects_root)
     assert master is not None
+    if account_id and accounts_root is not None:
+        from pipeline.account_authorization import (
+            load_authorization, quality_fingerprint, record_quality_result,
+        )
+        auth_version = 0
+        try:
+            auth_version = load_authorization(account_id, accounts_root=accounts_root).version
+        except Exception:
+            pass
+        record_quality_result(
+            account_id, project_id=project_id, score=float(_score),
+            verdict=verdict, now=now, accounts_root=accounts_root,
+            content_fingerprint=quality_fingerprint(project_id, projects_root=projects_root),
+            master_version=master.version, authorization_version=auth_version,
+        )
 
     created_platforms: list[str] = []
     existing = {
@@ -231,6 +246,8 @@ def _adapt_for_platform(master: Any, platform: str) -> tuple[str, str, str]:
 
 def _default_visuals(project_id: str, *, now: str, projects_root: str | Path) -> None:
     from pipeline import visuals
+    from pipeline.creators.image_gen import generate_image
+    from pipeline.utils.ids import new_id
     plan = visuals.load_visuals(project_id, projects_root=projects_root)
     if not plan.slots:
         visuals.save_plan(
@@ -246,7 +263,27 @@ def _default_visuals(project_id: str, *, now: str, projects_root: str | Path) ->
         plan = visuals.load_visuals(project_id, projects_root=projects_root)
     if any(item.status == "selected" and item.file_path for item in plan.assets):
         return
-    raise AutoCreateError("自动配图尚未完成，已暂停", code="visuals_required")
+    try:
+        for slot in plan.slots:
+            asset_id = new_id("vas")
+            path = visuals.asset_path(project_id, asset_id, projects_root=projects_root)
+            generate_image(
+                slot.direction or slot.purpose,
+                out_path=path, aspect_ratio=slot.aspect_ratio,
+                stage="create_image", ref_id=project_id,
+            )
+            asset = visuals.record_asset(
+                project_id, slot_id=slot.id, prompt=slot.direction, model="image-gen",
+                size=slot.aspect_ratio, cost_usd=0, now=now,
+                file_path=f"assets/{asset_id}.png", status="candidate",
+                asset_id=asset_id, projects_root=projects_root,
+            )
+            visuals.select_asset(project_id, asset.id, reason="自动选中", rating=3, projects_root=projects_root)
+    except Exception as error:
+        raise AutoCreateError(f"自动配图失败，已暂停: {error}", code="visuals_required") from error
+    plan = visuals.load_visuals(project_id, projects_root=projects_root)
+    if not any(item.status == "selected" and item.file_path for item in plan.assets):
+        raise AutoCreateError("自动配图尚未完成，已暂停", code="visuals_required")
 
 
 def _is_theme_loop(project: Project, body: str) -> bool:
