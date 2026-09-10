@@ -179,10 +179,13 @@ def _assert_not_duplicate_theme(project: Project, *, projects_root: str | Path) 
     for other in list_projects(projects_root=projects_root):
         if other.id == project.id:
             continue
-        if other.idea.strip() == idea:
-            raise AutoCreateError(
-                f"theme already used by {other.id}", code="theme_duplicate",
-            )
+        if other.idea.strip() != idea:
+            continue
+        if master_documents.load_master(other.id, projects_root=projects_root) is None:
+            continue
+        raise AutoCreateError(
+            f"theme already used by {other.id}", code="theme_duplicate",
+        )
 
 
 __all__ = [

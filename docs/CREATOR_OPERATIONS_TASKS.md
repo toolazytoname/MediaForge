@@ -212,7 +212,9 @@
 
 ## QA-01 回归与真实验收
 
-- [ ] **目标**：全量 pytest、生产构建、桌面/手机走查、真实流程验收。
+- [x] **目标**：全量 pytest、生产构建、桌面/手机走查、真实流程验收。
 - **步骤**：无 SOCKS 跑 `pytest tests/ -q`；`cd frontend && npm run build`；Playwright 走今天/作品/账号/设置；公众号/头条以真实回执为准。
 - **红线**：不把导出当发送成功；不提交 secrets 和那三张未跟踪截图。
 - **声明改动文件**：本文件、`docs/TASKS.md` 完成摘要、走查证据（新文件，不含保留的 open-*.png）。
+
+  ✅ 完成于 2026-09-10。无代理全量 `1908 passed`；`npm run build` 通过；桌面/手机走查截图 `docs/product-validation/qa01-browser/`。未对 `prj_a63f79b2` 公开发布；导出仍不算发送成功；三张 `open-*.png` 仍未跟踪。

@@ -123,6 +123,25 @@ def test_next_action_and_visual_library_and_pack_prepare(tmp_path, monkeypatch):
     assert [item["label"] for item in policies.json()["items"]] == ["手工", "协作", "AI 起草", "自动内容包"]
 
     _create(root, autonomy="pack", project_id="prj_pack_api")
+    from pipeline.interviews import confirm_interview, save_interview
+    from pipeline import research as research_store
+    save_interview(
+        "prj_pack_api", viewpoint="边界比速度重要", motive="写给同行",
+        experience="改过排期", sources=[{
+            "kind": "url", "title": "来源", "reference": "https://example.com/p", "excerpt": "摘",
+        }], now="2026-08-09T00:01:00+00:00", projects_root=root,
+    )
+    confirm_interview("prj_pack_api", now="2026-08-09T00:01:30+00:00", projects_root=root)
+    research_store.add_source(
+        "prj_pack_api", title="来源", reference="https://example.com/p",
+        summary="已核实公开事实", now="2026-08-09T00:01:40+00:00", projects_root=root,
+    )
+    monkeypatch.setattr(
+        "pipeline.auto_create._default_draft",
+        lambda project, interview, board, critique=None: (
+            "有依据的主稿", (interview.viewpoint + " 已核实公开事实，这段话用于满足质量门禁字数。\n") * 40,
+        ),
+    )
     prepared = client.post("/api/v1/projects/prj_pack_api/pack/prepare")
     assert prepared.status_code == 201
     assert prepared.json()["terminal_status"] in {"drafting", "ready_for_approval"}
