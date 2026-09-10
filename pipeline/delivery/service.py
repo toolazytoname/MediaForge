@@ -23,6 +23,7 @@ from pipeline.delivery.store import (
     upsert_binding,
 )
 from pipeline.models import Content, ContentStatus, Publication, PublicationStatus, Topic, TopicStatus
+from pipeline.account_authorization import AuthorizationError, assert_account_may_deliver
 from pipeline.autonomy import AutonomyError, load_policy, require_delivery_mode
 from pipeline.oauth.store import upsert_oauth_metadata
 from pipeline.publishers.base import AccountConfig, PublishError, PublishResult, PublisherAdapter
@@ -255,6 +256,13 @@ def create_draft(
         raise DeliveryError("draft is only implemented for wechat_mp articles", code="mode_not_allowed")
     if not mode_allowed(platform, "draft", adapter):
         raise DeliveryError("wechat draft is not available", code="mode_not_allowed")
+    try:
+        assert_account_may_deliver(
+            project_id, platform=platform, account_id=account.id, mode="draft",
+            path="human", projects_root=projects_root,
+        )
+    except AuthorizationError as error:
+        raise DeliveryError(str(error), http_status=409, code=error.code) from error
     if snapshot.deliverable_versions.get(deliverable.id) != deliverable.version:
         raise DeliveryError("deliverable version is not the approved snapshot", http_status=409, code="not_approved")
     fingerprint = approvals.approval_fingerprint(snapshot)

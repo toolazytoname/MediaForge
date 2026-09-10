@@ -142,11 +142,13 @@
 
 ## DEL-01 统一账号交付与授权
 
-- [ ] **目标**：区分「人工版本审批」与「账号自动运营规则授权」；保存授权版本和质量结果。自主程度不能代替账号授权。
+- [x] **目标**：区分「人工版本审批」与「账号自动运营规则授权」；保存授权版本和质量结果。自主程度不能代替账号授权。
 - **步骤**：账号 sidecar `authorization.json`（规则版本、允许 draft/direct、质量下限、启用时间）；交付前校验：作品绑定账号 + 内容审批 +（自动路径还要）账号授权版本未过期。
 - **测试**：仅有 pack 自主程度不能 direct；授权关闭则自动任务暂停；人工审批一条作品不能被拿去另一账号。
 - **声明改动文件**：`pipeline/account_authorization.py`、delivery service、测试、本文件。
 - **红线**：不伪造审批记录；不把机器质量分写成 human_verified。
+
+  ✅ 完成于 2026-09-10。`assert_account_may_deliver` 区分 human/auto；pack 不能直发；质量结果 `human_verified=false`。相关 15 passed。
 
 ---
 
