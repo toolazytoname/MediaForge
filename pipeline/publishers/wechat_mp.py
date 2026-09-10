@@ -174,8 +174,8 @@ class WechatMpPublisher(PublisherAdapter):
         from pipeline.publishers.capabilities import default_capabilities
         return default_capabilities(
             draft=True,
-            direct=False,
-            detail="WeChat MP official API is draft/export only; no direct publish",
+            direct=True,
+            detail="WeChat MP draft/add plus gated freepublish/submit; unknown receipts must not auto-retry",
         )
 
     def __init__(
@@ -315,10 +315,16 @@ class WechatMpPublisher(PublisherAdapter):
         except OSError as e:
             raise PublishError(f"cannot read article.md at {article_path}: {e}") from e
 
+        extra = dict(bundle.extra or {})
+        delivery_mode = extra.get("delivery_mode")
+        existing_draft = extra.get("draft_media_id")
+        want_direct = delivery_mode == "direct"
+
         # dry-run：不调 HTTP；返回 dry- 模拟结果
         if dry_run:
+            prefix = "dry-direct-" if want_direct else "dry-draft-"
             return PublishResult(
-                platform_post_id=f"dry-draft-{bundle.content_id}",
+                platform_post_id=f"{prefix}{bundle.content_id}",
                 url=None,
                 raw_response=json.dumps({
                     "dry_run": True,
@@ -327,37 +333,45 @@ class WechatMpPublisher(PublisherAdapter):
                     "title": title,
                     "digest": digest,
                     "cover": str(cover_path),
+                    "delivery_mode": delivery_mode or "draft",
                 }, ensure_ascii=False),
             )
 
-        if not cover_path.exists():
-            raise PublishError(f"cover image not found at {cover_path}")
+        if isinstance(existing_draft, str) and existing_draft.strip():
+            media_id = existing_draft.strip()
+            thumb_media_id = None
+        else:
+            if not cover_path.exists():
+                raise PublishError(f"cover image not found at {cover_path}")
 
-        article_md = self._ensure_cover_in_body(article_md)
-        article_md, image_metas = self._inline_images_to_cdn(article_md, wechat_dir)
-        html_body = decorate_wechat_content_images(
-            markdown_to_wechat_html(article_md), image_metas,
-        )
-        thumb_media_id = self._upload_cover(cover_path)
-        draft_resp = self._upload_draft(
-            title=title, digest=digest, html_body=html_body,
-            thumb_media_id=thumb_media_id,
-        )
-        media_id = draft_resp.get("media_id")
-        if not isinstance(media_id, str) or not media_id:
-            raise PublishError(f"wechat_mp draft/add missing media_id: {draft_resp!r}")
+            article_md = self._ensure_cover_in_body(article_md)
+            article_md, image_metas = self._inline_images_to_cdn(article_md, wechat_dir)
+            html_body = decorate_wechat_content_images(
+                markdown_to_wechat_html(article_md), image_metas,
+            )
+            thumb_media_id = self._upload_cover(cover_path)
+            draft_resp = self._upload_draft(
+                title=title, digest=digest, html_body=html_body,
+                thumb_media_id=thumb_media_id,
+            )
+            media_id = draft_resp.get("media_id")
+            if not isinstance(media_id, str) or not media_id:
+                raise PublishError(f"wechat_mp draft/add missing media_id: {draft_resp!r}")
 
-        # 草稿箱没有公开 url（需人工在公众号后台手动发布），url=None 是正确行为
-        return PublishResult(
-            platform_post_id=media_id,
-            url=None,
-            raw_response=json.dumps({
-                "platform": "wechat_mp",
-                "account": account.id,
-                "draft_media_id": media_id,
-                "thumb_media_id": thumb_media_id,
-            }, ensure_ascii=False),
-        )
+        if not want_direct:
+            # 草稿箱没有公开 url（需人工在公众号后台手动发布），url=None 是正确行为
+            return PublishResult(
+                platform_post_id=media_id,
+                url=None,
+                raw_response=json.dumps({
+                    "platform": "wechat_mp",
+                    "account": account.id,
+                    "draft_media_id": media_id,
+                    "thumb_media_id": thumb_media_id,
+                }, ensure_ascii=False),
+            )
+
+        return self._freepublish(media_id=media_id, account_id=account.id)
 
     def _upload_cover(self, cover_path: Path) -> str:
         token = self._ensure_access_token()
@@ -425,6 +439,60 @@ class WechatMpPublisher(PublisherAdapter):
                     "only_fans_can_comment": 0,
                 }]
             },
+        )
+
+    def _freepublish(self, *, media_id: str, account_id: str) -> PublishResult:
+        submit = self._freepublish_submit(media_id)
+        publish_id = submit.get("publish_id")
+        if not isinstance(publish_id, str) or not publish_id:
+            raise PublishError(f"wechat_mp freepublish/submit missing publish_id: {submit!r}")
+        status = self._freepublish_get(publish_id)
+        publish_status = status.get("publish_status")
+        payload = {
+            "platform": "wechat_mp",
+            "account": account_id,
+            "draft_media_id": media_id,
+            "publish_id": publish_id,
+            "publish_status": publish_status,
+            "article_id": status.get("article_id"),
+            "article_url": status.get("article_url") or status.get("url"),
+        }
+        if publish_status == 1:
+            raise PublishError(
+                "unknown receipt: freepublish still publishing; do not retry"
+            )
+        if publish_status not in (0, 4):
+            raise PublishError(
+                f"wechat_mp freepublish failed status={publish_status!r}: {status!r}"
+            )
+        article_id = status.get("article_id")
+        if not isinstance(article_id, str) or not article_id:
+            raise PublishError(
+                f"wechat_mp freepublish missing article_id: {status!r}"
+            )
+        url = payload["article_url"]
+        if not isinstance(url, str) or not url:
+            url = None
+        return PublishResult(
+            platform_post_id=article_id,
+            url=url,
+            raw_response=json.dumps(payload, ensure_ascii=False),
+        )
+
+    def _freepublish_submit(self, media_id: str) -> dict:
+        token = self._ensure_access_token()
+        return self._post(
+            f"{self._api}/freepublish/submit",
+            params={"access_token": token},
+            json_body={"media_id": media_id},
+        )
+
+    def _freepublish_get(self, publish_id: str) -> dict:
+        token = self._ensure_access_token()
+        return self._post(
+            f"{self._api}/freepublish/get",
+            params={"access_token": token},
+            json_body={"publish_id": publish_id},
         )
 
     def _update_draft(

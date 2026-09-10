@@ -127,12 +127,18 @@ _REGISTRY: dict[str, Capability] = {
         platform="wechat_mp",
         label="微信公众号",
         formats=(KIND_ARTICLE,),
-        delivery=_flags(draft=True, direct=False),
+        delivery=_flags(draft=True, direct=True),
         auth=AuthSpec("app_secret", (), False, "secrets/wechat_mp_<account>.json"),
         review=ReviewSpec(True, True, "draft"),
         limits=CapabilityLimits(title_max=64, digest_max=120, body_min=600, max_cover_bytes=10 * 1024 * 1024),
         receipts=ReceiptSpec(("platform_post_id",), True),
-        ui=UiSpec("html_article", "将创建公众号草稿，不会群发或公开可见。", ("title", "digest", "body")),
+        ui=UiSpec(
+            "html_article",
+            "草稿走 draft/add。公开发布走 freepublish/submit，需要 publish.enabled、"
+            "平台白名单、账号 delivery_target=direct 与内容授权。无权限不会调用发布接口；"
+            "未知回执不得自动重试。",
+            ("title", "digest", "body"),
+        ),
         official_api=True,
         lane=LANE_OFFICIAL,
         adapter="wechat_mp",

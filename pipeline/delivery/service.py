@@ -24,9 +24,11 @@ from pipeline.delivery.store import (
 )
 from pipeline.models import Content, ContentStatus, Publication, PublicationStatus, Topic, TopicStatus
 from pipeline.account_authorization import AuthorizationError, assert_account_may_deliver
+from pipeline.account_profiles import DEFAULT_ACCOUNTS_ROOT, AccountProfileError, load_profile
 from pipeline.autonomy import AutonomyError, load_policy, require_delivery_mode
+from pipeline.utils.sidecar_ids import valid_sidecar_id
 from pipeline.oauth.store import upsert_oauth_metadata
-from pipeline.publishers.base import AccountConfig, PublishError, PublishResult, PublisherAdapter
+from pipeline.publishers.base import AccountConfig, PostBundle, PublishError, PublishResult, PublisherAdapter
 from pipeline.publishers.capability_registry import (
     get_capability,
     mode_allowed,
@@ -357,6 +359,228 @@ def create_draft(
         project_id=project_id, deliverable_id=deliverable.id, publication_id=publication.id,
     )
     return DeliveryResult(attempt, publication_id=publication.id, media_id=media_id)
+
+
+def create_direct(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    deliverable_id: str,
+    actor: str,
+    adapter: PublisherAdapter,
+    account: AccountConfig,
+    publish_config: PublishConfig,
+    confirm_token: str,
+    cfg: AppConfig | None = None,
+    projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
+    accounts_root: str | Path = DEFAULT_ACCOUNTS_ROOT,
+    retry_of_id: str | None = None,
+    path: str = "human",
+) -> DeliveryResult:
+    """Gated WeChat (or other official) public publish. Missing permission never calls adapter."""
+    _require_bridge(cfg)
+    if not confirm_token or not str(confirm_token).strip():
+        raise DeliveryError(
+            "direct publish requires an explicit confirm token",
+            http_status=403,
+            code="confirm_required",
+        )
+    state = _approval_or_409(project_id, projects_root)
+    try:
+        require_delivery_mode(project_id, "direct", projects_root=projects_root)
+    except AutonomyError as error:
+        raise DeliveryError(str(error), http_status=error.http_status, code=error.code) from error
+    snapshot = state.approval.snapshot
+    assert snapshot is not None
+    deliverable = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
+    platform = _single_platform(deliverable)
+    if deliverable.kind != KIND_ARTICLE:
+        raise DeliveryError("direct is only implemented for articles", code="mode_not_allowed")
+    fingerprint = approvals.approval_fingerprint(snapshot)
+    key = make_idempotency_key(
+        project_id=project_id, deliverable_id=deliverable.id,
+        deliverable_version=deliverable.version, platform=platform,
+        account_id=account.id, mode="direct", approval_fingerprint=fingerprint,
+        retry_of_id=retry_of_id,
+    )
+    existing = get_attempt_by_key(conn, key)
+    if existing is not None:
+        return DeliveryResult(
+            existing, replayed=True,
+            publication_id=existing.publication_id, media_id=existing.platform_post_id,
+        )
+    if snapshot.deliverable_versions.get(deliverable.id) != deliverable.version:
+        raise DeliveryError("deliverable version is not the approved snapshot", http_status=409, code="not_approved")
+
+    blocked = _direct_permission_error(
+        project_id, platform=platform, account=account, adapter=adapter,
+        publish_config=publish_config, path=path, projects_root=projects_root,
+        accounts_root=accounts_root,
+    )
+    if blocked is not None:
+        attempt = insert_attempt(
+            conn, project_id=project_id, deliverable_id=deliverable.id,
+            deliverable_version=deliverable.version, approval_fingerprint=fingerprint,
+            platform=platform, account_id=account.id, mode="direct", outcome="failure",
+            idempotency_key=key, request_hash_value=request_hash({
+                "platform": platform, "deliverable_id": deliverable.id, "blocked": blocked,
+            }),
+            actor=actor, retry_of_id=retry_of_id, error=blocked,
+            confirm_token_hash=_hash_confirm(confirm_token),
+            raw_receipt=json_dumps({"blocked": True, "error": blocked, "platform": platform}),
+        )
+        insert_audit(
+            conn, actor=actor, action="delivery.direct",
+            payload={"outcome": "failure", "blocked": True, "error": blocked},
+            project_id=project_id, deliverable_id=deliverable.id,
+        )
+        return DeliveryResult(attempt)
+
+    project = project_store.load_project(project_id, projects_root=projects_root)
+    binding = get_binding(conn, deliverable_id=deliverable.id, platform=platform, account_id=account.id)
+    digest = project_content_hash(project_id, deliverable.id)
+    existing_topic = conn.execute(
+        "SELECT * FROM topics WHERE content_hash = ?", (digest,),
+    ).fetchone()
+    content_id = binding.content_id if binding else None
+    if content_id is None and existing_topic is not None:
+        existing_content = conn.execute(
+            "SELECT * FROM contents WHERE topic_id = ?", (existing_topic["id"],),
+        ).fetchone()
+        if existing_content is not None:
+            content_id = existing_content["id"]
+    materialized = materialize_wechat_article(
+        project_id, deliverable, content_id=content_id, projects_root=projects_root,
+    )
+    now = db.now_utc()
+    if content_id is None:
+        topic_id = new_id("t")
+        db.insert_topic(conn, Topic(
+            id=topic_id, source=f"project:{project_id}", title=project.title, url=None,
+            summary=project.idea, content_hash=digest,
+            pillar=_PROJECT_PILLAR, score=None, score_reason=None,
+            status=TopicStatus.CONSUMED.value, created_at=now, updated_at=now,
+        ))
+        db.insert_content(conn, Content(
+            id=materialized.content_id, topic_id=topic_id, pillar=_PROJECT_PILLAR,
+            title=materialized.title, canonical_path=str(materialized.canonical_path),
+            formats=(platform,), gate_score_total=None, gate_scores=None, gate_verdict=None,
+            status=ContentStatus.APPROVED.value, created_at=now, updated_at=now,
+        ))
+        project_store.update_project(
+            project, now=now, content_ids=(*project.content_ids, materialized.content_id),
+            projects_root=projects_root,
+        )
+        content_id = materialized.content_id
+
+    publication = _reuse_or_insert_publication(
+        conn, content_id=content_id, platform=platform, account_id=account.id, now=now,
+    )
+    upsert_binding(conn, LegacyBinding(
+        project_id, deliverable.id, content_id, publication.id, platform,
+        account.id, str(materialized.materialize_dir), now,
+    ))
+    result = safe_publish(
+        conn, publication, _DirectMode(adapter), config=publish_config, account=account,
+        dry_run=False, now_iso=now,
+    )
+    refreshed = db.get_publication(conn, publication.id)
+    outcome, error, post_id, url = _direct_outcome(result, refreshed)
+    attempt = insert_attempt(
+        conn, project_id=project_id, deliverable_id=deliverable.id,
+        deliverable_version=deliverable.version, approval_fingerprint=fingerprint,
+        platform=platform, account_id=account.id, mode="direct", outcome=outcome,
+        idempotency_key=key, request_hash_value=request_hash({
+            "publication_id": publication.id, "content_id": content_id,
+        }),
+        actor=actor, publication_id=publication.id, content_id=content_id,
+        retry_of_id=retry_of_id, platform_post_id=post_id, platform_url=url,
+        raw_receipt=json_receipt(result), error=error,
+        confirm_token_hash=_hash_confirm(confirm_token),
+    )
+    insert_audit(
+        conn, actor=actor, action="delivery.direct",
+        payload={"outcome": outcome, "platform_post_id": post_id, "publication_id": publication.id},
+        project_id=project_id, deliverable_id=deliverable.id, publication_id=publication.id,
+    )
+    return DeliveryResult(attempt, publication_id=publication.id, media_id=post_id)
+
+
+def _direct_permission_error(
+    project_id: str,
+    *,
+    platform: str,
+    account: AccountConfig,
+    adapter: PublisherAdapter,
+    publish_config: PublishConfig,
+    path: str,
+    projects_root: str | Path,
+    accounts_root: str | Path,
+) -> str | None:
+    if not publish_config.enabled:
+        return "publish is disabled"
+    if publish_config.allowed_platforms and platform not in publish_config.allowed_platforms:
+        return f"platform {platform!r} not in allowed_platforms"
+    try:
+        assert_account_may_deliver(
+            project_id, platform=platform, account_id=account.id, mode="direct",
+            path=path, projects_root=projects_root, accounts_root=accounts_root,
+        )
+    except AuthorizationError as error:
+        return str(error)
+    if not valid_sidecar_id(account.id, "acc_"):
+        return "delivery_target must be direct on a bound account profile"
+    try:
+        profile = load_profile(account.id, accounts_root=accounts_root)
+    except AccountProfileError as error:
+        return str(error)
+    if profile.delivery_target != "direct":
+        return "delivery_target must be direct"
+    if not mode_allowed(platform, "direct", adapter):
+        return f"{platform} direct is not available"
+    return None
+
+
+def _direct_outcome(
+    result: SafePublishResult, publication: Publication | None,
+) -> tuple[str, str | None, str | None, str | None]:
+    post_id = result.platform_post_id or (publication.platform_post_id if publication else None)
+    url = result.url or (publication.platform_url if publication else None)
+    reason = result.reason or ""
+    if "unknown" in reason.lower():
+        return "unknown", reason, None, None
+    if result.published and post_id:
+        return "success", None, post_id, url
+    if result.published and not post_id:
+        return "failure", "direct succeeded without platform_post_id", None, None
+    return "failure", reason or "direct failed", None, None
+
+
+class _DirectMode:
+    """Force adapter.publish extra.delivery_mode=direct without loosening receipts."""
+
+    def __init__(self, inner: PublisherAdapter):
+        self._inner = inner
+        self.platform = inner.platform
+
+    def capabilities(self):
+        return self._inner.capabilities()
+
+    def validate(self, bundle):
+        return self._inner.validate(bundle)
+
+    def publish(self, bundle, account, dry_run=False) -> PublishResult:
+        extra = dict(bundle.extra or {})
+        extra["delivery_mode"] = "direct"
+        directed = PostBundle(
+            content_id=bundle.content_id,
+            title=bundle.title,
+            body_path=bundle.body_path,
+            media_paths=bundle.media_paths,
+            tags=bundle.tags,
+            extra=extra,
+        )
+        return self._inner.publish(directed, account, dry_run)
 
 
 def create_official_delivery(
@@ -690,6 +914,12 @@ def _user_label(attempt: DeliveryAttempt) -> str:
         return "已创建公众号草稿"
     if attempt.mode == "draft":
         return "草稿失败"
+    if attempt.mode == "direct" and attempt.outcome == "success":
+        return "已公开发布"
+    if attempt.mode == "direct" and attempt.outcome == "unknown":
+        return "发布结果未知，请核对，不要自动重试"
+    if attempt.mode == "direct":
+        return "公开发布失败"
     if attempt.platform == "douyin" and attempt.outcome == "success":
         return "已提交抖音官方发布"
     if attempt.platform == "youtube" and attempt.outcome == "success":

@@ -36,12 +36,12 @@ def test_modes_and_outcomes_are_distinguishable() -> None:
     assert set(KNOWN_OUTCOMES) == {"success", "failure", "unknown"}
 
 
-def test_wechat_is_draft_not_direct() -> None:
+def test_wechat_is_draft_and_gated_direct() -> None:
     caps = WechatMpPublisher(app_id="id", app_secret="secret").capabilities()
     assert caps.preview is True
     assert caps.export is True
     assert caps.draft is True
-    assert caps.direct is False
+    assert caps.direct is True
 
 
 def test_x_app_only_bearer_hides_direct() -> None:

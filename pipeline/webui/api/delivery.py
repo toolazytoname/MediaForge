@@ -1,4 +1,4 @@
-"""Project article/gallery delivery: preview, export, wechat draft. Never exposes direct."""
+"""Project article/gallery delivery: preview, export, wechat draft, gated direct."""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -23,6 +23,7 @@ from pipeline.delivery.service import (
     _approval_or_409,
     attempt_to_dict,
     bridge_enabled,
+    create_direct,
     create_draft,
     create_export_delivery,
     preview_deliverable,
@@ -33,6 +34,8 @@ from pipeline.account_identity import (
     account_credentials_path,
     resolve_platform_account,
 )
+from pipeline.account_profiles import DEFAULT_ACCOUNTS_ROOT, AccountProfileError, load_profile
+from pipeline.utils.sidecar_ids import valid_sidecar_id
 from pipeline.publishers import get_adapter
 from pipeline.publishers.base import AccountConfig
 from pipeline.webui import deps
@@ -138,11 +141,51 @@ def lock_gallery_item(project_id: str, deliverable_id: str, body: dict[str, Any]
     return asdict(item)
 
 
-@router.post("/projects/{project_id}/deliverables/{deliverable_id}/direct")
-def hide_direct(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(default_factory=dict)) -> None:
-    raise HTTPException(status_code=403, detail={"error": {
-        "code": "direct_hidden", "message": "Project UI does not expose direct publish",
-    }})
+@router.post("/projects/{project_id}/deliverables/{deliverable_id}/direct", status_code=201)
+def direct_publish(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    actor = _actor(body)
+    retry_of_id = body.get("retry_of_id")
+    confirm_token = body.get("confirm_token")
+    cfg, err = deps.get_config()
+    if cfg is not None and not bridge_enabled(cfg):
+        raise HTTPException(status_code=403, detail={"error": {"code": "delivery_bridge_off", "message": "delivery bridge is off"}})
+    try:
+        _approval_or_409(project_id, _root())
+    except DeliveryError as error:
+        raise _raise(error) from error
+    if err or cfg is None:
+        raise HTTPException(status_code=400, detail={"error": {"code": "config_missing", "message": err or "config missing"}})
+    try:
+        deliverable = get_deliverable(project_id, deliverable_id, projects_root=_root())
+        if deliverable.kind == KIND_GALLERY or "xiaohongshu" in deliverable.targets:
+            raise HTTPException(status_code=403, detail={"error": {
+                "code": "mode_not_allowed",
+                "message": "gallery/xiaohongshu Project path only allows preview/export",
+            }})
+        platform = deliverable.targets[0]
+        account_id = body.get("account_id")
+        if not isinstance(account_id, str) or not account_id.strip():
+            raise HTTPException(status_code=400, detail={"error": {
+                "code": "account_id_required",
+                "message": "direct requires an explicit account_id",
+            }})
+        adapter, account = _adapter_for(cfg, platform, account_id=account_id.strip())
+        with deps._db() as conn:
+            result = create_direct(
+                conn, project_id=project_id, deliverable_id=deliverable_id, actor=actor,
+                adapter=adapter, account=account, publish_config=cfg.publish, cfg=cfg,
+                confirm_token=str(confirm_token or ""), projects_root=_root(),
+                retry_of_id=retry_of_id,
+            )
+    except DeliveryError as error:
+        raise _raise(error) from error
+    except AccountIdentityError as error:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": error.code, "message": str(error),
+        }}) from error
+    except (DeliverablesError, ValueError, FileNotFoundError) as error:
+        raise HTTPException(status_code=400, detail={"error": {"code": "direct_unavailable", "message": str(error)}}) from error
+    return attempt_to_dict(result)
 
 
 @router.get("/projects/{project_id}/delivery-attempts")
@@ -233,10 +276,25 @@ def draft(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(defa
 
 def _adapter_for(
     cfg: Any, platform: str, account_id: str | None = None,
+    accounts_root: Path | str = DEFAULT_ACCOUNTS_ROOT,
 ) -> tuple[Any, AccountConfig]:
     plat = getattr(cfg.platforms, platform, None)
     if plat is None:
         raise DeliveryError(f"no {platform} account configured", code="account_missing")
+    if account_id and valid_sidecar_id(account_id, "acc_"):
+        try:
+            profile = load_profile(account_id, accounts_root=accounts_root)
+        except AccountProfileError as error:
+            raise DeliveryError(str(error), code="account_not_found") from error
+        if profile.platform != platform:
+            raise DeliveryError(
+                f"account {account_id} is {profile.platform}, not {platform}",
+                code="account_not_found",
+            )
+        if not profile.credentials_ref:
+            raise DeliveryError("account is missing credentials", code="account_missing")
+        account = AccountConfig(id=profile.id, credentials_path=Path(profile.credentials_ref))
+        return get_adapter(platform, account=account, config=cfg), account
     acc = resolve_platform_account(plat, account_id=account_id)
     creds = account_credentials_path(acc)
     account = AccountConfig(id=acc.id, credentials_path=Path(creds))

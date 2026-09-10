@@ -82,8 +82,8 @@ def capabilities_for_platform(
     if platform == "wechat_mp":
         return default_capabilities(
             draft=True,
-            direct=False,
-            detail="WeChat MP official API is draft/export only; no direct publish",
+            direct=True,
+            detail="WeChat MP draft/add plus gated freepublish/submit; unknown receipts must not auto-retry",
         )
     if platform == "x":
         direct = bool(x_has_user_context)

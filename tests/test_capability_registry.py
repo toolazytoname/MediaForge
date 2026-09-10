@@ -25,7 +25,7 @@ def test_registry_covers_five_adapters_and_wechat_hides_direct():
         assert cap.receipts.unknown_is_failure is True
         assert "unknown" in KNOWN_OUTCOMES
     wechat = get_capability("wechat_mp")
-    assert wechat.delivery.direct is False
+    assert wechat.delivery.direct is True
     assert wechat.delivery.draft is True
     toutiao = get_capability("toutiao")
     assert toutiao.delivery.direct is False
@@ -68,7 +68,7 @@ def test_registry_covers_five_adapters_and_wechat_hides_direct():
 def test_x_without_user_context_direct_is_false():
     adapter = XApiPublisher(bearer_token="dummy")
     assert effective_delivery("x", adapter).direct is False
-    assert WechatMpPublisher(app_id="id", app_secret="secret").capabilities().direct is False
+    assert WechatMpPublisher(app_id="id", app_secret="secret").capabilities().direct is True
     assert effective_delivery("douyin").direct is False
     assert effective_delivery("youtube").direct is False
     assert effective_delivery("tiktok").direct is False
@@ -81,7 +81,7 @@ def test_x_without_user_context_direct_is_false():
 
 def test_p3_catalog_is_export_only_and_has_no_adapter():
     official = official_publish_platforms()
-    assert official == frozenset({"douyin", "youtube", "tiktok", "instagram", "x"})
+    assert official == frozenset({"douyin", "youtube", "tiktok", "instagram", "x", "wechat_mp"})
     for name in P3_PLATFORMS:
         cap = get_capability(name)
         assert cap.official_api is False

@@ -154,11 +154,13 @@
 
 ## DEL-02 公众号多账号草稿与公开发布
 
-- [ ] **目标**：按绑定账号发送草稿；在用户明确授权的账号上实现 direct；权限检查与结果查询。
+- [x] **目标**：按绑定账号发送草稿；在用户明确授权的账号上实现 direct；权限检查与结果查询。
 - **步骤**：`_adapter_for` 按 account_id 选凭据；draft 沿用现有；direct 走官方发布接口但必须 `publish.enabled` + 白名单 + 账号 `delivery_target=direct` + 内容授权。结果以平台回执为准。无权限记录阻塞。
 - **测试**：两账号凭据不串；缺权限不调用发布；未知结果不自动重试。
 - **声明改动文件**：`pipeline/publishers/wechat_mp.py`、delivery、测试、本文件。
 - **红线**：不得对 `prj_a63f79b2` 或未授权内容做公开发布实测。无授权则标 BLOCKED 并继续其他任务。
+
+  ✅ 完成于 2026-09-10。`acc_` 档案按 credentials_ref 选 adapter；`create_direct` 缺权限只记阻塞不调发布；freepublish 未知回执 outcome=unknown 且同 key 不重试。未对 `prj_a63f79b2` 做公开发布实测。
 
 ---
 

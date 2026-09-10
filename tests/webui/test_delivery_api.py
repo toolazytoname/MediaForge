@@ -19,7 +19,8 @@ def test_capabilities_hide_wechat_direct_and_unapproved_draft_is_409(tmp_path, m
     assert caps.status_code == 200
     wechat = next(item for item in caps.json()["items"] if item["platform"] == "wechat_mp")
     toutiao = next(item for item in caps.json()["items"] if item["platform"] == "toutiao")
-    assert wechat["delivery"]["direct"] is False
+    assert wechat["delivery"]["direct"] is True
+    assert wechat["delivery"]["draft"] is True
     assert toutiao["delivery"]["direct"] is False
     assert toutiao["delivery"]["export"] is True
     denied = client.post(
@@ -66,5 +67,5 @@ def test_capabilities_hide_wechat_direct_and_unapproved_draft_is_409(tmp_path, m
         "/api/v1/projects/prj_delivery_api/deliverables/dlv_article_wechat_mp/direct",
         json={"actor": "lazy"},
     )
-    assert hidden.status_code == 403
-    assert hidden.json()["detail"]["error"]["code"] == "direct_hidden"
+    assert hidden.status_code == 409
+    assert hidden.json()["detail"]["error"]["code"] == "not_approved"
