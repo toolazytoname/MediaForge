@@ -118,8 +118,11 @@ def test_pack_prepare_stops_at_ready_for_approval_and_never_calls_live_publish(t
     def draft_fn(project, interview, board, critique=None):
         return "有依据的主稿", (interview.viewpoint + "\n\n已核实公开事实。这段话足够支撑质量门禁的字数要求。\n\n") * 30
 
+    from tests.test_auto_create import _visual_fn
     result = prepare_pack(
-        "prj_pack", now="2026-08-09T00:02:00+00:00", projects_root=root, draft_fn=draft_fn,
+        "prj_pack", now="2026-08-09T00:02:00+00:00", projects_root=root,
+        draft_fn=draft_fn, visual_fn=lambda pid: _visual_fn(pid, root),
+        score_fn=lambda title, body: ("pass", 8.0),
     )
     assert result.terminal_status in {"drafting", "ready_for_approval"}
     assert all(status in {"drafting", "ready_for_approval"} for status in result.deliverable_statuses)

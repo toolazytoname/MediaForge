@@ -459,7 +459,8 @@ class WechatMpPublisher(PublisherAdapter):
         }
         if publish_status == 1:
             raise PublishError(
-                "unknown receipt: freepublish still publishing; do not retry"
+                "unknown receipt: freepublish still publishing; do not retry "
+                f"publish_id={publish_id}"
             )
         if publish_status not in (0, 4):
             raise PublishError(
@@ -486,6 +487,9 @@ class WechatMpPublisher(PublisherAdapter):
             params={"access_token": token},
             json_body={"media_id": media_id},
         )
+
+    def query_freepublish(self, publish_id: str) -> dict:
+        return self._freepublish_get(publish_id)
 
     def _freepublish_get(self, publish_id: str) -> dict:
         token = self._ensure_access_token()

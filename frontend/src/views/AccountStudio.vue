@@ -10,6 +10,10 @@ interface AccountProfile {
   audience: string
   style: string
   operations_enabled: boolean
+  frequency: string
+  timezone: string
+  budget_usd: number
+  delivery_target: string
 }
 
 interface Suggestion {
@@ -29,12 +33,28 @@ const suggestion = ref<Suggestion | null>(null)
 const unread = ref<string[]>([])
 const error = ref('')
 const loading = ref(false)
+const frequency = ref('off')
+const budgetUsd = ref(0)
+const deliveryTarget = ref('draft')
+const operationsEnabled = ref(false)
+const allowDirect = ref(false)
+const qualityFloor = ref(7)
 
 async function load(): Promise<void> {
   error.value = ''
   const response = await api.get<{ items: AccountProfile[] }>('/account-profiles')
   items.value = response.data.items
   if (!selectedId.value && items.value[0]) selectedId.value = items.value[0].id
+  syncOpsForm()
+}
+
+function syncOpsForm(): void {
+  const current = items.value.find(item => item.id === selectedId.value)
+  if (!current) return
+  frequency.value = current.frequency || 'off'
+  budgetUsd.value = current.budget_usd || 0
+  deliveryTarget.value = current.delivery_target || 'draft'
+  operationsEnabled.value = current.operations_enabled
 }
 
 async function importFromConfig(): Promise<void> {
@@ -86,6 +106,35 @@ async function confirm(): Promise<void> {
   }
 }
 
+async function saveOps(): Promise<void> {
+  if (!selectedId.value) return
+  loading.value = true
+  error.value = ''
+  try {
+    await api.patch(`/account-profiles/${selectedId.value}`, {
+      frequency: frequency.value,
+      budget_usd: Number(budgetUsd.value),
+      delivery_target: deliveryTarget.value,
+      operations_enabled: operationsEnabled.value,
+    })
+    await apiPost(`/account-profiles/${selectedId.value}/authorization`, {
+      actor: 'local',
+      operations_enabled: operationsEnabled.value,
+      allow_draft: true,
+      allow_direct: allowDirect.value,
+      quality_floor: Number(qualityFloor.value),
+    })
+    if (operationsEnabled.value) {
+      await apiPost('/ops/tick', {})
+    }
+    await load()
+  } catch (err) {
+    error.value = unwrapError(err)
+  } finally {
+    loading.value = false
+  }
+}
+
 onMounted(() => { load().catch(err => { error.value = unwrapError(err) }) })
 </script>
 
@@ -99,7 +148,7 @@ onMounted(() => { load().catch(err => { error.value = unwrapError(err) }) })
     <a-alert v-if="error" type="error" :message="error" show-icon class="notice" />
     <a-space class="toolbar">
       <a-button :loading="loading" @click="importFromConfig">从配置导入账号（不开启运营）</a-button>
-      <a-select v-if="items.length" v-model:value="selectedId" style="min-width: 240px">
+      <a-select v-if="items.length" v-model:value="selectedId" style="min-width: 240px" @change="syncOpsForm">
         <a-select-option v-for="item in items" :key="item.id" :value="item.id">
           {{ item.display_name }} · {{ item.platform }}
         </a-select-option>
@@ -125,6 +174,25 @@ onMounted(() => { load().catch(err => { error.value = unwrapError(err) }) })
         <p>{{ suggestion.rationale }}</p>
         <p v-if="unread.length">未读来源：{{ unread.join('；') }}</p>
       </aside>
+    </a-card>
+    <a-card v-if="selectedId" :bordered="false" class="panel">
+      <h2>运营节奏</h2>
+      <p class="current">默认关闭。打开后按频率写入计划并执行一次调度，不会自动公开已有测试文章。</p>
+      <a-form layout="vertical">
+        <a-form-item label="频率"><a-input v-model:value="frequency" placeholder="off / 1/week / 2/week / daily" /></a-form-item>
+        <a-form-item label="预算 USD"><a-input-number v-model:value="budgetUsd" :min="0" /></a-form-item>
+        <a-form-item label="交付目的地">
+          <a-select v-model:value="deliveryTarget" style="min-width: 160px">
+            <a-select-option value="export">仅导出</a-select-option>
+            <a-select-option value="draft">草稿</a-select-option>
+            <a-select-option value="direct">公开发布</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="质量下限"><a-input-number v-model:value="qualityFloor" :min="0" :max="10" :step="0.5" /></a-form-item>
+        <a-form-item><a-checkbox v-model:checked="operationsEnabled">开启账号运营</a-checkbox></a-form-item>
+        <a-form-item><a-checkbox v-model:checked="allowDirect">授权自动直发（仍受 publish.enabled 与回执约束）</a-checkbox></a-form-item>
+        <a-button type="primary" :loading="loading" @click="saveOps">保存运营设置</a-button>
+      </a-form>
     </a-card>
   </section>
 </template>

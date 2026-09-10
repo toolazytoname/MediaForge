@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+from pipeline.account_authorization import AuthorizationError, save_authorization
 from pipeline.account_bindings import AccountBindingError, bind_project_account, load_bindings
 from pipeline.account_onboarding import OnboardingError, confirm_onboarding, propose_onboarding
 from pipeline.account_profiles import (
@@ -14,6 +15,8 @@ from pipeline.account_profiles import (
     DEFAULT_ACCOUNTS_ROOT,
     import_platform_accounts,
     list_profiles,
+    load_profile,
+    update_profile,
 )
 from pipeline.webui import deps
 from pipeline.webui.api import projects as projects_api
@@ -122,3 +125,50 @@ def post_onboarding_confirm(account_id: str) -> dict[str, Any]:
     except AccountProfileError as error:
         raise _raise_profile(error) from error
     return asdict(profile)
+
+
+@router.patch("/account-profiles/{account_id}")
+def patch_profile(account_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        current = load_profile(account_id, accounts_root=DEFAULT_ACCOUNTS_ROOT)
+        allowed = {
+            key: body[key] for key in (
+                "frequency", "timezone", "budget_usd", "delivery_target", "operations_enabled",
+                "positioning", "audience", "style",
+            ) if key in body
+        }
+        updated = update_profile(current, now=_now(), accounts_root=DEFAULT_ACCOUNTS_ROOT, **allowed)
+    except AccountProfileError as error:
+        raise _raise_profile(error) from error
+    return asdict(updated)
+
+
+@router.post("/account-profiles/{account_id}/authorization")
+def post_authorization(account_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        auth = save_authorization(
+            account_id,
+            actor=str(body.get("actor") or "local"),
+            now=_now(),
+            operations_enabled=bool(body.get("operations_enabled")),
+            allow_draft=bool(body.get("allow_draft", True)),
+            allow_direct=bool(body.get("allow_direct", False)),
+            quality_floor=float(body.get("quality_floor") or 0),
+            accounts_root=DEFAULT_ACCOUNTS_ROOT,
+        )
+    except (AuthorizationError, AccountProfileError) as error:
+        raise HTTPException(status_code=400, detail={"error": {
+            "code": getattr(error, "code", "invalid_authorization"), "message": str(error),
+        }}) from error
+    return asdict(auth)
+
+
+@router.post("/ops/tick")
+def post_ops_tick() -> dict[str, Any]:
+    from pipeline.ops_runner import tick_operations
+    with deps._db() as conn:
+        result = tick_operations(
+            conn, now=_now(), accounts_root=DEFAULT_ACCOUNTS_ROOT,
+            projects_root=projects_api._PROJECTS_ROOT,
+        )
+    return {"scheduled": result.scheduled, "ran": result.ran, "failed": result.failed}

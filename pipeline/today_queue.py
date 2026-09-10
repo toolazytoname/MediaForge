@@ -64,7 +64,7 @@ def load_today(
     resolved = _load_resolutions(today_root)
     hidden = {
         key for key, item in resolved.items()
-        if item.get("action") in {"skip", "verify"}
+        if item.get("action") == "skip" or item.get("hidden") is True
     }
     projects = list_projects(projects_root=projects_root)
     todos: list[TodayItem] = []
@@ -166,14 +166,26 @@ def resolve_today_item(
     now: str,
     projects_root: str | Path = DEFAULT_PROJECTS_ROOT,
     today_root: str | Path = DEFAULT_TODAY_ROOT,
+    adapter: Any = None,
+    actor: str = "local",
 ) -> TodayResolution:
     if action not in _RESOLVE_ACTIONS:
         raise ValueError(f"invalid today action: {action}")
-    # verify/skip never call publishers. retry only records intent to edit.
+    hide = action in {"skip"}
     if action == "verify" and not ref_id.startswith(("missing:", "quality:")):
-        get_attempt(conn, ref_id)
+        prior = get_attempt(conn, ref_id)
+        if prior is None:
+            raise ValueError("verify target not found")
+        if adapter is not None and prior.outcome == "unknown":
+            from pipeline.delivery.service import verify_direct_receipt
+            verified = verify_direct_receipt(
+                conn, attempt_id=ref_id, adapter=adapter, actor=actor, now=now,
+            )
+            hide = verified.attempt.outcome == "success"
+        else:
+            hide = False
     payload = _load_resolutions(today_root)
-    payload[ref_id] = {"action": action, "at": now}
+    payload[ref_id] = {"action": action, "at": now, "hidden": hide}
     path = Path(today_root) / "resolutions.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")

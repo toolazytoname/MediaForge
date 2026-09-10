@@ -29,6 +29,7 @@ from pipeline.delivery.service import (
     preview_deliverable,
 )
 from pipeline.delivery.store import latest_attempts
+from pipeline.account_bindings import AccountBindingError, load_bindings
 from pipeline.account_identity import (
     AccountIdentityError,
     account_credentials_path,
@@ -165,9 +166,11 @@ def direct_publish(project_id: str, deliverable_id: str, body: dict[str, Any] = 
         platform = deliverable.targets[0]
         account_id = body.get("account_id")
         if not isinstance(account_id, str) or not account_id.strip():
+            account_id = _bound_account_id(project_id, platform)
+        if not isinstance(account_id, str) or not account_id.strip():
             raise HTTPException(status_code=400, detail={"error": {
                 "code": "account_id_required",
-                "message": "direct requires an explicit account_id",
+                "message": "direct requires an explicit account_id or a bound account",
             }})
         adapter, account = _adapter_for(cfg, platform, account_id=account_id.strip())
         with deps._db() as conn:
@@ -252,9 +255,11 @@ def draft(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(defa
         platform = deliverable.targets[0]
         account_id = body.get("account_id")
         if not isinstance(account_id, str) or not account_id.strip():
+            account_id = _bound_account_id(project_id, platform)
+        if not isinstance(account_id, str) or not account_id.strip():
             raise HTTPException(status_code=400, detail={"error": {
                 "code": "account_id_required",
-                "message": "draft requires an explicit account_id",
+                "message": "draft requires an explicit account_id or a bound account",
             }})
         adapter, account = _adapter_for(cfg, platform, account_id=account_id.strip())
         with deps._db() as conn:
@@ -272,6 +277,15 @@ def draft(project_id: str, deliverable_id: str, body: dict[str, Any] = Body(defa
     except (DeliverablesError, ValueError, FileNotFoundError) as error:
         raise HTTPException(status_code=400, detail={"error": {"code": "draft_unavailable", "message": str(error)}}) from error
     return attempt_to_dict(result)
+
+
+def _bound_account_id(project_id: str, platform: str) -> str | None:
+    try:
+        bindings = load_bindings(project_id, projects_root=_root())
+    except AccountBindingError:
+        return None
+    match = next((item for item in bindings.items if item.platform == platform), None)
+    return match.account_id if match else None
 
 
 def _adapter_for(

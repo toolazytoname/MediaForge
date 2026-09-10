@@ -84,6 +84,28 @@ def test_human_approval_does_not_travel_to_other_account(tmp_path):
         )
 
 
+def test_auto_delivery_requires_quality_floor(tmp_path):
+    project, profile, projects, accounts = _setup(tmp_path)
+    save_authorization(
+        profile.id, actor="lazy", now=NOW, accounts_root=accounts,
+        operations_enabled=True, allow_draft=True, allow_direct=True,
+        quality_floor=7.0,
+    )
+    with pytest.raises(AuthorizationError, match="quality"):
+        assert_account_may_deliver(
+            project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
+            path="auto", projects_root=projects, accounts_root=accounts,
+        )
+    record_quality_result(
+        profile.id, project_id=project.id, score=8.0, verdict="pass",
+        now=NOW, accounts_root=accounts,
+    )
+    assert_account_may_deliver(
+        project.id, platform="wechat_mp", account_id=profile.id, mode="draft",
+        path="auto", projects_root=projects, accounts_root=accounts,
+    )
+
+
 def test_quality_result_is_machine_only(tmp_path):
     _project, profile, _projects, accounts = _setup(tmp_path)
     result = record_quality_result(

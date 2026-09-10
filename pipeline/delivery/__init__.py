@@ -8,6 +8,7 @@ from pipeline.delivery.service import (
     create_draft,
     create_export_delivery,
     create_official_delivery,
+    verify_direct_receipt,
     preview_deliverable,
 )
 from pipeline.delivery.store import (
@@ -30,6 +31,7 @@ __all__ = [
     "create_draft",
     "create_export_delivery",
     "create_official_delivery",
+    "verify_direct_receipt",
     "get_attempt_by_key",
     "insert_attempt",
     "is_project_bridged_publication",

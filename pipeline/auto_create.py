@@ -45,6 +45,8 @@ def run_auto_create(
     score_fn: ScoreFn | None = None,
     visual_fn: VisualFn | None = None,
     max_revisions: int = 2,
+    account_id: str | None = None,
+    accounts_root: str | Path | None = None,
 ) -> AutoCreateResult:
     if max_revisions > 2:
         max_revisions = 2
@@ -59,7 +61,9 @@ def run_auto_create(
     _assert_not_duplicate_theme(project, projects_root=projects_root)
 
     writer = draft_fn or _default_draft
-    scorer = score_fn or _default_score
+    scorer = score_fn or (lambda title, body: score_manuscript(
+        title, body, sources=board.sources, interview=interview,
+    )[:2])
     title, body = writer(project, interview, board, None)
     verdict, _score = scorer(title, body)
     revisions = 0
@@ -67,6 +71,12 @@ def run_auto_create(
         revisions += 1
         title, body = writer(project, interview, board, f"质量不合格：{verdict}")
         verdict, _score = scorer(title, body)
+    if account_id and accounts_root is not None:
+        from pipeline.account_authorization import record_quality_result
+        record_quality_result(
+            account_id, project_id=project_id, score=float(_score),
+            verdict=verdict, now=now, accounts_root=accounts_root,
+        )
     if verdict != "pass":
         raise AutoCreateError("质量门禁不合格，已暂停，不进入交付", code="quality_paused")
     if _is_theme_loop(project, body):
@@ -75,12 +85,14 @@ def run_auto_create(
     created_master = False
     master = master_documents.load_master(project_id, projects_root=projects_root)
     if master is None:
-        master_documents.save_manual(
+        master = master_documents.save_manual(
             project_id, title=title, body=body, now=now, projects_root=projects_root,
         )
         created_master = True
-    if visual_fn is not None:
-        visual_fn(project_id)
+    visuals_fn = visual_fn or (lambda pid: _default_visuals(pid, now=now, projects_root=projects_root))
+    visuals_fn(project_id)
+    master = master_documents.load_master(project_id, projects_root=projects_root)
+    assert master is not None
 
     created_platforms: list[str] = []
     existing = {
@@ -90,8 +102,10 @@ def run_auto_create(
     for platform in ("wechat_mp", "toutiao"):
         if platform in existing:
             continue
-        variants.create_from_master(
-            project_id, platform, now=now, projects_root=projects_root,
+        adapted_title, summary, adapted_body = _adapt_for_platform(master, platform)
+        variants.create_adapted(
+            project_id, platform, title=adapted_title, summary=summary,
+            body=adapted_body, now=now, projects_root=projects_root,
         )
         created_platforms.append(platform)
     return AutoCreateResult(
@@ -159,10 +173,80 @@ def _parse_article(text: str) -> dict[str, str]:
     return {key: str(payload[key]).strip() for key in ("title", "body")}
 
 
+def score_manuscript(
+    title: str,
+    body: str,
+    *,
+    sources: tuple[Any, ...] = (),
+    interview: ProjectInterview | None = None,
+) -> tuple[str, float, tuple[str, ...]]:
+    reasons: list[str] = []
+    text = body.strip()
+    if not title.strip() or len(text) < 800:
+        reasons.append("too_short")
+    words = text.split()
+    unique_ratio = len(set(words)) / max(len(words), 1)
+    if unique_ratio < 0.28:
+        reasons.append("low_diversity")
+    from collections import Counter
+    chunks = [text[index:index + 20] for index in range(0, min(len(text), 2000), 20)]
+    common = Counter(chunk for chunk in chunks if chunk.strip()).most_common(1)
+    if common and common[0][1] >= 5:
+        reasons.append("repetition")
+    cliches = ("赋能", "抓手", "底层逻辑", "打造新格局", "这是自动内容包生成的主稿候选")
+    if any(item in text for item in cliches):
+        reasons.append("cliche")
+    if sources:
+        grounded = any(
+            (getattr(item, "title", "") and getattr(item, "title")[:4] in text)
+            or (getattr(item, "summary", "") and str(getattr(item, "summary"))[:6] in text)
+            for item in sources
+        )
+        if not grounded:
+            reasons.append("ungrounded")
+    if interview is not None and interview.viewpoint.strip():
+        token = interview.viewpoint.strip()[:6]
+        if token not in text and interview.viewpoint.strip() not in text:
+            reasons.append("no_viewpoint")
+    if reasons:
+        return "fail", 3.0, tuple(reasons)
+    return "pass", 8.0, ()
+
+
 def _default_score(title: str, body: str) -> tuple[str, float]:
-    if len(body.strip()) < 800 or not title.strip():
-        return "fail", 3.0
-    return "pass", 8.0
+    verdict, score, _reasons = score_manuscript(title, body)
+    return verdict, score
+
+
+def _adapt_for_platform(master: Any, platform: str) -> tuple[str, str, str]:
+    summary = master.body.strip().replace("\n", " ")[:80]
+    if platform == "toutiao":
+        title = master.title.strip()[:30]
+        body = master.body.replace("## ", "**").replace("# ", "")
+        return title, summary, body
+    title = master.title.strip()[:64]
+    body = master.body
+    return title, summary, body
+
+
+def _default_visuals(project_id: str, *, now: str, projects_root: str | Path) -> None:
+    from pipeline import visuals
+    plan = visuals.load_visuals(project_id, projects_root=projects_root)
+    if not plan.slots:
+        visuals.save_plan(
+            project_id,
+            bible={"style": "克制写实"},
+            slots=[
+                {"id": "vsl_cover", "purpose": "封面", "paragraph_anchor": None, "direction": "封面", "aspect_ratio": "16:9"},
+                {"id": "vsl_one", "purpose": "正文插图一", "paragraph_anchor": "正文", "direction": "插图", "aspect_ratio": "16:9"},
+                {"id": "vsl_two", "purpose": "正文插图二", "paragraph_anchor": "正文", "direction": "插图", "aspect_ratio": "16:9"},
+            ],
+            projects_root=projects_root,
+        )
+        plan = visuals.load_visuals(project_id, projects_root=projects_root)
+    if any(item.status == "selected" and item.file_path for item in plan.assets):
+        return
+    raise AutoCreateError("自动配图尚未完成，已暂停", code="visuals_required")
 
 
 def _is_theme_loop(project: Project, body: str) -> bool:
@@ -193,4 +277,5 @@ __all__ = [
     "AutoCreateResult",
     "build_draft_prompt",
     "run_auto_create",
+    "score_manuscript",
 ]

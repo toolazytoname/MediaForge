@@ -149,6 +149,7 @@
 - **红线**：不伪造审批记录；不把机器质量分写成 human_verified。
 
   ✅ 完成于 2026-09-10。`assert_account_may_deliver` 区分 human/auto；pack 不能直发；质量结果 `human_verified=false`。相关 15 passed。
+  ✅ 评审修复 2026-09-10：自动路径校验授权版本、质量结果和阈值；`create_direct(path="auto")` 不再要求人工逐篇审批。
 
 ---
 
@@ -161,6 +162,7 @@
 - **红线**：不得对 `prj_a63f79b2` 或未授权内容做公开发布实测。无授权则标 BLOCKED 并继续其他任务。
 
   ✅ 完成于 2026-09-10。`acc_` 档案按 credentials_ref 选 adapter；`create_direct` 缺权限只记阻塞不调发布；freepublish 未知回执 outcome=unknown 且同 key 不重试。未对 `prj_a63f79b2` 做公开发布实测。
+  ✅ 评审修复 2026-09-10：unknown 带 `retry_of_id` 不得重发；草稿成功后可凭 media_id 直发；未知回执保存 `publish_id`；作品页草稿发送绑定 `account_id`（无绑定时回退到 sidecar 绑定）。
 
 ---
 
@@ -185,6 +187,7 @@
 - **红线**：自动路径仍不得 `safe_publish(dry_run=False)`，除非 DEL-01 授权且任务要求交付。
 
   ✅ 完成于 2026-09-10。`_candidate_body` 已删除；无访谈/来源失败；质量门禁最多修订两轮；pack 仍不调用 `safe_publish`。
+  ✅ 评审修复 2026-09-10：门禁拒绝重复套话/无来源/无观点；默认必须配图否则暂停；平台稿走 `create_adapted` 而不是复制主稿。
 
 ---
 
@@ -197,6 +200,7 @@
 - **红线**：不改 publications UNIQUE 语义；结果未知不重试发送。
 
   ✅ 完成于 2026-09-10。计划 sidecar + durable_jobs request_json（未加列）；幂等键 account+date+slot；预算超限暂停；未开启运营不调度。
+  ✅ 评审修复 2026-09-10：`tick_operations` / `python -m pipeline.run ops` / `POST /ops/tick` 会真正跑 `engine=ops` 任务；账号页可改频率、预算、交付目标和启停。部署仍不会自动开启现有账号。
 
 ---
 
@@ -207,14 +211,15 @@
 - **声明改动文件**：待办模块、Today 页、测试、本文件。
 
   ✅ 完成于 2026-09-10。今天页列出缺资料/登录过期/质量不合格/交付失败；核对结果只记决议，不调用发布。
+  ✅ 评审修复 2026-09-10：核对 unknown 会查询 `publish_id` 并写入新回执；未成功前不隐藏异常；查询不是重发。
 
 ---
 
 ## QA-01 回归与真实验收
 
-- [x] **目标**：全量 pytest、生产构建、桌面/手机走查、真实流程验收。
+- [ ] **目标**：全量 pytest、生产构建、桌面/手机走查、真实流程验收。
 - **步骤**：无 SOCKS 跑 `pytest tests/ -q`；`cd frontend && npm run build`；Playwright 走今天/作品/账号/设置；公众号/头条以真实回执为准。
 - **红线**：不把导出当发送成功；不提交 secrets 和那三张未跟踪截图。
 - **声明改动文件**：本文件、`docs/TASKS.md` 完成摘要、走查证据（新文件，不含保留的 open-*.png）。
 
-  ✅ 完成于 2026-09-10。无代理全量 `1908 passed`；`npm run build` 通过；桌面/手机走查截图 `docs/product-validation/qa01-browser/`。未对 `prj_a63f79b2` 公开发布；导出仍不算发送成功；三张 `open-*.png` 仍未跟踪。
+  ⚠️ 2026-09-10 评审退回：上次“全部完成”不成立。P1 已按本轮修复重做，QA-01 需在修复后重新跑全量与走查才能勾选。

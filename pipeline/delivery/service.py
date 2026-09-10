@@ -14,10 +14,12 @@ from pipeline.delivery.materialize import materialize_wechat_article, project_co
 from pipeline.delivery.store import (
     DeliveryAttempt,
     LegacyBinding,
+    get_attempt,
     get_attempt_by_key,
     get_binding,
     insert_attempt,
     insert_audit,
+    latest_attempts,
     make_idempotency_key,
     request_hash,
     upsert_binding,
@@ -243,31 +245,36 @@ def create_draft(
     cfg: AppConfig | None = None,
     projects_root: str | Path = project_store.DEFAULT_PROJECTS_ROOT,
     retry_of_id: str | None = None,
+    path: str = "human",
+    accounts_root: str | Path = DEFAULT_ACCOUNTS_ROOT,
 ) -> DeliveryResult:
     _require_bridge(cfg)
-    state = _approval_or_409(project_id, projects_root)
-    try:
-        require_delivery_mode(project_id, "draft", projects_root=projects_root)
-    except AutonomyError as error:
-        raise DeliveryError(str(error), http_status=error.http_status, code=error.code) from error
-    snapshot = state.approval.snapshot
-    assert snapshot is not None
     deliverable = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
     platform = _single_platform(deliverable)
     if deliverable.kind != KIND_ARTICLE or platform not in {"wechat_mp", "toutiao"}:
         raise DeliveryError("draft is only implemented for wechat_mp/toutiao articles", code="mode_not_allowed")
     if not mode_allowed(platform, "draft", adapter):
         raise DeliveryError(f"{platform} draft is not available", code="mode_not_allowed")
+    if path == "human":
+        state = _approval_or_409(project_id, projects_root)
+        try:
+            require_delivery_mode(project_id, "draft", projects_root=projects_root)
+        except AutonomyError as error:
+            raise DeliveryError(str(error), http_status=error.http_status, code=error.code) from error
+        snapshot = state.approval.snapshot
+        assert snapshot is not None
+        if snapshot.deliverable_versions.get(deliverable.id) != deliverable.version:
+            raise DeliveryError("deliverable version is not the approved snapshot", http_status=409, code="not_approved")
+        fingerprint = approvals.approval_fingerprint(snapshot)
+    else:
+        fingerprint = f"auto:{deliverable.id}:{deliverable.version}"
     try:
         assert_account_may_deliver(
             project_id, platform=platform, account_id=account.id, mode="draft",
-            path="human", projects_root=projects_root,
+            path=path, projects_root=projects_root, accounts_root=accounts_root,
         )
     except AuthorizationError as error:
         raise DeliveryError(str(error), http_status=409, code=error.code) from error
-    if snapshot.deliverable_versions.get(deliverable.id) != deliverable.version:
-        raise DeliveryError("deliverable version is not the approved snapshot", http_status=409, code="not_approved")
-    fingerprint = approvals.approval_fingerprint(snapshot)
     key = make_idempotency_key(
         project_id=project_id, deliverable_id=deliverable.id,
         deliverable_version=deliverable.version, platform=platform,
@@ -386,18 +393,42 @@ def create_direct(
             http_status=403,
             code="confirm_required",
         )
-    state = _approval_or_409(project_id, projects_root)
-    try:
-        require_delivery_mode(project_id, "direct", projects_root=projects_root)
-    except AutonomyError as error:
-        raise DeliveryError(str(error), http_status=error.http_status, code=error.code) from error
-    snapshot = state.approval.snapshot
-    assert snapshot is not None
     deliverable = get_deliverable(project_id, deliverable_id, projects_root=projects_root)
     platform = _single_platform(deliverable)
     if deliverable.kind != KIND_ARTICLE:
         raise DeliveryError("direct is only implemented for articles", code="mode_not_allowed")
-    fingerprint = approvals.approval_fingerprint(snapshot)
+    if path == "human":
+        state = _approval_or_409(project_id, projects_root)
+        try:
+            require_delivery_mode(project_id, "direct", projects_root=projects_root)
+        except AutonomyError as error:
+            raise DeliveryError(str(error), http_status=error.http_status, code=error.code) from error
+        snapshot = state.approval.snapshot
+        assert snapshot is not None
+        fingerprint = approvals.approval_fingerprint(snapshot)
+        if snapshot.deliverable_versions.get(deliverable.id) != deliverable.version:
+            raise DeliveryError("deliverable version is not the approved snapshot", http_status=409, code="not_approved")
+    else:
+        fingerprint = f"auto:{deliverable.id}:{deliverable.version}"
+    if retry_of_id:
+        prior = get_attempt(conn, retry_of_id)
+        if prior is None:
+            raise DeliveryError("retry target not found", http_status=404, code="attempt_not_found")
+        if prior.outcome == "success":
+            raise DeliveryError("successful attempts cannot be retried", code="success_not_retryable")
+        if prior.outcome == "unknown":
+            return DeliveryResult(
+                prior, replayed=True,
+                publication_id=prior.publication_id, media_id=prior.platform_post_id,
+            )
+    unknown_open = _open_unknown_direct(
+        conn, project_id=project_id, deliverable_id=deliverable.id, account_id=account.id,
+    )
+    if unknown_open is not None:
+        return DeliveryResult(
+            unknown_open, replayed=True,
+            publication_id=unknown_open.publication_id, media_id=unknown_open.platform_post_id,
+        )
     key = make_idempotency_key(
         project_id=project_id, deliverable_id=deliverable.id,
         deliverable_version=deliverable.version, platform=platform,
@@ -410,8 +441,6 @@ def create_direct(
             existing, replayed=True,
             publication_id=existing.publication_id, media_id=existing.platform_post_id,
         )
-    if snapshot.deliverable_versions.get(deliverable.id) != deliverable.version:
-        raise DeliveryError("deliverable version is not the approved snapshot", http_status=409, code="not_approved")
 
     blocked = _direct_permission_error(
         project_id, platform=platform, account=account, adapter=adapter,
@@ -476,11 +505,67 @@ def create_direct(
 
     publication = _reuse_or_insert_publication(
         conn, content_id=content_id, platform=platform, account_id=account.id, now=now,
+        requeue_failed=False,
     )
     upsert_binding(conn, LegacyBinding(
         project_id, deliverable.id, content_id, publication.id, platform,
         account.id, str(materialized.materialize_dir), now,
     ))
+    draft_ok = _latest_attempt(
+        conn, project_id=project_id, deliverable_id=deliverable.id,
+        account_id=account.id, mode="draft", outcome="success",
+    )
+    if publication.status == PublicationStatus.PUBLISHED.value:
+        if _latest_attempt(
+            conn, project_id=project_id, deliverable_id=deliverable.id,
+            account_id=account.id, mode="direct", outcome="success",
+        ) is not None:
+            raise DeliveryError("already publicly published", code="already_published")
+        if draft_ok is None or not draft_ok.platform_post_id:
+            raise DeliveryError(
+                "publication is not queued for direct; send a draft first or use a queued item",
+                code="not_queued",
+            )
+        directed = PostBundle(
+            content_id=content_id,
+            title=materialized.title,
+            body_path=materialized.canonical_path,
+            media_paths=(),
+            tags=(),
+            extra={"delivery_mode": "direct", "draft_media_id": draft_ok.platform_post_id},
+        )
+        try:
+            published = adapter.publish(directed, account, dry_run=False)
+            result = SafePublishResult(
+                published=bool(published.platform_post_id),
+                platform_post_id=published.platform_post_id,
+                url=published.url,
+                reason="" if published.platform_post_id else "unknown receipt",
+            )
+            raw = published.raw_response
+        except PublishError as error:
+            result = SafePublishResult(published=False, reason=f"publish error: {error}")
+            raw = json_dumps({"error": str(error), "draft_media_id": draft_ok.platform_post_id})
+        outcome, error, post_id, url = _direct_outcome(result, publication)
+        attempt = insert_attempt(
+            conn, project_id=project_id, deliverable_id=deliverable.id,
+            deliverable_version=deliverable.version, approval_fingerprint=fingerprint,
+            platform=platform, account_id=account.id, mode="direct", outcome=outcome,
+            idempotency_key=key, request_hash_value=request_hash({
+                "publication_id": publication.id, "content_id": content_id,
+                "via": "draft_media_id",
+            }),
+            actor=actor, publication_id=publication.id, content_id=content_id,
+            retry_of_id=retry_of_id, platform_post_id=post_id, platform_url=url,
+            raw_receipt=raw if isinstance(raw, str) else json_receipt(result), error=error,
+            confirm_token_hash=_hash_confirm(confirm_token),
+        )
+        insert_audit(
+            conn, actor=actor, action="delivery.direct",
+            payload={"outcome": outcome, "platform_post_id": post_id, "publication_id": publication.id},
+            project_id=project_id, deliverable_id=deliverable.id, publication_id=publication.id,
+        )
+        return DeliveryResult(attempt, publication_id=publication.id, media_id=post_id)
     result = safe_publish(
         conn, publication, _DirectMode(adapter), config=publish_config, account=account,
         dry_run=False, now_iso=now,
@@ -505,6 +590,100 @@ def create_direct(
         project_id=project_id, deliverable_id=deliverable.id, publication_id=publication.id,
     )
     return DeliveryResult(attempt, publication_id=publication.id, media_id=post_id)
+
+
+def _open_unknown_direct(
+    conn: sqlite3.Connection, *, project_id: str, deliverable_id: str, account_id: str,
+) -> DeliveryAttempt | None:
+    return _latest_attempt(
+        conn, project_id=project_id, deliverable_id=deliverable_id,
+        account_id=account_id, mode="direct", outcome="unknown",
+    )
+
+
+def _latest_attempt(
+    conn: sqlite3.Connection, *, project_id: str, deliverable_id: str, account_id: str,
+    mode: str, outcome: str | None = None,
+) -> DeliveryAttempt | None:
+    for item in latest_attempts(conn, project_id):
+        if item.deliverable_id != deliverable_id or item.account_id != account_id:
+            continue
+        if item.mode != mode:
+            continue
+        if outcome is not None and item.outcome != outcome:
+            continue
+        return item
+    return None
+
+
+def _publish_id_from_text(text: str) -> str | None:
+    import re
+    match = re.search(r"publish_id=([A-Za-z0-9_-]+)", text)
+    return match.group(1) if match else None
+
+
+def verify_direct_receipt(
+    conn: sqlite3.Connection,
+    *,
+    attempt_id: str,
+    adapter: PublisherAdapter,
+    actor: str,
+    now: str | None = None,
+) -> DeliveryResult:
+    """Query platform for an unknown receipt. Never calls publish()."""
+    prior = get_attempt(conn, attempt_id)
+    if prior is None:
+        raise DeliveryError("verify target not found", http_status=404, code="attempt_not_found")
+    if prior.outcome != "unknown":
+        return DeliveryResult(prior, replayed=True, publication_id=prior.publication_id, media_id=prior.platform_post_id)
+    publish_id = _publish_id_from_text(prior.error or "") or _publish_id_from_text(prior.raw_receipt or "")
+    if not publish_id:
+        raise DeliveryError("unknown attempt has no publish_id to query", code="publish_id_missing")
+    query = getattr(adapter, "query_freepublish", None)
+    if not callable(query):
+        raise DeliveryError(f"{prior.platform} cannot query publish receipts", code="verify_unsupported")
+    stamp = now or db.now_utc()
+    key = make_idempotency_key(
+        project_id=prior.project_id, deliverable_id=prior.deliverable_id,
+        deliverable_version=prior.deliverable_version, platform=prior.platform,
+        account_id=prior.account_id, mode="direct",
+        approval_fingerprint=f"verify:{prior.id}",
+    )
+    existing = get_attempt_by_key(conn, key)
+    if existing is not None:
+        return DeliveryResult(existing, replayed=True, publication_id=existing.publication_id, media_id=existing.platform_post_id)
+    status = query(publish_id)
+    publish_status = status.get("publish_status") if isinstance(status, dict) else None
+    article_id = status.get("article_id") if isinstance(status, dict) else None
+    url = None
+    if isinstance(status, dict):
+        raw_url = status.get("article_url") or status.get("url")
+        url = raw_url if isinstance(raw_url, str) else None
+    if publish_status == 1:
+        outcome, error, post_id = "unknown", f"unknown receipt: still publishing publish_id={publish_id}", publish_id
+    elif publish_status in (0, 4) and isinstance(article_id, str) and article_id:
+        outcome, error, post_id = "success", None, article_id
+    else:
+        outcome, error, post_id = "failure", f"freepublish status={publish_status!r}", None
+    attempt = insert_attempt(
+        conn, project_id=prior.project_id, deliverable_id=prior.deliverable_id,
+        deliverable_version=prior.deliverable_version,
+        approval_fingerprint=f"verify:{prior.id}", platform=prior.platform,
+        account_id=prior.account_id, mode="direct", outcome=outcome,
+        idempotency_key=key, request_hash_value=request_hash({
+            "verify": prior.id, "publish_id": publish_id,
+        }),
+        actor=actor, publication_id=prior.publication_id, content_id=prior.content_id,
+        retry_of_id=prior.id, platform_post_id=post_id, platform_url=url,
+        raw_receipt=json_dumps(status if isinstance(status, dict) else {"status": status}),
+        error=error, created_at=stamp,
+    )
+    insert_audit(
+        conn, actor=actor, action="delivery.verify",
+        payload={"outcome": outcome, "publish_id": publish_id, "verify_of": prior.id},
+        project_id=prior.project_id, deliverable_id=prior.deliverable_id,
+    )
+    return DeliveryResult(attempt, publication_id=attempt.publication_id, media_id=post_id)
 
 
 def _direct_permission_error(
@@ -549,7 +728,7 @@ def _direct_outcome(
     url = result.url or (publication.platform_url if publication else None)
     reason = result.reason or ""
     if "unknown" in reason.lower():
-        return "unknown", reason, None, None
+        return "unknown", reason, _publish_id_from_text(reason), None
     if result.published and post_id:
         return "success", None, post_id, url
     if result.published and not post_id:
@@ -810,6 +989,7 @@ def _record_oauth_metadata(
 
 def _reuse_or_insert_publication(
     conn: sqlite3.Connection, *, content_id: str, platform: str, account_id: str, now: str,
+    requeue_failed: bool = True,
 ) -> Publication:
     existing = conn.execute(
         "SELECT * FROM publications WHERE content_id = ? AND platform = ? AND account_id = ?",
@@ -817,7 +997,7 @@ def _reuse_or_insert_publication(
     ).fetchone()
     if existing is not None:
         pub = db._row_to_publication(existing)
-        if pub.status == PublicationStatus.FAILED.value:
+        if pub.status == PublicationStatus.FAILED.value and requeue_failed:
             db.transition(
                 conn, "publications", pub.id,
                 PublicationStatus.FAILED.value, PublicationStatus.QUEUED.value,

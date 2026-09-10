@@ -108,6 +108,29 @@ def load_authorization(
     )
 
 
+def load_quality_results(
+    account_id: str, *, accounts_root: str | Path = DEFAULT_ACCOUNTS_ROOT,
+) -> tuple[QualityResult, ...]:
+    path = Path(accounts_root) / account_id / _QUALITY_NAME
+    if not path.exists():
+        return ()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        return ()
+    items = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        items.append(QualityResult(
+            project_id=str(item.get("project_id") or ""),
+            score=float(item.get("score") or 0),
+            verdict=str(item.get("verdict") or ""),
+            human_verified=bool(item.get("human_verified")),
+            recorded_at=str(item.get("recorded_at") or ""),
+        ))
+    return tuple(items)
+
+
 def record_quality_result(
     account_id: str,
     *,
@@ -179,14 +202,28 @@ def assert_account_may_deliver(
         raise AuthorizationError(
             f"operations disabled for {account_id}", code="operations_disabled",
         ) from error
-    if not auth.operations_enabled:
+    if not auth.operations_enabled or not auth.enabled_at:
         raise AuthorizationError(
             f"operations disabled for {account_id}", code="operations_disabled",
         )
+    if auth.version < 1:
+        raise AuthorizationError("authorization version is invalid", code="auth_version_invalid")
     if mode == "draft" and not auth.allow_draft:
         raise AuthorizationError("account is not authorized for draft", code="draft_not_allowed")
     if mode == "direct" and not auth.allow_direct:
         raise AuthorizationError("account is not authorized for direct", code="direct_not_allowed")
+    results = [
+        item for item in load_quality_results(account_id, accounts_root=accounts_root)
+        if item.project_id == project_id
+    ]
+    if not results:
+        raise AuthorizationError("no quality result for automatic delivery", code="quality_missing")
+    latest = results[-1]
+    if latest.score < auth.quality_floor:
+        raise AuthorizationError(
+            f"quality {latest.score} below floor {auth.quality_floor}",
+            code="quality_below_floor",
+        )
 
 
 def _auth_path(root: str | Path, account_id: str) -> Path:
@@ -213,6 +250,7 @@ __all__ = [
     "QualityResult",
     "assert_account_may_deliver",
     "load_authorization",
+    "load_quality_results",
     "record_quality_result",
     "save_authorization",
 ]

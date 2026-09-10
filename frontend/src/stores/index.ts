@@ -1775,10 +1775,11 @@ export const useApprovalsStore = defineStore('approvals', () => {
   async function exportGallery(projectId: string, deliverableId: string, actor: string) {
     return (await apiPost<DeliveryAttemptResult>(`/projects/${projectId}/deliverables/${deliverableId}/export`, { actor })).data
   }
-  async function createWechatDraft(projectId: string, actor: string, retryOfId?: string | null) {
+  async function createWechatDraft(projectId: string, actor: string, retryOfId?: string | null, accountId?: string | null) {
     return (await apiPost<DeliveryAttemptResult>(`/projects/${projectId}/deliverables/dlv_article_wechat_mp/draft`, {
       actor,
       ...(retryOfId ? { retry_of_id: retryOfId } : {}),
+      ...(accountId ? { account_id: accountId } : {}),
     })).data
   }
   return { status, loading, error, load, recheck, decide, exportPackage, exportGallery, createWechatDraft }

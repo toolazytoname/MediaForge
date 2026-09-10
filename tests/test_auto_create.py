@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from pipeline import research
-from pipeline.auto_create import AutoCreateError, run_auto_create
+from pipeline.auto_create import AutoCreateError, run_auto_create, score_manuscript
 from pipeline.delivery import service as delivery_service
 from pipeline.interviews import confirm_interview, save_interview
 from pipeline.master_documents import load_master
@@ -36,15 +36,62 @@ def _source(project_id, root):
     )
 
 
+_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc`\x00\x00"
+    b"\x00\x02\x00\x01\xe5'\xde\xfc\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
 def _draft_fn(project, interview, board, critique=None):
-    body = (
-        f"{interview.viewpoint}\n\n{interview.motive}\n\n{interview.experience}\n\n"
-        f"来源：{board.sources[0].title} {board.sources[0].summary}\n\n"
-        "这不是主题循环粘贴，而是根据访谈和来源写成的候选主稿。" * 20
-    )
+    source = board.sources[0]
+    parts = [
+        interview.viewpoint, interview.motive, interview.experience,
+        f"根据来源《{source.title}》，{source.summary}。",
+    ]
+    extras = [
+        "把验收标准写进纪要，而不是口头承诺下周再看。",
+        "来源摘要只核实过的公开事实，不能扩写成未发生的案例。",
+        "读者要的是可执行的边界，而不是更快的口号。",
+        "延期那天改的是顺序：先核对事实，再谈排期。",
+        "标题承诺的价值必须能在正文里被指出来。",
+        "反方意见是速度优先，但缺少核对会把错误放大。",
+        "插图只服务已经写清的判断，不拿氛围图充数。",
+        "微信稿保留层次，头条稿缩短标题，二者主张相同。",
+        "未读原书的情节一律不编，只写作者确认过的经历。",
+        "数字只用来源里出现过的，其余写成待确认。",
+        "结尾回到观点：边界比速度更值得署名。",
+        "如果做不到核对，就停在草稿，不要送直发。",
+        "账号定位是克制写实，不堆砌空洞口号。",
+        "下一篇仍从同一条公开报道的限制条件起步。",
+    ]
+    parts.extend(extras)
+    parts.extend(f"补充{index}：{line}" for index, line in enumerate(extras))
+    parts.append("最后再核对一次公开报道的限制条件，确认正文里每一处判断都站得住，并且篇幅足够支撑一篇可审阅长文。")
     if critique:
-        body += f"\n修订：{critique}"
-    return project.title + "·有依据", body
+        parts.append(f"修订说明：{critique}")
+    return project.title + "·有依据", "\n\n".join(parts)
+
+
+def _visual_fn(project_id, root):
+    from pipeline import visuals
+    slots = [
+        {"id": "vsl_cover", "purpose": "封面", "paragraph_anchor": None, "direction": "封面", "aspect_ratio": "16:9"},
+        {"id": "vsl_one", "purpose": "正文插图一", "paragraph_anchor": "正文", "direction": "插图", "aspect_ratio": "16:9"},
+        {"id": "vsl_two", "purpose": "正文插图二", "paragraph_anchor": "正文", "direction": "插图", "aspect_ratio": "16:9"},
+    ]
+    visuals.save_plan(project_id, bible={"style": "plain"}, slots=slots, projects_root=root)
+    for index, slot in enumerate(slots):
+        asset_id = f"vas_auto_{index}"
+        png = root / project_id / "assets" / f"{asset_id}.png"
+        png.parent.mkdir(parents=True, exist_ok=True)
+        png.write_bytes(_PNG)
+        asset = visuals.record_asset(
+            project_id, slot_id=slot["id"], prompt="visual", model="fake", size="16:9",
+            cost_usd=0, now=NOW, file_path=f"assets/{asset_id}.png",
+            status="candidate", asset_id=asset_id, projects_root=root,
+        )
+        visuals.select_asset(project_id, asset.id, reason="合适", rating=4, projects_root=root)
 
 
 def test_prepare_pack_rejects_missing_interview_and_sources(tmp_path):
@@ -66,6 +113,7 @@ def test_prepare_pack_body_is_not_theme_loop(tmp_path, monkeypatch):
     monkeypatch.setattr(delivery_service, "safe_publish", spy)
     result = prepare_pack(
         "prj_packreal", now=NOW, projects_root=root, draft_fn=_draft_fn,
+        visual_fn=lambda pid: _visual_fn(pid, root),
     )
     master = load_master("prj_packreal", projects_root=root)
     assert master is not None
@@ -98,6 +146,14 @@ def test_gate_failure_pauses_after_two_revisions(tmp_path):
     assert load_master("prj_packgate", projects_root=root) is None
 
 
+def test_score_rejects_repeated_filler():
+    verdict, _score, reasons = score_manuscript(
+        "标题", "空洞套话赋能抓手底层逻辑。" * 80,
+    )
+    assert verdict == "fail"
+    assert reasons
+
+
 def test_book_without_excerpt_is_marked_unread(tmp_path):
     root = tmp_path / "projects"
     _project(root, autonomy="pack", project_id="prj_packbook")
@@ -109,5 +165,8 @@ def test_book_without_excerpt_is_marked_unread(tmp_path):
         seen["unread"] = interview.unread_books
         return _draft_fn(project, interview, board, critique)
 
-    run_auto_create("prj_packbook", now=NOW, projects_root=root, draft_fn=capture)
+    run_auto_create(
+        "prj_packbook", now=NOW, projects_root=root, draft_fn=capture,
+        visual_fn=lambda pid: _visual_fn(pid, root),
+    )
     assert "未读书" in seen["unread"]

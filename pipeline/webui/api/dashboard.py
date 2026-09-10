@@ -84,10 +84,21 @@ def post_today_resolve(ref_id: str, body: dict[str, Any] = Body(default_factory=
             "code": "invalid_today_action", "message": "action must be skip, verify, or retry",
         }})
     from datetime import datetime, timezone
+    from pipeline.delivery.store import get_attempt
+    from pipeline.webui.api.delivery import _adapter_for
     with deps._db() as conn:
+        adapter = None
+        prior = get_attempt(conn, ref_id)
+        cfg, _err = deps.get_config()
+        if prior is not None and cfg is not None and action == "verify":
+            try:
+                adapter, _account = _adapter_for(cfg, prior.platform, account_id=prior.account_id)
+            except Exception:
+                adapter = None
         resolved = resolve_today_item(
             conn, ref_id=ref_id, action=action,
             now=datetime.now(timezone.utc).isoformat(),
             projects_root=projects_api._PROJECTS_ROOT,
+            adapter=adapter, actor=str(payload.get("actor") or "local"),
         )
     return {"ref_id": resolved.ref_id, "action": resolved.action, "at": resolved.at}

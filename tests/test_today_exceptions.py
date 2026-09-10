@@ -81,4 +81,4 @@ def test_verify_does_not_call_publish(tmp_path, monkeypatch):
     assert resolved.action == "verify"
     spy.assert_not_called()
     snap = load_today(conn, projects_root=projects, today_root=tmp_path / "today")
-    assert not any(item.ref_id == attempt.id for item in snap.exceptions)
+    assert any(item.ref_id == attempt.id for item in snap.exceptions)

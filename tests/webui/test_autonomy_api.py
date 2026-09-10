@@ -136,11 +136,11 @@ def test_next_action_and_visual_library_and_pack_prepare(tmp_path, monkeypatch):
         "prj_pack_api", title="来源", reference="https://example.com/p",
         summary="已核实公开事实", now="2026-08-09T00:01:40+00:00", projects_root=root,
     )
+    from tests.test_auto_create import _draft_fn, _visual_fn
+    monkeypatch.setattr("pipeline.auto_create._default_draft", _draft_fn)
     monkeypatch.setattr(
-        "pipeline.auto_create._default_draft",
-        lambda project, interview, board, critique=None: (
-            "有依据的主稿", (interview.viewpoint + " 已核实公开事实，这段话用于满足质量门禁字数。\n") * 40,
-        ),
+        "pipeline.auto_create._default_visuals",
+        lambda project_id, now=None, projects_root=None: _visual_fn(project_id, root),
     )
     prepared = client.post("/api/v1/projects/prj_pack_api/pack/prepare")
     assert prepared.status_code == 201

@@ -944,6 +944,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 1 if has_fail else 0
 
 
+def cmd_ops(args: argparse.Namespace) -> int:
+    """Run due account operation jobs. Does not enable accounts."""
+    from pipeline.ops_runner import tick_operations
+    conn = db.connect(_DB_PATH)
+    db.init_db(conn)
+    result = tick_operations(conn, now=db.now_utc())
+    print(f"ops tick scheduled={result.scheduled} ran={result.ran} failed={result.failed}")
+    return 1 if result.failed else 0
+
+
 def cmd_webui(args: argparse.Namespace) -> int:
     """启动本地 Web 控制台（M3-3）。
 
@@ -1067,6 +1077,9 @@ def build_parser() -> argparse.ArgumentParser:
     reset_p.add_argument("status", help="目标状态")
 
     sub.add_parser(
+        "ops", help="执行到期的账号运营任务（不会自动开启账号）",
+    )
+    sub.add_parser(
         "webui", help="启动本地 Web 控制台（默认 127.0.0.1:8787）"
     )
 
@@ -1114,6 +1127,7 @@ COMMANDS = {
     "status": cmd_status,
     "doctor": cmd_doctor,
     "reset": cmd_reset,
+    "ops": cmd_ops,
     "webui": cmd_webui,
     "login": cmd_login,
     "report": cmd_report,
