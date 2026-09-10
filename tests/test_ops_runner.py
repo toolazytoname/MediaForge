@@ -222,3 +222,64 @@ def test_ops_cli_accepts_loop_flag():
     args = build_parser().parse_args(["ops", "--loop", "--interval", "30"])
     assert args.loop is True
     assert args.interval == 30
+
+
+def test_live_ops_job_is_not_recovered_by_another_tick(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    monkeypatch.setattr('pipeline.ops_runner.fetch_text', lambda url: '公开摘录')
+    accounts, projects = tmp_path / 'accounts', tmp_path / 'projects'
+    profile = _profile(accounts)
+    conn = db.connect(tmp_path / 'state.db')
+    db.init_db(conn)
+    job = schedule_account(conn, profile.id, now=NOW, accounts_root=accounts).jobs[0]
+    entered, release = Event(), Event()
+    calls = []
+
+    def writer(*args):
+        calls.append(args[0].id)
+        entered.set()
+        assert release.wait(5)
+        return _draft_fn(*args)
+
+    def first_worker():
+        own = db.connect(tmp_path / 'state.db')
+        try:
+            return run_ops_job(own, job.id, now=_due(job), accounts_root=accounts,
+                               projects_root=projects, draft_fn=writer,
+                               visual_fn=lambda pid: None, score_fn=lambda t, b: ('pass', 8))
+        finally:
+            own.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(first_worker)
+        try:
+            assert entered.wait(5)
+            result = tick_operations(conn, now=_due(job), accounts_root=accounts,
+                                     projects_root=projects, draft_fn=_draft_fn,
+                                     visual_fn=lambda pid: None, score_fn=lambda t, b: ('pass', 8))
+            assert (result.ran, result.failed) == (0, 0)
+            assert jobs_store.get_job(conn, job.id).state == 'running'
+        finally:
+            release.set()
+        future.result(timeout=5)
+    assert len(calls) == 1
+    assert jobs_store.get_job(conn, job.id).state == 'done'
+    assert len(list_projects(projects_root=projects)) == 1
+
+
+def test_terminal_ops_job_cannot_run_again(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    monkeypatch.setattr('pipeline.ops_runner.fetch_text', lambda url: '公开摘录')
+    accounts, projects = tmp_path / 'accounts', tmp_path / 'projects'
+    profile = _profile(accounts)
+    conn = db.connect(tmp_path / 'state.db')
+    db.init_db(conn)
+    job = schedule_account(conn, profile.id, now=NOW, accounts_root=accounts).jobs[0]
+    jobs_store.try_finish_job(conn, job.id, state='cancelled', now=NOW)
+    writer = Mock(side_effect=AssertionError('cancelled job reached paid writer'))
+    with pytest.raises(Exception, match='terminal'):
+        run_ops_job(conn, job.id, now=_due(job), accounts_root=accounts,
+                    projects_root=projects, draft_fn=writer)
+    writer.assert_not_called()
+    assert list_projects(projects_root=projects) == ()

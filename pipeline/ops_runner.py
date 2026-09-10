@@ -17,6 +17,7 @@ from pipeline.auto_create import run_auto_create
 from pipeline.creators.source_fetcher import fetch_text
 from pipeline.interviews import InterviewError, confirm_interview, load_interview, save_interview
 from pipeline.jobs import store as jobs_store
+from pipeline.utils.flock import LockHeld, acquire, release
 from pipeline.projects import (
     DEFAULT_PROJECTS_ROOT, ProjectManifestError, create_project, list_projects, load_project,
 )
@@ -60,7 +61,7 @@ def tick_operations(
                 score_fn=score_fn,
             )
             ran += 1
-        except (OpsNotDue, OpsAccountDisabled):
+        except (OpsNotDue, OpsAccountDisabled, OpsJobUnavailable):
             continue
         except Exception as error:
             jobs_store.try_finish_job(
@@ -82,6 +83,10 @@ class OpsDeliverError(Exception):
     """Automatic delivery failed or returned a non-success outcome."""
 
 
+class OpsJobUnavailable(Exception):
+    """A live worker owns this account, or the job is already terminal."""
+
+
 def run_ops_job(
     conn: sqlite3.Connection,
     job_id: str,
@@ -96,6 +101,33 @@ def run_ops_job(
     job = jobs_store.get_job(conn, job_id)
     if job is None:
         raise ValueError(f"ops job not found: {job_id}")
+    profile = load_profile(str(job.request().get("account_id") or ""), accounts_root=accounts_root)
+    # flock is released by the OS on process death, so only abandoned jobs resume.
+    # Serialize the account too: different slots share sidecars and a budget.
+    lock_path = Path(accounts_root) / profile.id / "locks" / "operations.lock"
+    try:
+        acquire(lock_path)
+    except LockHeld as error:
+        raise OpsJobUnavailable("account operations already running") from error
+    try:
+        return _run_ops_job_locked(
+            conn, job_id, now=now, accounts_root=accounts_root, projects_root=projects_root,
+            draft_fn=draft_fn, visual_fn=visual_fn, score_fn=score_fn,
+        )
+    finally:
+        release(lock_path)
+
+
+def _run_ops_job_locked(
+    conn: sqlite3.Connection, job_id: str, *, now: str,
+    accounts_root: str | Path, projects_root: str | Path,
+    draft_fn: Callable | None, visual_fn: Callable | None, score_fn: Callable | None,
+) -> str:
+    job = jobs_store.get_job(conn, job_id)
+    if job is None:
+        raise ValueError(f"ops job not found: {job_id}")
+    if job.state in jobs_store.TERMINAL_STATES:
+        raise OpsJobUnavailable(f"ops job {job.id} is terminal: {job.state}")
     request = job.request()
     account_id = str(request.get("account_id") or "")
     profile = load_profile(account_id, accounts_root=accounts_root)
@@ -173,6 +205,9 @@ def run_ops_job(
             visual_fn=visual_fn, score_fn=score_fn, account_id=profile.id,
             accounts_root=accounts_root,
         )
+        current = jobs_store.get_job(conn, job.id)
+        if current is None or current.state in jobs_store.TERMINAL_STATES:
+            raise OpsJobUnavailable("ops job became terminal before delivery")
         _maybe_deliver(
             conn, project_id=project.id, profile=profile, now=now,
             projects_root=projects_root, accounts_root=accounts_root,
@@ -182,7 +217,7 @@ def run_ops_job(
             cost_usd=None,
         )
         return project.id
-    except (OpsNotDue, OpsAccountDisabled):
+    except (OpsNotDue, OpsAccountDisabled, OpsJobUnavailable):
         raise
     except Exception as error:
         jobs_store.try_finish_job(
