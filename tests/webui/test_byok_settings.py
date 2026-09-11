@@ -11,7 +11,9 @@ from pipeline.webui import deps
 from pipeline.webui.api import byok_settings
 from pipeline.webui.app import create_app
 
-_WECHAT_APP = {"app_id": "wx0123456789abcdef", "app_secret": "wx-private-value"}
+# Placeholder AppID: includes letters outside 0-9a-f so GitHub secret scanning
+# does not treat it as a real Tencent WeChat App ID (wx + 16 hex).
+_WECHAT_APP = {"app_id": "wxFAKEAPPID0000001", "app_secret": "wx-private-value"}
 _MINIMAL_CONFIG = """\
 timezone: Asia/Shanghai
 pillars:
@@ -218,7 +220,7 @@ def test_wechat_save_is_private_and_retains_secret_when_omitted(client, tmp_path
     assert response.status_code == 200
     assert "wx-private-value" not in response.text
     assert client.get("/api/v1/settings/wechat").json()["configured"] is True
-    response = client.put("/api/v1/settings/wechat", json={"app_id": "wx0123456789abcdef"})
+    response = client.put("/api/v1/settings/wechat", json={"app_id": _WECHAT_APP["app_id"]})
     assert response.status_code == 200
     assert json.loads((tmp_path / "wechat.json").read_text())["app_secret"] == "wx-private-value"
     assert (tmp_path / "wechat.json").stat().st_mode & 0o777 == 0o600
