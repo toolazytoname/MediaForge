@@ -76,6 +76,96 @@ def test_invalid_suggestion_input_never_calls_the_provider(client, tmp_path, mon
     assert client.get("/api/v1/projects/prj_master/master/suggestions").json() == {"items": []}
 
 
+def test_whole_article_note_rejects_a_summary_and_keeps_the_master(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    original = "## 问题\n\n" + ("这是一段足够长的正文，用来证明整篇修改不能被压成摘要。" * 8)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "标题", "body": original})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    seen = {}
+
+    def fake_complete(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return "看完整篇文章，结论是要克制。"
+
+    monkeypatch.setattr(master_api.llm, "complete", fake_complete)
+    response = client.post(
+        "/api/v1/projects/prj_master/master/suggestions",
+        json={"action": "clarify", "note": "把开头写得更冲，不要鸡汤"},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["error"]["code"] == "llm_suggestion_collapsed"
+    assert "Author instruction: 把开头写得更冲，不要鸡汤" in seen["prompt"]
+    assert "Do NOT summarize" in seen["prompt"]
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["body"] == original
+
+
+def test_whole_article_note_keeps_a_full_rewrite(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    original = "## 问题\n\n" + ("原来的开头比较软。" * 20)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "标题", "body": original})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    rewrite = "## 问题\n\n" + ("开头改冲了，不再鸡汤。" * 20)
+    monkeypatch.setattr(master_api.llm, "complete", lambda *args, **kwargs: rewrite)
+
+    response = client.post(
+        "/api/v1/projects/prj_master/master/suggestions",
+        json={"action": "clarify", "note": "把开头写得更冲，不要鸡汤"},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["selection"] is None
+    assert payload["proposed_body"] == rewrite
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["body"] == original
+
+
+def test_suggestion_note_is_passed_to_the_provider_and_does_not_write(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "标题", "body": "这段话太说教了。"})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    seen = {}
+
+    def fake_complete(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return "这段话只保留判断，不再教训读者。"
+
+    monkeypatch.setattr(master_api.llm, "complete", fake_complete)
+    response = client.post(
+        "/api/v1/projects/prj_master/master/suggestions",
+        json={"action": "clarify", "selection": "这段话太说教了。", "note": "少说教，保留真实失败"},
+    )
+
+    assert response.status_code == 201
+    assert "Author instruction: 少说教，保留真实失败" in seen["prompt"]
+    assert "Revise only the selected passage." in seen["prompt"]
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["body"] == "这段话太说教了。"
+
+
+def test_suggestion_strips_full_article_when_only_a_passage_was_selected(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "标题", "body": "第一段。\n\n这段要改。\n\n第三段。"})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    monkeypatch.setattr(
+        master_api.llm,
+        "complete",
+        lambda *args, **kwargs: "# 标题\n\n![封面](x.png)\n\n这段已经改好了。\n\n第三段。",
+    )
+
+    response = client.post(
+        "/api/v1/projects/prj_master/master/suggestions",
+        json={"action": "clarify", "selection": "这段要改。"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["proposed_body"] == "第一段。\n\n这段已经改好了。\n\n第三段。"
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["body"] == "第一段。\n\n这段要改。\n\n第三段。"
+
+
 def test_master_api_errors_are_explicit(client):
     missing = client.get("/api/v1/projects/prj_missing/master")
     assert missing.status_code == 404
@@ -122,6 +212,84 @@ def test_ai_draft_requires_confirmed_interview(client, tmp_path, monkeypatch):
     response = client.post("/api/v1/projects/prj_master/master/draft")
     assert response.status_code == 409
     assert response.json()["detail"]["error"]["code"] == "interview_required"
+
+
+def _confirmed_interview(root):
+    from pipeline.interviews import confirm_interview, save_interview
+    save_interview(
+        "prj_master", viewpoint="工程绿不等于能用", motive="改验证顺序",
+        experience="我跑过全量测试", sources=(), now="2026-09-10T08:00:00+00:00",
+        projects_root=root,
+    )
+    confirm_interview("prj_master", now="2026-09-10T08:01:00+00:00", projects_root=root)
+
+
+def test_compose_requires_confirmed_interview_and_does_not_write(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    monkeypatch.setattr(master_api.llm, "complete_json", lambda *args, **kwargs: pytest.fail("must not call llm"))
+    response = client.post("/api/v1/projects/prj_master/compose")
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "interview_required"
+    assert client.get("/api/v1/projects/prj_master/master").json() == {"master": None}
+
+
+def test_compose_writes_master_from_author_idea_when_empty(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    _confirmed_interview(root)
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    seen = {}
+
+    def fake_complete(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return {
+            "title": "工具更快了，人为什么更喘不过气",
+            "body": "## 问题\n\n这是根据作者想法写成的初稿。\n\n## 主张\n\n先把判断写清楚。",
+        }
+
+    monkeypatch.setattr(master_api.llm, "complete_json", fake_complete)
+
+    response = client.post("/api/v1/projects/prj_master/compose")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["title"] == "工具更快了，人为什么更喘不过气"
+    assert payload["version"] == 1
+    assert "作者写下的想法和资料" in seen["prompt"]
+    stored = client.get("/api/v1/projects/prj_master/master").json()["master"]
+    assert stored["body"].startswith("## 问题")
+
+
+def test_compose_does_not_overwrite_existing_master(client, tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    _project(root)
+    client.put("/api/v1/projects/prj_master/master", json={"title": "已有标题", "body": "已经写过的正文，至少要保留。"})
+    monkeypatch.setattr(master_api, "_llm_is_configured", lambda: True)
+    monkeypatch.setattr(
+        master_api.llm,
+        "complete_json",
+        lambda *args, **kwargs: pytest.fail("compose must not call LLM when master exists"),
+    )
+
+    response = client.post("/api/v1/projects/prj_master/compose")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"]["code"] == "master_already_exists"
+    assert client.get("/api/v1/projects/prj_master/master").json()["master"]["title"] == "已有标题"
+
+
+def test_compose_provider_failure_does_not_create_master(client, tmp_path):
+    root = tmp_path / "projects"
+    _project(root)
+    _confirmed_interview(root)
+
+    response = client.post("/api/v1/projects/prj_master/compose")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"]["code"] == "llm_provider_unavailable"
+    assert client.get("/api/v1/projects/prj_master/master").json() == {"master": None}
 
 
 import pytest

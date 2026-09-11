@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+from pipeline import intake
 from pipeline import master_documents as master_store
 from pipeline import research as research_store
 from pipeline.autonomy import AutonomyError, require_llm
@@ -76,10 +78,19 @@ def _manual_input(body: dict[str, Any]) -> tuple[str, str]:
     return body["title"], body["body"]
 
 
-def _suggestion_input(body: dict[str, Any]) -> tuple[str, str | None]:
-    if set(body) not in ({"action"}, {"action", "selection"}):
-        raise master_store.MasterDocumentError("suggestion body must contain action and optional selection")
-    return body["action"], body.get("selection")
+def _suggestion_input(body: dict[str, Any]) -> tuple[str, str | None, str | None]:
+    allowed = {
+        frozenset({"action"}),
+        frozenset({"action", "selection"}),
+        frozenset({"action", "note"}),
+        frozenset({"action", "selection", "note"}),
+    }
+    if frozenset(body) not in allowed:
+        raise master_store.MasterDocumentError("suggestion body must contain action and optional selection/note")
+    note = body.get("note")
+    if note is not None and (not isinstance(note, str) or not note.strip()):
+        raise master_store.MasterDocumentError("suggestion note must be non-empty text when provided")
+    return body["action"], body.get("selection"), note.strip() if isinstance(note, str) else None
 
 
 def _parse_article(text: str) -> dict[str, str]:
@@ -115,13 +126,14 @@ def _draft_prompt(project_id: str, *, projects_root: Any | None = None) -> str:
         f" | limitation={item.limitation or 'none'} | counterpoint={item.counterpoint or 'none'}"
         for item in board.claims
     ) or "（无声明）"
-    return f"""你是中文资深编辑。为下面的真实创作项目提出一份可审阅初稿，不要发布，也不要声称已替作者确认。
-项目想法：{project.idea}
+    return f"""你是中文资深编辑。根据作者自己写下的想法和资料，写成一篇可直接阅读的图文初稿。不要发布，也不要声称已替作者确认。
+先写正文。JSON 的 title 只是工作标题，作者稍后会按成稿另选。
+作者写下的想法和资料：{project.idea}
 目标读者：{project.audience}
 发布目的：{project.goal}
 声音：{project.voice}
 自主程度：{project.autonomy}
-{interview_block}
+{interview_block}作者口吻参考：前大厂程序员，用做产品和真实生活验证普通人如何与 AI 一起重建工作。不要写成人生导师或行业权威。
 
 来源：
 {sources}
@@ -131,10 +143,11 @@ def _draft_prompt(project_id: str, *, projects_root: Any | None = None) -> str:
 
 规则：
 1. 只把 status=verified 且有来源的 fact 当作确定事实；judgment 必须写成作者判断；open_question 不得伪装成结论。
-2. 不虚构数字、引语、案例或个人经历；保留限制与有力反方观点。
-3. 外部事实首次出现时使用来源区提供的 Markdown 链接 `[来源标题](URL)`，文末附精简参考资料；不得虚构 URL，也不要为 local: 引用创建链接。
-4. 写成 1500—2500 字、结构清楚、有真实问题和明确主张的中文长文，使用 Markdown 二级标题。
-5. 只返回严格 JSON：{{"title":"...","body":"..."}}，不要代码围栏或额外文字。"""
+2. 若没有已核查来源，以作者写下的想法和资料为唯一依据；把它们写成作者的观察、问题和判断，不要编造成已经发生的具体经历、数据、引语或他人案例。
+3. 不虚构数字、引语、案例或个人经历；保留限制与有力反方观点。不得展开想法里没有出现的家庭、财务或私密细节。
+4. 外部事实首次出现时使用来源区提供的 Markdown 链接 `[来源标题](URL)`，文末附精简参考资料；不得虚构 URL，也不要为 local: 引用创建链接。
+5. 写成 1500—2500 字、结构清楚、有真实问题和明确主张的中文长文，使用 Markdown 二级标题。不要输出 [IMAGE: ...] 占位符。
+6. 只返回严格 JSON：{{"title":"...","body":"..."}}，不要代码围栏或额外文字。"""
 
 
 def _interview_dict(interview: Any) -> dict[str, Any]:
@@ -180,9 +193,7 @@ def post_interview_confirm(project_id: str) -> dict[str, Any]:
         raise _error(409, "interview_required", error) from error
 
 
-@router.post("/projects/{project_id}/master/draft")
-def propose_draft(project_id: str) -> dict[str, str]:
-    """Generate a review-only first draft; never persist or overwrite the master."""
+def _generate_article(project_id: str) -> dict[str, str]:
     try:
         require_llm(project_id, projects_root=_root())
         prompt = _draft_prompt(project_id)
@@ -209,6 +220,35 @@ def propose_draft(project_id: str) -> dict[str, str]:
             conn.close()
     except Exception as error:
         raise _error(502, "llm_draft_failed", f"AI draft failed: {error}") from error
+
+
+@router.post("/projects/{project_id}/master/draft")
+def propose_draft(project_id: str) -> dict[str, str]:
+    """Generate a review-only first draft; never persist or overwrite the master."""
+    return _generate_article(project_id)
+
+
+@router.post("/projects/{project_id}/compose")
+def compose_article(project_id: str) -> dict[str, Any]:
+    """Turn an explicit homepage click into a readable first article.
+
+    The click is the authorization to write the master once. An existing
+    article is never overwritten.
+    """
+    try:
+        existing = master_store.load_master(project_id, projects_root=_root())
+    except master_store.MasterDocumentError as error:
+        raise _master_error(project_id, error) from error
+    if existing is not None and existing.body.strip():
+        raise _error(409, "master_already_exists", "this project already has an article; it was not overwritten")
+    draft = _generate_article(project_id)
+    try:
+        master = master_store.save_manual(
+            project_id, title=draft["title"], body=draft["body"], now=_now(), projects_root=_root(),
+        )
+    except master_store.MasterDocumentError as error:
+        raise _master_error(project_id, error) from error
+    return _master_dict(master) or {}
 
 
 @router.get("/projects/{project_id}/master")
@@ -245,6 +285,58 @@ def restore_master(project_id: str, version: int) -> dict[str, Any]:
         raise _master_error(project_id, error) from error
 
 
+@router.post("/projects/{project_id}/master/titles")
+def propose_titles(project_id: str) -> dict[str, Any]:
+    """Propose headlines from the finished article, never from the intake dump alone."""
+    try:
+        master = master_store.load_master(project_id, projects_root=_root())
+        project = projects_api.project_store.load_project(project_id, projects_root=_root())
+    except (master_store.MasterDocumentError, projects_api.project_store.ProjectManifestError) as error:
+        raise _master_error(project_id, error) if isinstance(error, master_store.MasterDocumentError) else _error(404, "project_not_found", error) from error
+    if master is None or not master.body.strip():
+        raise _error(400, "master_not_ready", "write the article first, then pick a title")
+    fallback = intake.heuristic_titles(master.body)
+    if not _llm_is_configured():
+        return {"titles": fallback, "source": "heuristic"}
+    try:
+        conn = deps.get_conn()
+        try:
+            titles = llm.complete_json(
+                intake.article_title_prompt(body=master.body, idea=project.idea),
+                stage="master_titles",
+                ref_id=project_id,
+                model_tier="cheap",
+                max_tokens=800,
+                conn=conn,
+                parse=intake.parse_titles,
+            )
+        finally:
+            conn.close()
+    except Exception:
+        titles = fallback
+    return {"titles": titles, "source": "model"}
+
+
+@router.post("/projects/{project_id}/master/title")
+def apply_title(project_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Replace only the title. Body is untouched."""
+    if set(body) != {"title"} or not isinstance(body.get("title"), str) or not body["title"].strip():
+        raise _error(400, "invalid_title", "request requires a non-empty title")
+    title = body["title"].strip()
+    try:
+        master = master_store.load_master(project_id, projects_root=_root())
+        if master is None:
+            raise master_store.MasterDocumentError(f"master not found: {project_id}")
+        updated = master_store.save_manual(
+            project_id, title=title, body=master.body, now=_now(), projects_root=_root(),
+        )
+        project = projects_api.project_store.load_project(project_id, projects_root=_root())
+        projects_api.project_store.update_project(project, title=title, now=_now(), projects_root=_root())
+        return _master_dict(updated) or {}
+    except (master_store.MasterDocumentError, projects_api.project_store.ProjectManifestError) as error:
+        raise _master_error(project_id, error) if isinstance(error, master_store.MasterDocumentError) else _error(400, "invalid_title", error) from error
+
+
 @router.get("/projects/{project_id}/master/suggestions")
 def get_suggestions(project_id: str) -> dict[str, Any]:
     try:
@@ -262,7 +354,7 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
     """
     try:
         require_llm(project_id, projects_root=_root())
-        action, selection = _suggestion_input(body)
+        action, selection, note = _suggestion_input(body)
         if action not in {"clarify", "shorten", "change_voice", "add_counterpoint"}:
             raise master_store.MasterDocumentError(
                 "suggestion action must be clarify, shorten, change_voice or add_counterpoint"
@@ -274,7 +366,7 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
             raise master_store.MasterDocumentError(
                 "selection must occur exactly once in the current master body"
             )
-        prompt = _suggestion_prompt(project_id, master, action, selection)
+        prompt = _suggestion_prompt(project_id, master, action, selection, note)
     except AutonomyError as error:
         raise _error(error.http_status, error.code, error) from error
     except master_store.MasterDocumentError as error:
@@ -284,15 +376,22 @@ def request_suggestion(project_id: str, body: dict[str, Any] = Body(...)) -> dic
     try:
         conn = deps.get_conn()
         try:
-            proposed = llm.complete(prompt, stage="coauthor_suggestion", ref_id=project_id,
-                                    model_tier="creative", max_tokens=4096, conn=conn)
+            proposed = llm.complete(
+                prompt, stage="coauthor_suggestion", ref_id=project_id,
+                model_tier="creative", max_tokens=6000 if selection is None else 4096, conn=conn,
+            )
         finally:
             conn.close()
     except Exception as error:
         raise _error(502, "llm_suggestion_failed", f"AI suggestion failed: {error}") from error
     try:
         proposed_title = master.title
-        proposed_body = _replace_selection(master.body, selection, proposed) if selection is not None else proposed
+        cleaned = _clean_replacement(proposed, selection)
+        if selection is None:
+            cleaned = _require_full_article(cleaned, master.body, action)
+        proposed_body = _replace_selection(master.body, selection, cleaned) if selection is not None else cleaned
+        if selection is None:
+            _reject_stale_whole_suggestions(project_id, master.version)
         suggestion = master_store.create_suggestion(project_id, action=action, selection=selection,
             proposed_title=proposed_title, proposed_body=proposed_body, now=_now(), projects_root=_root())
         return _suggestion_dict(suggestion)
@@ -326,7 +425,13 @@ def _replace_selection(body: str, selection: str, replacement: str) -> str:
     return body.replace(selection, replacement, 1)
 
 
-def _suggestion_prompt(project_id: str, master: master_store.MasterDocument, action: str, selection: str | None) -> str:
+def _suggestion_prompt(
+    project_id: str,
+    master: master_store.MasterDocument,
+    action: str,
+    selection: str | None,
+    note: str | None = None,
+) -> str:
     project = projects_api.project_store.load_project(project_id, projects_root=_root())
     try:
         board = research_store.load_research(project_id, projects_root=_root())
@@ -335,7 +440,71 @@ def _suggestion_prompt(project_id: str, master: master_store.MasterDocument, act
     claims = "\n".join(f"- {item.kind}/{item.status}: {item.text}" for item in board.claims) or "- none"
     sources = "\n".join(f"- {item.title}: {item.reference}" for item in board.sources) or "- none"
     target = selection if selection is not None else master.body
-    instruction = {"clarify": "rewrite it to be clearer without adding unsupported claims", "shorten": "compress it while preserving the author's point", "change_voice": f"rewrite it in this voice: {project.voice}", "add_counterpoint": "add a fair, explicit counterpoint while preserving the author's claim"}[action]
-    return ("You are proposing an edit, not publishing a final answer. Return ONLY the replacement text, no preface.\n"
-            f"Action: {instruction}\nAudience: {project.audience}\nGoal: {project.goal}\nVoice: {project.voice}\n"
-            f"Research sources:\n{sources}\nResearch claims:\n{claims}\n\nText to revise:\n{target}")
+    instruction = {
+        "clarify": "rewrite it to be clearer without adding unsupported claims",
+        "shorten": "compress it while preserving the author's point",
+        "change_voice": f"rewrite it in this voice: {project.voice}",
+        "add_counterpoint": "add a fair, explicit counterpoint while preserving the author's claim",
+    }[action]
+    note_line = f"Author instruction: {note}\n" if note else ""
+    scope = "only the selected passage" if selection else "the full article"
+    selection_rule = (
+        "The selected passage is the only thing you may rewrite. Return only that rewritten passage. "
+        "Do not return the article title, cover, headings, or any other paragraph.\n"
+        if selection else
+        "The author's instruction is an editorial direction, not the new article. "
+        "Do NOT summarize. Do NOT return a blurb, abstract, or one-paragraph recap. "
+        "Return the complete rewritten article body in Markdown, similar length to the original "
+        "(at least 70% of the original character count). "
+        "Keep every existing image line exactly as `![...](...)`. "
+        "Do not wrap the body in a title unless one is already in the body.\n"
+    )
+    return (
+        "You are proposing an edit, not publishing a final answer. Return ONLY the replacement text, no preface.\n"
+        f"Revise {scope}.\n{selection_rule}"
+        f"Action: {instruction}\n{note_line}"
+        f"Audience: {project.audience}\nGoal: {project.goal}\nVoice: {project.voice}\n"
+        f"Research sources:\n{sources}\nResearch claims:\n{claims}\n\nText to revise:\n{target}"
+    )
+
+
+def _require_full_article(proposed: str, original: str, action: str) -> str:
+    if action == "shorten":
+        return proposed
+    if len(proposed) < max(200, int(len(original) * 0.5)):
+        raise _error(
+            502,
+            "llm_suggestion_collapsed",
+            "整篇建议被压成了摘要，没有改完整篇文章。请再试一次，或把要求写得更具体。",
+        )
+    return proposed
+
+
+def _reject_stale_whole_suggestions(project_id: str, current_version: int) -> None:
+    for item in master_store.load_suggestions(project_id, projects_root=_root()):
+        if item.status == "pending" and item.selection is None and item.base_version <= current_version:
+            try:
+                master_store.reject_suggestion(
+                    project_id, item.id, now=_now(), projects_root=_root(),
+                )
+            except master_store.MasterDocumentError:
+                continue
+
+
+def _clean_replacement(proposed: str, selection: str | None) -> str:
+    text = proposed.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        end = -1 if lines[-1].strip().startswith("```") else len(lines)
+        text = "\n".join(lines[1:end]).strip()
+    if not selection:
+        return text
+    if text.startswith("![") or text.startswith("# ") or "\n## " in text:
+        paragraphs = [
+            part.strip()
+            for part in text.split("\n\n")
+            if part.strip() and not part.strip().startswith("![") and not part.strip().startswith("#")
+        ]
+        if paragraphs:
+            return max(paragraphs, key=lambda item: SequenceMatcher(None, item, selection).ratio())
+    return text

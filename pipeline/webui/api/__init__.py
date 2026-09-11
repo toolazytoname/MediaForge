@@ -16,6 +16,7 @@ from pipeline.webui.api import (
     publish,
     projects,
     ideas,
+    intake,
     research,
     master_documents,
     review,
@@ -33,6 +34,7 @@ from pipeline.webui.api import (
     autonomy,
     byok_settings,
     account_profiles,
+    project_video,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -44,6 +46,7 @@ api_router.include_router(review.router)
 api_router.include_router(publish.router)
 api_router.include_router(projects.router)
 api_router.include_router(ideas.router)
+api_router.include_router(intake.router)
 api_router.include_router(research.router)
 api_router.include_router(master_documents.router)
 api_router.include_router(analytics.router)
@@ -60,5 +63,6 @@ api_router.include_router(delivery.router)
 api_router.include_router(autonomy.router)
 api_router.include_router(byok_settings.router)
 api_router.include_router(account_profiles.router)
+api_router.include_router(project_video.router)
 
 __all__ = ["api_router"]

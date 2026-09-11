@@ -259,9 +259,12 @@ def render_variant_markdown(
     inserts = [item for item in chosen if item not in covers]
     paragraphs = [item for item in variant.body.split("\n\n") if item.strip()]
     result = [f"# {variant.title}", "", f"> {variant.summary}", ""]
+    body_text = variant.body
     for item in covers:
+        if _body_has_asset(body_text, item):
+            continue
         result.extend([_image_line(item, slots[item.slot_id], image_prefix), ""])
-    pending = list(inserts)
+    pending = [item for item in inserts if not _body_has_asset(body_text, item)]
     for index, paragraph in enumerate(paragraphs):
         result.extend([paragraph.strip(), ""])
         anchored = [
@@ -277,6 +280,13 @@ def render_variant_markdown(
     for item in pending:
         result.extend([_image_line(item, slots[item.slot_id], image_prefix), ""])
     return "\n".join(result).rstrip() + "\n"
+
+
+def _body_has_asset(body: str, asset: visuals.VisualAsset) -> bool:
+    markers = [asset.id, f"{asset.id}.png"]
+    if asset.file_path:
+        markers.append(asset.file_path)
+    return any(marker in body for marker in markers)
 
 
 def _image_line(asset: visuals.VisualAsset, slot: visuals.VisualSlot, image_prefix: str) -> str:

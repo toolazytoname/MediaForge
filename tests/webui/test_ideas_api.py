@@ -63,6 +63,15 @@ def test_create_project_writes_only_its_sidecar(client, tmp_path):
     assert not (tmp_path / "ideas").exists()
 
 
+def test_create_idea_without_title_uses_the_first_line(client):
+    response = client.post("/api/v1/ideas", json={
+        "input_type": "thought",
+        "content": "创作工具不该先教人跑流程。\n后面再补例子。",
+    })
+    assert response.status_code == 201
+    assert response.json()["title"] == "创作工具不该先教人跑流程。"
+
+
 def test_idea_input_validation_uses_error_envelope(client):
     response = client.post("/api/v1/ideas", json={
         "input_type": "url", "content": "not-a-url", "title": "坏链接",

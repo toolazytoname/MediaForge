@@ -16,6 +16,24 @@ _PROJECTS_ROOT = project_store.DEFAULT_PROJECTS_ROOT
 
 def _project_dict(project: project_store.Project) -> dict[str, Any]:
     """Serialize an immutable sidecar record without exposing storage details."""
+    from pipeline import master_documents
+    try:
+        master = master_documents.load_master(project.id, projects_root=_PROJECTS_ROOT)
+    except master_documents.MasterDocumentError:
+        master = None
+    has_wechat = False
+    has_video = False
+    try:
+        from pipeline import variants as variant_store
+        pack = variant_store.load_variants(project.id, projects_root=_PROJECTS_ROOT)
+        has_wechat = any(item.platform == "wechat_mp" and item.body.strip() for item in pack.variants)
+    except Exception:
+        has_wechat = False
+    try:
+        from pipeline import project_video
+        has_video = project_video.load_video(project.id, projects_root=_PROJECTS_ROOT) is not None
+    except Exception:
+        has_video = False
     return {
         "id": project.id,
         "title": project.title,
@@ -28,6 +46,9 @@ def _project_dict(project: project_store.Project) -> dict[str, Any]:
         "asset_paths": list(project.asset_paths),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
+        "has_master": bool(master and master.body.strip()),
+        "has_wechat": has_wechat,
+        "has_video": has_video,
     }
 
 

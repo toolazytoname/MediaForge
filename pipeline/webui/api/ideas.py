@@ -31,10 +31,15 @@ def _error(status_code: int, code: str, error: Exception | str) -> HTTPException
 
 
 def _idea_input(body: dict[str, Any]) -> idea_store.Idea:
-    if set(body) != {"input_type", "content", "title"}:
-        raise idea_store.IdeaManifestError("idea body must contain only input_type, content and title")
+    allowed = {frozenset({"input_type", "content", "title"}), frozenset({"input_type", "content"})}
+    if frozenset(body) not in allowed:
+        raise idea_store.IdeaManifestError("idea body must contain input_type, content and optional title")
+    from pipeline import intake
+    title = body.get("title")
+    if not isinstance(title, str) or not title.strip():
+        title = intake.working_title(body["content"], body["input_type"])
     return idea_store.create_idea(
-        input_type=body["input_type"], content=body["content"], title=body["title"],
+        input_type=body["input_type"], content=body["content"], title=title,
         now=datetime.now(timezone.utc).isoformat(), ideas_root=_IDEAS_ROOT,
     )
 
