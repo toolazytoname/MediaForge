@@ -243,8 +243,11 @@ def _variant(value: Any, project_id: str, root: str | Path) -> Variant:
             or history_versions != sorted(history_versions)):
         raise VariantsError("invalid variant history")
     for snapshot in item.history:
-        _validate_assets(project_id, list(snapshot.asset_ids), root)
-    _validate_assets(project_id, list(item.asset_ids), root)
+        _validate_historical_assets(project_id, list(snapshot.asset_ids), root)
+    # Selecting a replacement visual deliberately turns the previous asset
+    # into a candidate.  Existing drafts must remain readable and recoverable
+    # until the creator explicitly saves a new version with selected assets.
+    _validate_historical_assets(project_id, list(item.asset_ids), root)
     return item
 
 
@@ -261,6 +264,26 @@ def _validate_assets(project_id: str, ids: list[str], root: str | Path) -> None:
     try: known = {item.id for item in visuals.load_visuals(project_id, projects_root=root).assets if item.status == "selected"}
     except visuals.VisualsError as exc: raise VariantsError(f"cannot read visuals: {exc}") from exc
     if not set(values) <= known: raise VariantsError("variant references an unknown or unselected visual asset")
+
+
+def _validate_historical_assets(project_id: str, ids: list[str], root: str | Path) -> None:
+    """Validate an existing version without requiring assets to stay selected.
+
+    Selection is a mutable visual-plan decision, whereas a platform draft and
+    its snapshots are immutable authoring history.  Failed or unknown assets
+    remain invalid; a formerly selected candidate remains readable only until
+    an explicit save replaces it through `_validate_assets`.
+    """
+    values = _asset_ids(ids)
+    try:
+        known = {
+            item.id for item in visuals.load_visuals(project_id, projects_root=root).assets
+            if item.status in {"candidate", "selected"}
+        }
+    except visuals.VisualsError as exc:
+        raise VariantsError(f"cannot read visuals: {exc}") from exc
+    if not set(values) <= known:
+        raise VariantsError("variant references an unknown or unusable historical visual asset")
 def _asset_ids(value: Any) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)) or any(not valid_sidecar_id(x, "vas_") for x in value) or len(set(value)) != len(value): raise VariantsError("asset_ids must be distinct visual asset ids")
     return tuple(value)
