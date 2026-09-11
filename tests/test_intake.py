@@ -64,6 +64,17 @@ def test_heuristic_titles_are_distinct_and_usable():
     assert len(set(titles)) == len(titles)
 
 
+def test_heuristic_titles_skip_markdown_images_headings_and_links():
+    body = (
+        "![封面](/output/projects/prj_x/assets/vas_1.png)\n\n"
+        "## 一个平凡人的清醒\n\n"
+        "前几天看了[交流会录音稿](https://example.com/a)，我最大的感受是：这是一个清醒的人。\n"
+    )
+    titles = intake.heuristic_titles(body)
+    assert titles[0].startswith("前几天看了交流会录音稿")
+    assert all("![" not in title and "](" not in title and "#" not in title for title in titles)
+
+
 def test_article_title_prompt_reads_the_finished_body_not_the_dump():
     prompt = intake.article_title_prompt(
         body="## 问题\n\n测试全绿了，我还是不敢把链接发给朋友。\n\n## 主张\n\n绿的是测试，不是产品。",

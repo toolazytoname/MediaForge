@@ -319,9 +319,24 @@ export const useMasterStore = defineStore('master', () => {
     )).data
   }
 
-  async function request(projectId: string, input: Pick<MasterSuggestion, 'action' | 'selection'>): Promise<MasterSuggestion> {
-    const response = await apiPost<MasterSuggestion>(`/projects/${projectId}/master/suggestions`, input.selection ? input : { action: input.action }, GENERATION_TIMEOUT_MS)
+  async function request(projectId: string, input: Pick<MasterSuggestion, 'action' | 'selection'> & { note?: string | null }): Promise<MasterSuggestion> {
+    const payload: Record<string, string> = { action: input.action }
+    if (input.selection) payload.selection = input.selection
+    if (input.note && input.note.trim()) payload.note = input.note.trim()
+    const response = await apiPost<MasterSuggestion>(`/projects/${projectId}/master/suggestions`, payload, GENERATION_TIMEOUT_MS)
     suggestions.value = [...suggestions.value, response.data]
+    return response.data
+  }
+
+  async function proposeTitles(projectId: string): Promise<{ titles: string[]; source: 'model' | 'heuristic' }> {
+    return (await api.post<{ titles: string[]; source: 'model' | 'heuristic' }>(
+      `/projects/${projectId}/master/titles`, {}, { timeout: GENERATION_TIMEOUT_MS },
+    )).data
+  }
+
+  async function applyTitle(projectId: string, title: string): Promise<MasterDocument> {
+    const response = await apiPost<MasterDocument>(`/projects/${projectId}/master/title`, { title })
+    master.value = response.data
     return response.data
   }
 
@@ -344,7 +359,61 @@ export const useMasterStore = defineStore('master', () => {
     return response.data
   }
 
-  return { master, suggestions, loading, error, load, save, proposeDraft, request, accept, reject, restore }
+  return { master, suggestions, loading, error, load, save, proposeDraft, request, proposeTitles, applyTitle, accept, reject, restore }
+})
+
+export interface ProjectVideoShot {
+  index: number
+  line: string
+  file_path: string | null
+  file_url: string | null
+}
+
+export interface ProjectVideo {
+  project_id: string
+  title: string
+  script: string
+  duration_s: number
+  aspect: string
+  shots: ProjectVideoShot[]
+  file_path: string | null
+  file_url: string | null
+  updated_at: string
+  published: boolean
+  destination: null
+}
+
+export const useProjectVideoStore = defineStore('projectVideo', () => {
+  const video = ref<ProjectVideo | null>(null)
+  const loading = ref(false)
+  const generating = ref(false)
+  const error = ref<string | null>(null)
+  async function load(projectId: string): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      video.value = (await api.get<{ video: ProjectVideo | null }>(`/projects/${projectId}/video`)).data.video
+    } catch (e) {
+      error.value = unwrapError(e)
+    } finally {
+      loading.value = false
+    }
+  }
+  async function generate(projectId: string): Promise<ProjectVideo> {
+    generating.value = true
+    error.value = null
+    try {
+      const item = (await api.post<ProjectVideo>(`/projects/${projectId}/video`, {}, { timeout: GENERATION_TIMEOUT_MS })).data
+      video.value = item
+      return item
+    } catch (e) {
+      error.value = unwrapError(e)
+      throw e
+    } finally {
+      generating.value = false
+    }
+  }
+  return { video, loading, generating, error, load, generate }
 })
 
 export const useVisualsStore = defineStore('visuals', () => {

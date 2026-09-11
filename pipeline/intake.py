@@ -183,9 +183,27 @@ def collect_sources(*, idea: str, urls: Iterable[str], files: Iterable[tuple[str
     return cleaned, tuple(sources)
 
 
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+
+
+def _prose_only(text: str) -> str:
+    """Drop Markdown images, heading markers and link targets so a title seed is plain prose."""
+    lines: list[str] = []
+    for raw in (text or "").splitlines():
+        line = _MD_IMAGE.sub("", raw).strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        line = _MD_LINK.sub(r"\1", line)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def heuristic_titles(idea: str, source_titles: Iterable[str] | None = None) -> list[str]:
     extras = [item.strip() for item in (source_titles or []) if item and item.strip()]
-    seed = _first_line(idea) or (extras[0] if extras else "未命名文章")
+    seed = _first_line(_prose_only(idea)) or (extras[0] if extras else "未命名文章")
     seed = _clip(seed, 24)
     candidates = [
         seed,

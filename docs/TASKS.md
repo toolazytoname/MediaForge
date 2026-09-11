@@ -2,6 +2,8 @@
 
 > 2026-09-10 真实续验：[主稿、三图、改图及草稿回执](./product-validation/real-flow-continuation/README.md)。真实生成及公众号草稿接口成功；前端草稿回执超时、后台图文未核验，QA-01 仍未完成。
 
+> 2026-09-11 分支合流：本地未推送的 33 个 commit（8/10–8/15，精简写作页方向）与 `origin/main`（8/17–9/11，今天/作品/账号方向）互不知情地分叉。用户选择以远端为准：本地 `main` 重置到 `origin/main`，旧线完整保留在 `backup/local-main-a78a72e`（已推送）。随后按能力 cherry-pick 后端并在现有作品页补最小 UI：`intake.py` + `/intake/prepare`；`/projects/{id}/compose`、`/master/titles`、`/master/title`；AI 建议 `note` + 整篇不得压成摘要 + 过期整篇建议自动拒绝；`/projects/{id}/prepare-platforms`；`project_video.py` + `/projects/{id}/video`（口播+字幕竖屏短片，仅本地下载）；`project_exports` 跳过正文已内联图片；项目列表 `has_master/has_wechat/has_video`；`variants` 历史版本允许引用已降级为 candidate 的资产。全部接入远端守卫：compose 需已确认访谈，LLM 路径过 `autonomy.require_llm`，禁用时短片/平台稿退回非模型路径。**未移植** WX-DRAFT/WX-ACCOUNTS/WX-LOOP（被 DEL-01/DEL-02 交付 API 取代）、旧精简前端（UX-RESTYLE/TRIM/DELETE）、relay/env-key 修复（BYOK-3 与 `atomic_write_secret` 已覆盖）。回归 1975 passed / 23 skipped；前端 `vue-tsc` 与生产构建通过；浏览器核对作品页「按成稿起标题」「AI 建议备注」「口播短片」面板。
+
 > 版本 v1.0 | 2026-07-04
 > **执行规则**：严格按顺序做，一次会话一个任务。完成后勾选并追加 `✅ 完成于 <日期>, commit <sha>, <一句话备注>`。
 > 卡住 → 查 [HARD_PARTS.md](./HARD_PARTS.md)；契约有问题 → 在任务下写 `⚠️` 记录并停止，不要擅自改契约。

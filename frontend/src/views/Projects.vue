@@ -4,7 +4,7 @@ import axios from 'axios'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ArrowLeftOutlined, ArrowRightOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
-import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useCapabilitiesStore, useWorkspaceStore, useGalleriesStore, useSettingsStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult, type DeliveryAttemptResult, type VariantAdaptationPreview, type GalleryDeliverable, type GallerySlide } from '../stores'
+import { useProjectsStore, useResearchStore, useMasterStore, useVisualsStore, useVariantsStore, useApprovalsStore, useCapabilitiesStore, useWorkspaceStore, useGalleriesStore, useSettingsStore, useProjectVideoStore, type ProjectItem, type ResearchClaim, type MasterSuggestion, type MasterDraftProposal, type VisualSlot, type VisualAsset, type PlatformVariant, type ApprovalCheck, type ProjectExportResult, type DeliveryAttemptResult, type VariantAdaptationPreview, type GalleryDeliverable, type GallerySlide } from '../stores'
 import { llmForbiddenHint, policyLabel } from '../autonomy'
 import { api, apiPost, unwrapError } from '../api/client'
 import { formatDateTime } from '../utils/format'
@@ -22,7 +22,9 @@ const galleriesStore = useGalleriesStore()
 const capabilitiesStore = useCapabilitiesStore()
 const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
+const projectVideoStore = useProjectVideoStore()
 const { items, total, loading, error } = storeToRefs(store)
+const { video: projectVideo, loading: videoLoading, generating: videoGenerating, error: videoError } = storeToRefs(projectVideoStore)
 const { board, loading: researchLoading, error: researchError } = storeToRefs(researchStore)
 const { master, suggestions, loading: masterLoading, error: masterError } = storeToRefs(masterStore)
 const { plan: visualPlan, provider: visualProvider, loading: visualsLoading, error: visualsError } = storeToRefs(visualsStore)
@@ -42,6 +44,11 @@ const masterSaving = ref(false)
 const suggestionSaving = ref(false)
 const masterForm = ref({ title: '', body: '' })
 const selectedText = ref('')
+const suggestionNote = ref('')
+const titleOptions = ref<string[]>([])
+const titleSource = ref<'model' | 'heuristic' | null>(null)
+const titlesLoading = ref(false)
+const titleApplying = ref<string | null>(null)
 const visualSaving = ref(false)
 const visualGenerating = ref<string | null>(null)
 const visualBible = ref('')
@@ -142,6 +149,9 @@ async function loadPage(): Promise<void> {
   bindingError.value = null
   wechatAccounts.value = []
   masterForm.value = { title: '', body: '' }
+  suggestionNote.value = ''
+  titleOptions.value = []
+  titleSource.value = null
   variantForms.value = {}
   draftResult.value = null
   lastFailedDraftId.value = null
@@ -167,6 +177,8 @@ async function loadPage(): Promise<void> {
     await variantsStore.load(projectId.value)
     if (epoch !== pageEpoch) return
     await approvalsStore.load(projectId.value)
+    if (epoch !== pageEpoch) return
+    await projectVideoStore.load(projectId.value)
     if (epoch !== pageEpoch) return
     await galleriesStore.load(projectId.value)
     if (epoch !== pageEpoch) return
@@ -265,7 +277,32 @@ async function requestSuggestion(action: MasterSuggestion['action']): Promise<vo
   if (!projectId.value || !master.value) return
   if (!llmAllowed.value) { detailError.value = llmForbiddenHint(project.value?.autonomy); return }
   suggestionSaving.value = true
-  try { await masterStore.request(projectId.value, { action, selection: selectedText.value || null }) } catch (e) { detailError.value = unwrapError(e) } finally { suggestionSaving.value = false }
+  try { await masterStore.request(projectId.value, { action, selection: selectedText.value || null, note: suggestionNote.value || null }) } catch (e) { detailError.value = unwrapError(e) } finally { suggestionSaving.value = false }
+}
+async function proposeTitles(): Promise<void> {
+  if (!projectId.value || !master.value) return
+  if (!llmAllowed.value) { detailError.value = llmForbiddenHint(project.value?.autonomy); return }
+  titlesLoading.value = true
+  try {
+    const result = await masterStore.proposeTitles(projectId.value)
+    titleOptions.value = result.titles
+    titleSource.value = result.source
+  } catch (e) { detailError.value = unwrapError(e) } finally { titlesLoading.value = false }
+}
+async function applyTitle(title: string): Promise<void> {
+  if (!projectId.value) return
+  titleApplying.value = title
+  try {
+    const updated = await masterStore.applyTitle(projectId.value, title)
+    masterForm.value = { title: updated.title, body: updated.body }
+    if (project.value) project.value = { ...project.value, title: updated.title }
+    titleOptions.value = []
+    await refreshApprovalStatus()
+  } catch (e) { detailError.value = unwrapError(e) } finally { titleApplying.value = null }
+}
+async function generateProjectVideo(): Promise<void> {
+  if (!projectId.value || !master.value) return
+  try { await projectVideoStore.generate(projectId.value) } catch { /* error surfaced via videoError */ }
 }
 async function acceptSuggestion(suggestion: MasterSuggestion): Promise<void> {
   if (!projectId.value) return
@@ -638,7 +675,7 @@ watch(projectId, loadPage)
           <a-card v-if="draftProposal" title="待审阅的 AI 初稿" :bordered="false" class="draft-proposal"><h3>{{ draftProposal.title }}</h3><p class="proposal-copy">{{ draftProposal.body }}</p><div class="proposal-actions"><a-button type="primary" @click="useDraftProposal">放入编辑器继续修改</a-button><a-button @click="draftProposal = null">丢弃</a-button></div></a-card>
           <p class="master-count">当前编辑器 {{ masterForm.body.trim().length }} 字；进入审批前至少需要 800 字。</p>
           <div class="markdown-actions"><a-button size="small" @click="copyMarkdown(masterForm.title, masterForm.body)">复制 Markdown</a-button><a-button size="small" @click="downloadMarkdown('master.md', masterForm.title, masterForm.body)">下载 .md</a-button><span class="muted">预览未保存内容；单个 .md 不携带图片像素。</span></div>
-          <a-spin :spinning="masterLoading"><div class="master-grid"><a-card title="主稿编辑器" :bordered="false"><a-form layout="vertical"><a-form-item label="标题" required><a-input v-model:value="masterForm.title" placeholder="给主稿一个清晰标题" /></a-form-item><a-form-item label="正文" required><a-textarea v-model:value="masterForm.body" :rows="16" placeholder="从空白开始，或把已有的想法写下来。" @mouseup="captureSelection" /></a-form-item><p v-if="selectedText" class="selection-note">已选中 {{ selectedText.length }} 个字，建议只会替换这一段。</p><a-button type="primary" :loading="masterSaving" @click="saveMaster">保存为新版本</a-button></a-form><div class="markdown-preview" v-html="renderMarkdown(markdownBundle(masterForm.title, masterForm.body))"></div></a-card><a-card title="AI 建议" :bordered="false"><p class="muted">{{ selectedText ? '建议将基于当前选区；未选文字时会针对全文。' : '先选中一段文字，或直接对全文提出建议。' }}</p><div class="suggestion-actions"><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('clarify')">改清楚</a-button><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('shorten')">压缩</a-button><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('change_voice')">换口吻</a-button><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('add_counterpoint')">补反方观点</a-button></div><div v-if="suggestions.length" class="proposal-list"><article v-for="suggestion in suggestions.slice().reverse()" :key="suggestion.id"><div class="proposal-meta"><a-tag>{{ suggestion.action }}</a-tag><span>{{ suggestion.status === 'pending' ? '待决定' : suggestion.status === 'accepted' ? '已接受' : '已拒绝' }}</span></div><p class="proposal-copy">{{ suggestion.proposed_body }}</p><div v-if="suggestion.status === 'pending'" class="proposal-actions"><a-button type="primary" size="small" @click="acceptSuggestion(suggestion)">接受为新版本</a-button><a-button size="small" @click="rejectSuggestion(suggestion)">拒绝</a-button></div></article></div><a-empty v-else description="还没有 AI 建议" :image-style="{ height: '40px' }" /></a-card></div><a-card v-if="master" title="版本与恢复" :bordered="false" class="version-card"><p class="muted">恢复并不会覆盖历史，而是用所选版本创建新的当前版本。</p><div class="version-list"><article v-for="version in [...master.history, { version: master.version, title: master.title, body: master.body, saved_at: master.updated_at, reason: 'current' }]" :key="version.version"><div><strong>版本 {{ version.version }}</strong><span>{{ version.reason === 'current' ? '当前版本' : version.reason }}</span><p>{{ version.body.slice(0, 100) }}{{ version.body.length > 100 ? '…' : '' }}</p></div><a-button v-if="version.version !== master.version" size="small" @click="restoreVersion(version.version)">恢复为新版本</a-button></article></div></a-card></a-spin>
+          <a-spin :spinning="masterLoading"><div class="master-grid"><a-card title="主稿编辑器" :bordered="false"><a-form layout="vertical"><a-form-item label="标题" required><a-input v-model:value="masterForm.title" placeholder="给主稿一个清晰标题" /><div class="title-suggest"><a-button size="small" :disabled="!master || !llmAllowed" :loading="titlesLoading" @click="proposeTitles">按成稿起标题</a-button><span class="muted">先写正文，再从已保存的成稿里提标题；只改标题，不碰正文。</span></div><div v-if="titleOptions.length" class="title-options"><a-tag v-if="titleSource === 'heuristic'" color="orange">未配置文本模型，以下为正文首句的保底标题</a-tag><button v-for="option in titleOptions" :key="option" type="button" class="title-option" :disabled="titleApplying !== null" @click="applyTitle(option)">{{ titleApplying === option ? '正在应用…' : option }}</button></div></a-form-item><a-form-item label="正文" required><a-textarea v-model:value="masterForm.body" :rows="16" placeholder="从空白开始，或把已有的想法写下来。" @mouseup="captureSelection" /></a-form-item><p v-if="selectedText" class="selection-note">已选中 {{ selectedText.length }} 个字，建议只会替换这一段。</p><a-button type="primary" :loading="masterSaving" @click="saveMaster">保存为新版本</a-button></a-form><div class="markdown-preview" v-html="renderMarkdown(markdownBundle(masterForm.title, masterForm.body))"></div></a-card><a-card title="AI 建议" :bordered="false"><p class="muted">{{ selectedText ? '建议将基于当前选区；未选文字时会针对全文。' : '先选中一段文字，或直接对全文提出建议。' }}</p><a-textarea v-model:value="suggestionNote" :rows="2" class="suggestion-note" placeholder="可选：告诉 AI 你要改什么，例如「少说教，保留真实失败」。整篇意见会改完整篇文章，不会压成摘要。" /><div class="suggestion-actions"><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('clarify')">改清楚</a-button><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('shorten')">压缩</a-button><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('change_voice')">换口吻</a-button><a-button :disabled="!master || !llmAllowed" :loading="suggestionSaving" @click="requestSuggestion('add_counterpoint')">补反方观点</a-button></div><div v-if="suggestions.length" class="proposal-list"><article v-for="suggestion in suggestions.slice().reverse()" :key="suggestion.id"><div class="proposal-meta"><a-tag>{{ suggestion.action }}</a-tag><span>{{ suggestion.status === 'pending' ? '待决定' : suggestion.status === 'accepted' ? '已接受' : '已拒绝' }}</span></div><p class="proposal-copy">{{ suggestion.proposed_body }}</p><div v-if="suggestion.status === 'pending'" class="proposal-actions"><a-button type="primary" size="small" @click="acceptSuggestion(suggestion)">接受为新版本</a-button><a-button size="small" @click="rejectSuggestion(suggestion)">拒绝</a-button></div></article></div><a-empty v-else description="还没有 AI 建议" :image-style="{ height: '40px' }" /></a-card></div><a-card v-if="master" title="版本与恢复" :bordered="false" class="version-card"><p class="muted">恢复并不会覆盖历史，而是用所选版本创建新的当前版本。</p><div class="version-list"><article v-for="version in [...master.history, { version: master.version, title: master.title, body: master.body, saved_at: master.updated_at, reason: 'current' }]" :key="version.version"><div><strong>版本 {{ version.version }}</strong><span>{{ version.reason === 'current' ? '当前版本' : version.reason }}</span><p>{{ version.body.slice(0, 100) }}{{ version.body.length > 100 ? '…' : '' }}</p></div><a-button v-if="version.version !== master.version" size="small" @click="restoreVersion(version.version)">恢复为新版本</a-button></article></div></a-card></a-spin>
         </section>
         <a-collapse v-model:activeKey="extraPanels" class="extra-panels">
           <a-collapse-panel key="research" header="资料">
@@ -742,6 +779,30 @@ watch(projectId, loadPage)
           <a-spin :spinning="variantsLoading"><div class="variant-create"><a-button v-for="platform in ['wechat_mp', 'toutiao']" :key="platform" :disabled="variants.some(item => item.platform === platform) || !master" @click="createVariant(platform as PlatformVariant['platform'])">创建{{ platformName(platform as PlatformVariant['platform']) }}初稿</a-button></div><p v-if="!master" class="muted">先保存主稿，才能创建平台版本。</p><div class="variant-list"><a-card v-for="item in variants" :key="item.platform" :title="platformName(item.platform)" :bordered="false"><template #extra><a-tag v-if="item.locked" color="gold">已锁定</a-tag><a-tag v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" color="orange">主稿有更新</a-tag></template><a-alert v-if="item.upstream_updated || (master && item.source_master_version !== master.version)" type="warning" show-icon message="主稿有更新。先解锁并人工合并必要修改，再点击“确认已合并当前主稿”；系统不会覆盖平台稿。" class="notice"/><a-form layout="vertical"><a-form-item label="标题"><a-input v-model:value="variantForm(item.platform).title" :disabled="item.locked" /></a-form-item><a-form-item label="摘要"><a-textarea v-model:value="variantForm(item.platform).summary" :rows="2" :disabled="item.locked" /></a-form-item><a-form-item label="正文"><a-textarea v-model:value="variantForm(item.platform).body" :rows="8" :disabled="item.locked" /></a-form-item><div class="markdown-actions"><a-button size="small" @click="copyMarkdown(variantForm(item.platform).title, variantForm(item.platform).body)">复制 Markdown</a-button><a-button size="small" @click="downloadMarkdown(`${item.platform}.md`, variantForm(item.platform).title, variantForm(item.platform).body)">下载 .md</a-button><span class="muted">预览当前编辑区；粘贴 Markdown 不会上传图片。</span></div><div class="markdown-preview" v-html="renderMarkdown(markdownBundle(variantForm(item.platform).title, variantForm(item.platform).body))"></div><div class="variant-actions"><a-button type="primary" :disabled="item.locked" @click="saveVariant(item)">保存独立版本</a-button><a-button @click="toggleLock(item)">{{ item.locked ? '解锁编辑' : '锁定版本' }}</a-button><a-button @click="checkVariantUpstream(item)">检查主稿更新</a-button><a-button v-if="master && item.source_master_version !== master.version" :disabled="item.locked" @click="acknowledgeVariantMaster(item)">确认已合并当前主稿 v{{ master.version }}</a-button><a-button @click="previewVariant(item)">打开只读预览</a-button></div><p class="muted">源主稿 v{{ item.source_master_version }} · 平台版本 v{{ item.version }} · {{ item.manually_modified ? '已人工修改' : '尚未人工修改' }}</p><div v-if="item.history.length" class="variant-history"><span>历史版本：</span><a-button v-for="version in item.history" :key="version.version" size="small" :disabled="item.locked" @click="restoreVariant(item, version.version)">恢复 v{{ version.version }}</a-button></div></a-form></a-card></div></a-spin>
         </section>
           </a-collapse-panel>
+          <a-collapse-panel key="video" header="口播短片">
+        <section class="video-workbench">
+          <header class="section-heading"><div><p class="eyebrow">口播短片</p><h2>从成稿切一条竖屏短片，本地下载，不发布。</h2><p>AI 只把主稿压成几句口播；镜头来自已选中的配图，配音和字幕在本机合成。结果是一个可下载的 MP4，不接视频号、抖音或 B 站发布。</p></div><a-tag v-if="projectVideo" color="blue">{{ projectVideo.duration_s }} 秒 · {{ projectVideo.aspect }}</a-tag></header>
+          <a-alert v-if="videoError" type="error" :message="videoError" show-icon class="notice" />
+          <a-spin :spinning="videoLoading">
+            <div class="draft-actions">
+              <div><strong>{{ projectVideo ? '重新生成短片' : '生成短片' }}</strong><p class="muted">需要已保存的主稿和至少一张已选中的配图。重新生成会覆盖上一条短片文件，但不会改动主稿或平台稿。</p></div>
+              <a-button type="primary" :loading="videoGenerating" :disabled="!master || !visualPlan?.assets.some(item => item.status === 'selected')" @click="generateProjectVideo">{{ videoGenerating ? '正在配音与合成…' : projectVideo ? '重新生成' : '生成短片' }}</a-button>
+            </div>
+            <a-card v-if="projectVideo" :bordered="false" class="video-card">
+              <div class="video-grid">
+                <video v-if="projectVideo.file_url" :src="projectVideo.file_url" controls playsinline class="video-preview"></video>
+                <div>
+                  <h3>{{ projectVideo.title }}</h3>
+                  <p class="proposal-copy">{{ projectVideo.script }}</p>
+                  <ol class="shot-list"><li v-for="shot in projectVideo.shots" :key="shot.index">{{ shot.line }}</li></ol>
+                  <div class="proposal-actions"><a v-if="projectVideo.file_url" :href="projectVideo.file_url" download="short-video.mp4"><a-button>下载 MP4</a-button></a><span class="muted">更新于 {{ formatDateTime(projectVideo.updated_at) }} · 未发布</span></div>
+                </div>
+              </div>
+            </a-card>
+            <a-empty v-else description="还没有短片" :image-style="{ height: '40px' }" />
+          </a-spin>
+        </section>
+          </a-collapse-panel>
           <a-collapse-panel key="approval" header="交付记录">
         <section class="approval-workbench">
           <header class="section-heading"><div><p class="eyebrow">内容包审批</p><h2>逐项确认，再进入安全交付。</h2><p>批准只记录你的人工判断，不会发布、创建平台草稿或调用任何发布器。</p></div><a-tag v-if="approvalStatus?.complete" color="green">已完成审批</a-tag></header>
@@ -784,6 +845,18 @@ h1, h2 { color: #292522; font-family: Georgia, 'Songti SC', serif; } h1 { margin
 .workflow-cockpit { position: sticky; top: 12px; z-index: 4; display: grid; grid-template-columns: minmax(240px, .7fr) 1.3fr; gap: 20px; margin: 26px 0 6px; padding: 18px; border: 1px solid #ded7cd; border-radius: 12px; background: rgba(255, 253, 248, .96); box-shadow: 0 10px 30px rgba(75, 60, 40, .08); backdrop-filter: blur(8px); }.workflow-cockpit h2 { font-size: 18px; }.workflow-cockpit p { margin: 0; font-size: 13px; }.workflow-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); align-items: stretch; gap: 6px; }.workflow-steps button { display: grid; place-content: center; gap: 3px; min-height: 62px; padding: 7px; border: 1px solid #ded7cd; border-radius: 8px; color: #706b65; background: #fff; cursor: pointer; }.workflow-steps button.active { color: #60482d; border-color: #a6845b; background: #f5eee3; }.workflow-steps button.done { color: #39704b; }.workflow-steps span { font-weight: 700; }
 .article-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 20px 0 8px; }.article-center { margin-top: 12px; }.extra-panels { margin-top: 28px; }.master-workbench { margin-top: 12px; }.master-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, .9fr); gap: 16px; }.master-grid :deep(.ant-card), .version-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.suggestion-actions, .proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; }.proposal-list { display: grid; gap: 10px; margin-top: 16px; }.proposal-list article { padding: 12px; border-left: 3px solid #d8c9b5; background: #faf7f1; }.proposal-meta { display: flex; justify-content: space-between; gap: 8px; color: #948d84; font-size: 12px; }.proposal-copy { max-height: 160px; overflow: auto; white-space: pre-wrap; color: #4e4943; }.version-card { margin-top: 16px; }.version-list { display: grid; gap: 8px; }.version-list article { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #e8e1d5; }.version-list span { margin-left: 8px; color: #948d84; font-size: 12px; }.version-list p { margin: 4px 0 0; color: #706b65; }.selection-note { color: #7a6650; font-size: 13px; }
 .draft-actions, .export-panel, .variant-adapt, .local-imports { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; padding: 14px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fffdf8; }.draft-actions p, .export-panel p { margin: 4px 0 0; }.draft-proposal { margin-bottom: 16px; border-color: #c7b497; background: #fbf6ed; }.draft-proposal .proposal-copy { max-height: 360px; }.master-count { color: #7a6650 !important; font-size: 13px; }.variant-adapt > div { display: flex; align-items: center; gap: 10px; }.variant-adapt > p { flex-basis: 100%; margin: 0; }.local-imports { justify-content: flex-start; }.import-button { display: inline-flex; padding: 6px 11px; border: 1px dashed #a6845b; border-radius: 6px; color: #60482d; cursor: pointer; background: #fff; }.import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.visual-bootstrap { margin-bottom: 12px; }
+.title-suggest { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.title-options { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.title-option { padding: 6px 12px; border: 1px solid #c7b497; border-radius: 999px; background: #fbf6ed; color: #3d2e1e; cursor: pointer; text-align: left; }
+.title-option:hover:not(:disabled) { border-color: #a6845b; background: #f5ecdc; }
+.title-option:disabled { opacity: 0.6; cursor: default; }
+.suggestion-note { margin-bottom: 10px; }
+.video-card { margin-top: 12px; }
+.video-grid { display: grid; grid-template-columns: minmax(180px, 240px) 1fr; gap: 20px; align-items: start; }
+.video-preview { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 8px; }
+.shot-list { margin: 8px 0 12px; padding-left: 20px; color: #5b4a37; }
+.shot-list li { margin-bottom: 4px; }
+@media (max-width: 720px) { .video-grid { grid-template-columns: 1fr; } }
 .asset-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }.asset-gallery figure { margin: 0; padding: 8px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fff; }.asset-gallery img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 5px; }.asset-gallery figcaption { padding-top: 7px; color: #706b65; font-size: 12px; }
 .visual-workbench { margin-top: 34px; }.visual-card { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }.visual-slot-list { display: grid; gap: 14px; }.visual-slot { padding: 14px; border: 1px solid #e8e1d5; background: #faf7f1; }.slot-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }.visual-actions, .visual-plan-actions, .asset-actions { display: flex; flex-wrap: wrap; gap: 8px; }.visual-plan-actions { margin-top: 16px; }.asset-list { display: grid; gap: 8px; margin-top: 12px; }.visual-asset { padding: 10px; border-left: 3px solid #9db7cc; background: #fffdf8; }.visual-asset.selected { border-left-color: #52a36b; }.visual-asset.failed { border-left-color: #cf5d50; }.visual-asset span { margin-left: 8px; color: #897f75; font-size: 12px; }.visual-asset p { margin: 7px 0; color: #5e5851; white-space: pre-wrap; }.failure { color: #b44336 !important; }.asset-thumb { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }.asset-thumb img { display: block; width: 100%; max-height: 160px; object-fit: cover; border-radius: 6px; }.markdown-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }.markdown-preview { margin-top: 12px; padding: 12px; border: 1px solid #e8e1d5; border-radius: 8px; background: #fff; overflow: auto; } .markdown-preview img { max-width: 100%; }
 .variants-workbench { margin-top: 34px; }.variant-create, .variant-actions { display: flex; flex-wrap: wrap; gap: 8px; }.variant-create { margin-bottom: 12px; }.variant-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.variant-list :deep(.ant-card) { background: #fffdf8; border: 1px solid #e8e1d5; box-shadow: none; }
