@@ -24,6 +24,7 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 - **部署不得自动打开现有账号的运营或 direct。** 批准开发 ≠ 批准对测试文章公开发布。
 - GPT Image 2 已实现；是否有 `OPENAI_API_KEY` 以当前环境/`secrets/env.json` 为准，不要把未实测的 API 说成已实测。
 - 访问 `http://127.0.0.1:8788/`。回归以每次改动后的 pytest 为准，不要沿用过期的 1700/1848 数字当当前绿。
+- 2026-09-11 分支合流：两条从未合入的旧线已归档为 tag `archive/local-main-2026-08-15`、`archive/develop-article-first-2026-08-14`（不要再找 `develop` 或 `backup/*` 分支）。旧线后端能力已移入 main：`/intake/prepare`、`/projects/{id}/compose`（需已确认访谈）、`/master/titles|title`、AI 建议 `note`、`/prepare-platforms`、`/projects/{id}/video` 口播短片；作品页对应 UI 见「按成稿起标题」「口播短片」。详见 `docs/TASKS.md` 顶部 2026-09-11 条。
 - `frontend/dist/` 是 Vite 生成物。未跟踪截图 `docs/product-validation/byok-browser/open-*.png` 保留且不提交。
 
 ## 会话重启指引（READ THIS FIRST）

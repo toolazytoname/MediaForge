@@ -19,6 +19,7 @@ Python 后端 + SQLite 状态机 + CLI 子命令 + Vue SPA。既有 pipeline 是
 - **本轮唯一任务入口**：[docs/CREATOR_OPERATIONS_TASKS.md](docs/CREATOR_OPERATIONS_TASKS.md)。
 - R1–R9 已完成；R0 未勾选。`prj_a63f79b2` 公众号草稿已送入且正文有配图，未公开发布。
 - 部署不得自动开启现有账号运营或 direct。批准开发 ≠ 公开发布授权。
+- 2026-09-11 分支合流：两条从未合入的旧线已归档为 tag `archive/local-main-2026-08-15`、`archive/develop-article-first-2026-08-14`（不要再找 `develop` 或 `backup/*` 分支）。旧线后端能力已移入 main：`/intake/prepare`、`/projects/{id}/compose`（需已确认访谈）、`/master/titles|title`、AI 建议 `note`、`/prepare-platforms`、`/projects/{id}/video` 口播短片；作品页对应 UI 见「按成稿起标题」「口播短片」。详见 `docs/TASKS.md` 顶部 2026-09-11 条。
 
 ## 会话重启指引（READ THIS FIRST）
 

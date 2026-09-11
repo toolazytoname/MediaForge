@@ -22,6 +22,7 @@
 | 发布开关 | 接手时以 `config.yaml` 的 `publish.enabled` 与 `allowed_platforms` 为准；代码路径不得绕过 `safe_publish` |
 | 回归旧基线 | 曾记录 1848 passed（无 SOCKS）；配图修复后无代理全量 1851 passed。**每次逻辑改动后必须重跑** |
 | 未跟踪截图 | `docs/product-validation/byok-browser/open-*.png` 三张**保留，不删除、不纳入提交** |
+| 分支合流（2026-09-11） | 旧线归档为 tag `archive/local-main-2026-08-15`、`archive/develop-article-first-2026-08-14`；后端能力（intake、compose、标题候选、建议备注、prepare-platforms、口播短片）已移入 main，回归 **1975 passed / 23 skipped**，构建通过。PR #9（LAZY-88）保持 OPEN 待定 |
 
 ### 产品目标（本轮同时建设）
 
